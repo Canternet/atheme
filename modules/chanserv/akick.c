@@ -270,7 +270,7 @@ void cs_cmd_akick_add(sourceinfo_t *si, int parc, char *parv[])
 		reason[0] = 0;
 	}
 
-	if ((chanacs_source_flags(mc, si) & (CA_FLAGS | CA_REMOVE)) != (CA_FLAGS | CA_REMOVE))
+	if ((chanacs_source_flags(mc, si) & (CA_REMOVE)) != (CA_REMOVE))
 	{
 		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
 		return;
@@ -464,7 +464,7 @@ void cs_cmd_akick_del(sourceinfo_t *si, int parc, char *parv[])
 	akick_timeout_t *timeout;
 	chanban_t *cb;
 
-	if ((chanacs_source_flags(mc, si) & (CA_FLAGS | CA_REMOVE)) != (CA_FLAGS | CA_REMOVE))
+	if ((chanacs_source_flags(mc, si) & (CA_REMOVE)) != (CA_REMOVE))
 	{
 		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
 		return;
