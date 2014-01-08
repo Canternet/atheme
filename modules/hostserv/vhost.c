@@ -58,7 +58,7 @@ static void hs_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 	/* deletion action */
 	if (!host)
 	{
-		hs_sethost_all(mu, NULL);
+		hs_sethost_all(mu, NULL, get_source_name(si));
 		command_success_nodata(si, _("Deleted all vhosts for \2%s\2."), entity(mu)->name);
 		logcommand(si, CMDLOG_ADMIN, "VHOST:REMOVE: \2%s\2", target);
 		do_sethost_all(mu, NULL); // restore user vhost from user host
@@ -68,7 +68,8 @@ static void hs_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 	if (!check_vhost_validity(si, host))
 		return;
 
-	hs_sethost_all(mu, host);
+	hs_sethost_all(mu, host, get_source_name(si));
+
 	command_success_nodata(si, _("Assigned vhost \2%s\2 to all nicks in account \2%s\2."),
 			host, entity(mu)->name);
 	logcommand(si, CMDLOG_ADMIN, "VHOST:ASSIGN: \2%s\2 to \2%s\2",
@@ -83,9 +84,12 @@ static void hs_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[])
 	myentity_iteration_state_t state;
 	myentity_t *mt;
 	myuser_t *mu;
-	metadata_t *md;
+	metadata_t *md, *md_timestamp, *md_assigner;
 	mowgli_node_t *n;
-	char buf[BUFSIZE];
+	char buf[BUFSIZE], strfbuf[BUFSIZE];
+	struct tm tm;
+	size_t len;
+	time_t vhost_time;
 	int matches = 0;
 
 	pattern = parc >= 1 ? parv[0] : "*";
@@ -96,7 +100,27 @@ static void hs_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[])
 		md = metadata_find(mu, "private:usercloak");
 		if (md != NULL && !match(pattern, md->value))
 		{
-			command_success_nodata(si, "- %-30s %s", entity(mu)->name, md->value);
+			md_timestamp = metadata_find(mu, "private:usercloak-timestamp");
+			md_assigner = metadata_find(mu, "private:usercloak-assigner");
+
+			buf[0] = '\0';
+			len = 0;
+
+			if (md_timestamp || md_assigner)
+				len += snprintf(buf + len, BUFSIZE - len, _(" assigned"));
+
+			if (md_timestamp)
+			{
+				vhost_time = atoi(md_timestamp->value);
+				tm = *localtime(&vhost_time);
+				strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+				len += snprintf(buf + len, BUFSIZE - len, _(" on %s (%s ago)"), strfbuf, time_ago(vhost_time));
+			}
+
+			if (md_assigner)
+				len += snprintf(buf + len, BUFSIZE - len, _(" by %s"), md_assigner->value);
+
+			command_success_nodata(si, "- %-30s \2%s\2%s", entity(mu)->name, md->value, buf);
 			matches++;
 		}
 		MOWGLI_ITER_FOREACH(n, mu->nicks.head)

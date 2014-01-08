@@ -265,7 +265,7 @@ void joinall(const char *name)
 	MOWGLI_PATRICIA_FOREACH(svs, &state, services_name)
 	{
 		/* service must be online and not a botserv bot */
-		if (svs->me == NULL)
+		if (svs->me == NULL || svs->botonly)
 			continue;
 		join(name, svs->me->nick);
 	}
@@ -709,7 +709,7 @@ void (*notice) (const char *from, const char *target, const char *fmt, ...) = ge
  * change_notify()
  *
  * Sends a change notification to a user affected by that change, provided
- * that he has not disabled the messages (MU_QUIETCHG is not set).
+ * they have not disabled the messages (MU_QUIETCHG is not set).
  *
  * Inputs:
  *       - string representing source (for compatibility with notice())

@@ -184,6 +184,7 @@ static mowgli_node_t *inspircd_next_matching_ban(channel_t *c, user_t *u, int ty
 }
 
 /* CAPABilities */
+static bool has_hideopermod = false;
 static bool has_servicesmod = false;
 static bool has_globopsmod = false;
 static bool has_chghostmod = false;
@@ -197,7 +198,6 @@ static bool has_svstopic_topiclock = false;
 static int has_protocol = 0;
 
 #define PROTOCOL_12BETA 1201 /* we do not support anything older than this */
-#define PROTOCOL_METADATA_TS	1204
 
 /* find a user's server by extracting the SID and looking that up. --nenolod */
 static server_t *sid_find(char *name)
@@ -212,13 +212,7 @@ static server_t *sid_find(char *name)
 
 static inline void channel_metadata_sts(channel_t *c, const char *key, const char *value)
 {
-	if (has_protocol < PROTOCOL_METADATA_TS)
-	{
-		sts(":%s METADATA %s %s :%s", ME, c->name, key, value);
-		return;
-	}
-
-	sts(":%s METADATA %s %ld %s :%s", ME, c->name, c->ts, key, value);
+	sts(":%s METADATA %s %s :%s", ME, c->name, key, value);
 }
 
 static bool check_flood(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu)
@@ -350,7 +344,7 @@ static void inspircd_introduce_nick(user_t *u)
 	/* :penguin.omega.org.za UID 497AAAAAB 1188302517 OperServ 127.0.0.1 127.0.0.1 OperServ +s 127.0.0.1 :Operator Server */
 	const char *umode = user_get_umodestr(u);
 
-	sts(":%s UID %s %lu %s %s %s %s 0.0.0.0 %lu %s%s%s :%s", me.numeric, u->uid, (unsigned long)u->ts, u->nick, u->host, u->host, u->user, (unsigned long)u->ts, umode, has_hidechansmod ? "I" : "", has_servprotectmod ? "k" : "", u->gecos);
+	sts(":%s UID %s %lu %s %s %s %s 0.0.0.0 %lu %s%s%s%s :%s", me.numeric, u->uid, (unsigned long)u->ts, u->nick, u->host, u->host, u->user, (unsigned long)u->ts, umode, has_hideopermod ? "H" : "", has_hidechansmod ? "I" : "", has_servprotectmod ? "k" : "", u->gecos);
 	if (is_ircop(u))
 		sts(":%s OPERTYPE Services", u->uid);
 }
@@ -697,6 +691,8 @@ static void inspircd_svslogin_sts(char *target, char *nick, char *user, char *ho
 		return;
 
 	sts(":%s METADATA %s accountname :%s", me.numeric, target, login);
+	if (has_chghostmod)
+		sts(":%s CHGHOST %s %s", me.numeric, target, host);
 }
 
 static void inspircd_sasl_sts(char *target, char mode, char *data)
@@ -727,6 +723,15 @@ static void inspircd_mlock_sts(channel_t *c)
 		return;
 
 	channel_metadata_sts(c, "mlock", mychan_get_sts_mlock(mc));
+}
+
+static void  inspircd_topiclock_sts(channel_t *c)
+{
+	mychan_t *mc = MYCHAN_FROM(c);
+	if (mc == NULL || !has_svstopic_topiclock)
+		return;
+
+	channel_metadata_sts(c, "topiclock", (mc->flags & MC_TOPICLOCK ? "1" : ""));
 }
 
 static void m_topic(sourceinfo_t *si, int parc, char *parv[])
@@ -1432,6 +1437,15 @@ static void m_rsquit(sourceinfo_t *si, int parc, char *parv[])
 	sts(":%s SQUIT %s :Jupe removed by %s", me.numeric, parv[0], si->su->nick);
 }
 
+static void channel_drop(mychan_t *mc)
+{
+	if (mc->chan == NULL)
+		return;
+
+	channel_metadata_sts(mc->chan, "mlock", "");
+	channel_metadata_sts(mc->chan, "topiclock", "");
+}
+
 static void m_capab(sourceinfo_t *si, int parc, char *parv[])
 {
 	int i, varc;
@@ -1440,6 +1454,7 @@ static void m_capab(sourceinfo_t *si, int parc, char *parv[])
 	if (strcasecmp(parv[0], "START") == 0)
 	{
 		/* reset all our previously received CAPAB stuff */
+		has_hideopermod = false;
 		has_servicesmod = false;
 		has_globopsmod = false;
 		has_chghostmod = false;
@@ -1481,6 +1496,10 @@ static void m_capab(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else if ((strcasecmp(parv[0], "MODULES") == 0 || strcasecmp(parv[0], "MODSUPPORT") == 0) && parc > 1)
 	{
+		if (strstr(parv[1], "m_hideoper.so"))
+		{
+			has_hideopermod = true;
+		}	
 		if (strstr(parv[1], "m_services_account.so"))
 		{
 			has_servicesmod = true;
@@ -1615,6 +1634,7 @@ void _modinit(module_t * m)
 	sasl_sts = &inspircd_sasl_sts;
 	quarantine_sts = &inspircd_quarantine_sts;
 	mlock_sts = &inspircd_mlock_sts;
+	topiclock_sts = &inspircd_topiclock_sts;
 
 	mode_list = inspircd_mode_list;
 	ignore_mode_list = inspircd_ignore_mode_list;
@@ -1660,6 +1680,8 @@ void _modinit(module_t * m)
 
 	hook_add_event("server_eob");
 	hook_add_server_eob(server_eob);
+	hook_add_event("channel_drop");
+	hook_add_channel_drop(channel_drop);
 
 	m->mflags = MODTYPE_CORE;
 

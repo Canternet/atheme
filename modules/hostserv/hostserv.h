@@ -64,11 +64,12 @@ static inline void do_sethost_all(myuser_t *mu, const char *host)
         }
 }
 
-static inline void hs_sethost_all(myuser_t *mu, const char *host)
+static inline void hs_sethost_all(myuser_t *mu, const char *host, const char *assigner)
 {
 	mowgli_node_t *n;
 	mynick_t *mn;
 	char buf[BUFSIZE];
+	char timestring[16];
 
 	MOWGLI_ITER_FOREACH(n, mu->nicks.head)
 	{
@@ -80,5 +81,13 @@ static inline void hs_sethost_all(myuser_t *mu, const char *host)
 		metadata_add(mu, "private:usercloak", host);
 	else
 		metadata_delete(mu, "private:usercloak");
+
+	snprintf(timestring, 16, "%d", time(NULL));
+	metadata_add(mu, "private:usercloak-timestamp", timestring);
+
+	if (assigner != NULL)
+		metadata_add(mu, "private:usercloak-assigner", assigner);
+	else
+		metadata_delete(mu, "private:usercloak-assigner");
 }
 #endif
