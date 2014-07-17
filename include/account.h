@@ -345,6 +345,11 @@ typedef struct {
 	const char *oldname;
 } hook_user_rename_t;
 
+typedef struct {
+	sourceinfo_t *si;
+	const char *nick;
+} hook_info_noexist_req_t;
+
 /* pmodule.c XXX */
 E bool backend_loaded;
 
@@ -360,6 +365,7 @@ E mowgli_list_t klnlist;
 
 E kline_t *kline_add_with_id(const char *user, const char *host, const char *reason, long duration, const char *setby, unsigned long id);
 E kline_t *kline_add(const char *user, const char *host, const char *reason, long duration, const char *setby);
+E kline_t *kline_add_user(user_t *user, const char *reason, long duration, const char *setby);
 E void kline_delete(kline_t *k);
 E kline_t *kline_find(const char *user, const char *host);
 E kline_t *kline_find_num(unsigned long number);

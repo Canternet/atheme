@@ -127,6 +127,12 @@ devoice_user(sourceinfo_t *si, mychan_t *mc, channel_t *c, user_t *tu)
 		return DEVOICE_FAILED;
 	}
 
+	if (cu->modes & CSTATUS_OWNER || cu->modes & CSTATUS_PROTECT)
+	{
+		command_fail(si, fault_noprivs, _("\2%s\2 is protected from quiets; you cannot quiet them."), tu->nick);
+		return DEVOICE_FAILED;
+	}
+
 	buf[0] = '-';
 	buf[2] = '\0';
 	if (cu->modes & CSTATUS_OP)
@@ -278,7 +284,7 @@ static void cs_cmd_quiet(sourceinfo_t *si, int parc, char *parv[])
 		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
 		return;
 	}
-	
+
 	if (metadata_find(mc, "private:close:closer"))
 	{
 		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), channel);
@@ -413,7 +419,7 @@ static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[])
 				/* one notification only */
 				if (chanuser_find(c, tu))
 					notify_one_victim(si, c, tu, MTYPE_DEL);
-				command_success_nodata(si, _("Unquieted \2%s\2 on \2%s\2 (%d ban%s removed)."),
+				command_success_nodata(si, _("Unquieted \2%s\2 on \2%s\2 (%d quiet%s removed)."),
 					target, channel, count, (count != 1 ? "s" : ""));
 			}
 			else

@@ -1,20 +1,19 @@
 use strict;
 use Irssi;
 use vars qw($VERSION %IRSSI);
-# $Id: cap_sasl.pl 5330 2006-05-31 02:25:21Z gxti $
+# $Id$
 
 use MIME::Base64;
-use Data::Dumper;
 
-$VERSION = "1.2";
+$VERSION = "1.6";
 
 %IRSSI = (
     authors     => 'Michael Tharp and Jilles Tjoelker',
     contact     => 'gxti@partiallystapled.com',
     name        => 'cap_sasl.pl',
-    description => 'Implements PLAIN SASL authentication mechanism for use with charybdis ircds, and enables CAP MULTI-PREFIX',
+    description => 'Implements SASL authentication and enables CAP "multi-prefix"',
     license     => 'GNU General Public License',
-    url         => 'http://sasl.charybdis.be/',
+    url         => 'http://ircv3.atheme.org/extensions/sasl-3.1',
 );
 
 my %sasl_auth = ();
@@ -24,20 +23,23 @@ sub timeout;
 
 sub server_connected {
 	my $server = shift;
-	$server->send_raw_now("CAP LS");
+	if (uc $server->{chat_type} eq 'IRC') {
+		$server->send_raw_now("CAP LS");
+	}
 }
 
 sub event_cap {
 	my ($server, $args, $nick, $address) = @_;
-	my ($subcmd, $caps, $tosend);
+	my ($subcmd, $caps, $tosend, $sasl);
 
 	$tosend = '';
+	$sasl = $sasl_auth{$server->{tag}};
 	if ($args =~ /^\S+ (\S+) :(.*)$/) {
 		$subcmd = uc $1;
 		$caps = ' '.$2.' ';
 		if ($subcmd eq 'LS') {
 			$tosend .= ' multi-prefix' if $caps =~ / multi-prefix /i;
-			$tosend .= ' sasl' if $caps =~ / sasl /i && defined($sasl_auth{$server->{tag}});
+			$tosend .= ' sasl' if $caps =~ / sasl /i && defined($sasl);
 			$tosend =~ s/^ //;
 			$server->print('', "CLICAP: supported by server:$caps");
 			if (!$server->{connected}) {
@@ -52,12 +54,13 @@ sub event_cap {
 		} elsif ($subcmd eq 'ACK') {
 			$server->print('', "CLICAP: now enabled:$caps");
 			if ($caps =~ / sasl /i) {
-				$sasl_auth{$server->{tag}}{buffer} = '';
-				if($mech{$sasl_auth{$server->{tag}}{mech}}) {
-					$server->send_raw_now("AUTHENTICATE " . $sasl_auth{$server->{tag}}{mech});
-					Irssi::timeout_add_once(5000, \&timeout, $server->{tag});
+				$sasl->{buffer} = '';
+				$sasl->{step} = 0;
+				if($mech{$sasl->{mech}}) {
+					$server->send_raw_now("AUTHENTICATE " . $sasl->{mech});
+					Irssi::timeout_add_once(7500, \&timeout, $server->{tag});
 				}else{
-					$server->print('', 'SASL: attempted to start unknown mechanism "' . $sasl_auth{$server->{tag}}{mech} . '"');
+					$server->print('', 'SASL: attempted to start unknown mechanism "' . $sasl->{mech} . '"');
 				}
 			}
 			elsif (!$server->{connected}) {
@@ -119,7 +122,7 @@ sub event_saslend {
 sub timeout {
 	my $tag = shift;
 	my $server = Irssi::server_find_tag($tag);
-	if(!$server->{connected}) {
+	if($server && !$server->{connected}) {
 		$server->print('', "SASL: authentication timed out");
 		$server->send_raw_now("CAP END");
 	}
@@ -176,6 +179,7 @@ sub cmd_sasl_save {
 	#my ($data, $server, $item) = @_;
 	my $file = Irssi::get_irssi_dir()."/sasl.auth";
 	open FILE, "> $file" or return;
+	chmod(0600, $file);
 	foreach my $net (keys %sasl_auth) {
 		printf FILE ("%s\t%s\t%s\t%s\n", $net, $sasl_auth{$net}{user}, $sasl_auth{$net}{password}, $sasl_auth{$net}{mech});
 	}
@@ -206,7 +210,7 @@ sub cmd_sasl_load {
 }
 
 sub cmd_sasl_mechanisms {
-	Irssi::print("SASL: mechanisms supported: " . join(" ", keys %mech));
+	Irssi::print("SASL: mechanisms supported: " . join(", ", sort keys %mech));
 }
 
 Irssi::signal_add_first('server connected', \&server_connected);
@@ -233,11 +237,28 @@ $mech{PLAIN} = sub {
 	join("\0", $u, $u, $p);
 };
 
+$mech{EXTERNAL} = sub {
+	my($sasl, $data) = @_;
+
+	"";
+};
+
 eval {
-	use Crypt::OpenSSL::Bignum;
-	use Crypt::DH;
-	use Crypt::Blowfish;
-	use Math::BigInt;
+	require Crypt::OpenSSL::Bignum;
+	my $compute_secret;
+	eval {
+		require Crypt::DH;
+		$compute_secret = sub { (shift)->compute_secret(@_); };
+	};
+	if ($@) {
+		# Crypt::DH probably not found. Try Crypt::DH::GMP instead
+		# Reportedly Ubuntu has dropped Crypt::DH
+		require Crypt::DH::GMP;
+		require Crypt::DH::GMP::Compat;
+		$compute_secret = sub { Math::BigInt->new((shift)->compute_secret(@_)) };
+	}
+	require Crypt::Blowfish;
+	require Math::BigInt;
 	sub bin2bi { return Crypt::OpenSSL::Bignum->new_from_bin(shift)->to_decimal } # binary to BigInt
 	sub bi2bin { return Crypt::OpenSSL::Bignum->new_from_decimal((shift)->bstr)->to_bin } # BigInt to binary
 	$mech{'DH-BLOWFISH'} = sub {
@@ -250,7 +271,7 @@ eval {
 		my $dh = Crypt::DH->new(p => bin2bi($p), g => bin2bi($g));
 		$dh->generate_keys;
 
-		my $secret = bi2bin($dh->compute_secret(bin2bi($y)));
+		my $secret = bi2bin($compute_secret->($dh, bin2bi($y)));
 		my $pubkey = bi2bin($dh->pub_key);
 
 		# Pad the password to the nearest multiple of blocksize and encrypt
@@ -269,11 +290,22 @@ eval {
 };
 
 eval {
-	use Crypt::OpenSSL::Bignum;
-	use Crypt::DH;
-	use Math::BigInt;
-	use Crypt::Rijndael;
-	use Crypt::CBC;
+	require Crypt::OpenSSL::Bignum;
+	my $compute_secret;
+	eval {
+		require Crypt::DH;
+		$compute_secret = sub { (shift)->compute_secret(@_); };
+	};
+	if ($@) {
+		# Crypt::DH probably not found. Try Crypt::DH::GMP instead
+		# Reportedly Ubuntu has dropped Crypt::DH
+		require Crypt::DH::GMP;
+		require Crypt::DH::GMP::Compat;
+		$compute_secret = sub { Math::BigInt->new((shift)->compute_secret(@_)) };
+	}
+	require Math::BigInt;
+	require Crypt::Rijndael;
+	require Crypt::CBC;
 	sub bin2bi { return Crypt::OpenSSL::Bignum->new_from_bin(shift)->to_decimal } # binary to BigInt
 	sub bi2bin { return Crypt::OpenSSL::Bignum->new_from_decimal((shift)->bstr)->to_bin } # BigInt to binary
 	$mech{'DH-AES'} = sub {
@@ -286,7 +318,7 @@ eval {
 		my $dh = Crypt::DH->new(p => bin2bi($p), g => bin2bi($g));
 		$dh->generate_keys;
 
-		my $secret = bi2bin($dh->compute_secret(bin2bi($y)));
+		my $secret = bi2bin($compute_secret->($dh, bin2bi($y)));
 		my $pubkey = bi2bin($dh->pub_key);
 
 		# Padding is different. Multiple of 16 instead of 8
@@ -295,7 +327,7 @@ eval {
 		$pass .= "\0";
 		$pass .= chr(rand(256)) while length($pass) % 16;
 
-		my $userpass = $u . $pass; 
+		my $userpass = $u . $pass;
 
 		# Hum... this is a CBC mode cipher. We need an IV :P
 		my $iv = Crypt::CBC->random_bytes(16);
@@ -314,6 +346,43 @@ eval {
 	};
 };
 
+sub in_path {
+	my $exe = shift;
+	return grep {-x "$_/$exe"}
+	       map {length $_ ? $_ : "."}
+	       split(":", $ENV{PATH});
+}
+
+if (in_path("ecdsatool")) {
+	my $ecdsa_sign = sub {
+		if (open(my $proc, "-|", "ecdsatool", "sign", @_)) {
+			chomp(my $resp = <$proc>);
+			close($proc);
+			return $resp;
+		}
+	};
+	$mech{'ECDSA-NIST256P-CHALLENGE'} = sub {
+		my($sasl, $data) = @_;
+		my $u = $sasl->{user};
+		my $k = $sasl->{password};
+		my $step = ++$sasl->{step};
+		if ($step == 1) {
+			if (length $data) {
+				my $signpayload = encode_base64($data);
+				my $payload = $ecdsa_sign->($k, $signpayload);
+				return $u."\0".$u."\0".decode_base64($payload);
+			} else {
+				return $u."\0".$u;
+			}
+		}
+		elsif ($step == 2) {
+			my $signpayload = encode_base64($data);
+			my $payload = $ecdsa_sign->($k, $signpayload);
+			return decode_base64($payload);
+		}
+	};
+};
+
 cmd_sasl_load();
 
-# vim: ts=4
+# vim: ts=4:sw=4

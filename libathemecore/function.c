@@ -1,8 +1,8 @@
 /*
- * atheme-services: A collection of minimalist IRC services   
+ * atheme-services: A collection of minimalist IRC services
  * function.c: Miscillaneous functions.
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)           
+ * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -177,18 +177,17 @@ char *time_ago(time_t event)
 	seconds = event;
 
 	if (years)
-		snprintf(ret, sizeof(ret),
-			 "%d year%s, %d week%s, %d day%s, %02d:%02d:%02d", years, years == 1 ? "" : "s", weeks, weeks == 1 ? "" : "s", days, days == 1 ? "" : "s", hours, minutes, seconds);
+		snprintf(ret, sizeof(ret), "%dy %dw %dd", years, weeks, days);
 	else if (weeks)
-		snprintf(ret, sizeof(ret), "%d week%s, %d day%s, %02d:%02d:%02d", weeks, weeks == 1 ? "" : "s", days, days == 1 ? "" : "s", hours, minutes, seconds);
+		snprintf(ret, sizeof(ret), "%dw %dd %dh", weeks, days, hours);
 	else if (days)
-		snprintf(ret, sizeof(ret), "%d day%s, %02d:%02d:%02d", days, days == 1 ? "" : "s", hours, minutes, seconds);
+		snprintf(ret, sizeof(ret), "%dd %dh %dm %ds", days, hours, minutes, seconds);
 	else if (hours)
-		snprintf(ret, sizeof(ret), "%d hour%s, %d minute%s, %d second%s", hours, hours == 1 ? "" : "s", minutes, minutes == 1 ? "" : "s", seconds, seconds == 1 ? "" : "s");
+		snprintf(ret, sizeof(ret), "%dh %dm %ds", hours, minutes, seconds);
 	else if (minutes)
-		snprintf(ret, sizeof(ret), "%d minute%s, %d second%s", minutes, minutes == 1 ? "" : "s", seconds, seconds == 1 ? "" : "s");
+		snprintf(ret, sizeof(ret), "%dm %ds", minutes, seconds);
 	else
-		snprintf(ret, sizeof(ret), "%d second%s", seconds, seconds == 1 ? "" : "s");
+		snprintf(ret, sizeof(ret), "%ds", seconds);
 
 	return ret;
 }
@@ -709,10 +708,14 @@ int sendemail(user_t *u, myuser_t *mu, const char *type, const char *email, cons
 
 	/* now set up the email */
 	if (pipe(pipfds) < 0)
+	{
+		fclose(in);
 		return 0;
+	}
 	switch (pid = fork())
 	{
 		case -1:
+			fclose(in);
 			return 0;
 		case 0:
 			connection_close_all_fds();

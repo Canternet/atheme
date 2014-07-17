@@ -19,18 +19,18 @@ ircd_t ngIRCd = {
         "$",                            /* TLD Prefix, used by Global. */
         false,                          /* Whether or not we use IRCNet/TS6 UID */
         false,                          /* Whether or not we use RCOMMAND */
-        false,                          /* Whether or not we support channel owners. */
-        false,                          /* Whether or not we support channel protection. */
-        false,                          /* Whether or not we support halfops. */
+        true,                           /* Whether or not we support channel owners. */
+        true,                           /* Whether or not we support channel protection. */
+        true,                           /* Whether or not we support halfops. */
 	false,				/* Whether or not we use P10 */
-	false,				/* Whether or not we use vHosts. */
+	true,				/* Whether or not we use vHosts. */
 	CMODE_OPERONLY | CMODE_PERM,	/* Oper-only cmodes */
-        0,                              /* Integer flag for owner channel flag. */
-        0,                              /* Integer flag for protect channel flag. */
-        0,                              /* Integer flag for halfops. */
-        "+",                            /* Mode we set for owner. */
-        "+",                            /* Mode we set for protect. */
-        "+",                            /* Mode we set for halfops. */
+        CSTATUS_OWNER,                  /* Integer flag for owner channel flag. */
+        CSTATUS_PROTECT,                /* Integer flag for protect channel flag. */
+        CSTATUS_HALFOP,                 /* Integer flag for halfops. */
+        "+q",                           /* Mode we set for owner. */
+        "+a",                           /* Mode we set for protect. */
+        "+h",                           /* Mode we set for halfops. */
 	PROTOCOL_NGIRCD,		/* Protocol type */
 	CMODE_PERM,                     /* Permanent cmodes */
 	0,                              /* Oper-immune cmode */
@@ -51,6 +51,7 @@ struct cmode_ ngircd_mode_list[] = {
   { 'R', CMODE_REGONLY  },
   { 'r', CMODE_CHANREG  },
   { 'P', CMODE_PERM     },
+  { 'z', CMODE_SSLONLY  },
   { '\0', 0 }
 };
 
@@ -59,13 +60,19 @@ struct extmode ngircd_ignore_mode_list[] = {
 };
 
 struct cmode_ ngircd_status_mode_list[] = {
+  { 'q', CSTATUS_OWNER   },
+  { 'a', CSTATUS_PROTECT },
   { 'o', CSTATUS_OP      },
+  { 'h', CSTATUS_HALFOP  },
   { 'v', CSTATUS_VOICE   },
   { '\0', 0 }
 };
 
 struct cmode_ ngircd_prefix_mode_list[] = {
+  { '~', CSTATUS_OWNER   },
+  { '&', CSTATUS_PROTECT },
   { '@', CSTATUS_OP      },
+  { '%', CSTATUS_HALFOP  },
   { '+', CSTATUS_VOICE   },
   { '\0', 0 }
 };
@@ -74,6 +81,7 @@ struct cmode_ ngircd_user_mode_list[] = {
   { 'a', UF_AWAY     },
   { 'i', UF_INVIS    },
   { 'o', UF_IRCOP    },
+  { 'q', UF_IMMUNE   },
   { '\0', 0 }
 };
 
@@ -84,7 +92,7 @@ static unsigned int ngircd_server_login(void)
 {
 	int ret;
 
-	ret = sts("PASS %s 0210-IRC+ atheme|%s:CLo", curr_uplink->send_pass, PACKAGE_VERSION);
+	ret = sts("PASS %s 0210-IRC+ atheme|%s:CLMo", curr_uplink->send_pass, PACKAGE_VERSION);
 	if (ret == 1)
 		return 1;
 
@@ -125,12 +133,6 @@ static void ngircd_invite_sts(user_t *sender, user_t *target, channel_t *channel
 static void ngircd_quit_sts(user_t *u, const char *reason)
 {
 	sts(":%s QUIT :%s", CLIENT_NAME(u), reason);
-}
-
-/* WALLOPS wrapper */
-static void ngircd_wallops_sts(const char *text)
-{
-	sts(":%s WALLOPS :%s", me.name, text);
 }
 
 /* join a channel */
@@ -285,6 +287,8 @@ static void ngircd_on_login(user_t *u, myuser_t *account, const char *wantedhost
 {
 	return_if_fail(u != NULL);
 
+	sts(":%s METADATA %s accountname :%s", me.name, CLIENT_NAME(u), entity(account)->name);
+
 	if (should_reg_umode(u))
 		sts(":%s MODE %s +R", CLIENT_NAME(nicksvs.me->me), CLIENT_NAME(u));
 }
@@ -297,6 +301,8 @@ static bool ngircd_on_logout(user_t *u, const char *account)
 	if (!nicksvs.no_nick_ownership)
 		sts(":%s MODE %s -R", CLIENT_NAME(nicksvs.me->me), CLIENT_NAME(u));
 
+	sts(":%s METADATA %s accountname :", me.name, CLIENT_NAME(u));
+
 	return false;
 }
 
@@ -307,6 +313,30 @@ static void ngircd_jupe(const char *server, const char *reason)
 	server_delete(server);
 	sts(":%s SQUIT %s :%s", ME, server, reason);
 	sts(":%s SERVER %s 2 %d :%s", ME, server, ++jupe_ctr, reason);
+}
+
+static void ngircd_sethost_sts(user_t *source, user_t *target, const char *host)
+{
+	if (strcmp(target->host, host))
+	{
+		sts(":%s METADATA %s cloakhost :%s", me.name, target->nick, host);
+		sts(":%s MODE %s +x", me.name, target->nick);
+
+		/* if the user sets -x and +x, they need to receive the same host */
+		if (strcmp(host, target->chost))
+		{
+			strshare_unref(target->chost);
+			target->chost = strshare_get(host);
+		}
+	}
+	else
+	{
+		sts(":%s MODE %s -x", me.name, target->nick);
+		sts(":%s METADATA %s cloakhost :", me.name, target->nick);
+
+		strshare_unref(target->chost);
+		target->chost = strshare_get(target->host);
+	}
 }
 
 static void m_topic(sourceinfo_t *si, int parc, char *parv[])
@@ -374,6 +404,12 @@ static void m_part(sourceinfo_t *si, int parc, char *parv[])
 	chanc = sjtoken(parv[0], ',', chanv);
 	for (i = 0; i < chanc; i++)
 	{
+		if (chanv[i][0] != '#')
+		{
+			slog(LG_DEBUG, "m_part(): ignored non-# channel: %s", chanv[i]);
+			continue;
+		}
+
 		slog(LG_DEBUG, "m_part(): user left channel: %s -> %s", si->su->nick, chanv[i]);
 
 		chanuser_delete(channel_find(chanv[i]), si->su);
@@ -485,6 +521,12 @@ static void m_chaninfo(sourceinfo_t *si, int parc, char *parv[])
 	const char *kmode, *lmode;
 	bool swap;
 
+	if (parv[0][0] != '#')
+	{
+		slog(LG_DEBUG, "m_chaninfo(): ignored non-# channel: %s", parv[0]);
+		return;
+	}
+
 	/* Differently from what ngircd does itself, accept all received
 	 * modes and topics. This should help somewhat with resolving the
 	 * resulting desyncs.
@@ -536,12 +578,48 @@ static void m_quit(sourceinfo_t *si, int parc, char *parv[])
 	user_delete(si->su, parv[0]);
 }
 
+static void ngircd_user_mode(user_t *u, const char *modes)
+{
+	int dir;
+	const char *p;
+
+	return_if_fail(u != NULL);
+
+	user_mode(u, modes);
+	dir = 0;
+	for (p = modes; *p; ++p)
+		switch (*p)
+		{
+			case '-': dir = MTYPE_DEL; break;
+			case '+': dir = MTYPE_ADD; break;
+			case 'x':
+				slog(LG_DEBUG, "user had vhost='%s' chost='%s'", u->vhost, u->chost);
+				if (dir == MTYPE_ADD)
+				{
+					if (strcmp(u->vhost, u->chost))
+					{
+						strshare_unref(u->vhost);
+						u->vhost = strshare_get(u->chost);
+					}
+				}
+				else if (dir == MTYPE_DEL)
+				{
+					strshare_unref(u->vhost);
+					u->vhost = strshare_get(u->host);
+				}
+				slog(LG_DEBUG, "user got vhost='%s' chost='%s'", u->vhost, u->chost);
+				break;
+		}
+}
+
 static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 {
 	if (*parv[0] == '#')
 		channel_mode(NULL, channel_find(parv[0]), parc - 1, &parv[1]);
+	else if (*parv[0] == '!')
+		;
 	else
-		user_mode(user_find(parv[0]), parv[1]);
+		ngircd_user_mode(user_find(parv[0]), parv[1]);
 }
 
 static void m_kick(sourceinfo_t *si, int parc, char *parv[])
@@ -560,7 +638,8 @@ static void m_kick(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!c)
 	{
-		slog(LG_DEBUG, "m_kick(): got kick in nonexistant channel: %s", parv[0]);
+		if (*parv[0] != '!')
+			slog(LG_DEBUG, "m_kick(): got kick in nonexistant channel: %s", parv[0]);
 		return;
 	}
 
@@ -669,6 +748,12 @@ static void m_join(sourceinfo_t *si, int parc, char *parv[])
 			if (st != NULL)
 				*st++ = '\0';
 
+			if (chanv[i][0] != '#')
+			{
+				slog(LG_DEBUG, "m_join(): ignored non-# channel: %s", chanv[i]);
+				continue;
+			}
+
 			channel_t *c = channel_find(chanv[i]);
 
 			if (!c)
@@ -731,6 +816,34 @@ static void m_motd(sourceinfo_t *si, int parc, char *parv[])
 	handle_motd(si->su);
 }
 
+static void m_metadata(sourceinfo_t *si, int parc, char *parv[])
+{
+	user_t *u = user_find(parv[0]);
+
+	return_if_fail(u != NULL);
+
+	if (!strcmp(parv[1], "accountname"))
+	{
+		if (si->s == u->server && (!(si->s->flags & SF_EOB) ||
+		                           (u->myuser != NULL &&
+					    !irccasecmp(entity(u->myuser)->name, parv[2]))))
+			handle_burstlogin(u, parv[2], 0);
+		else if (*parv[2])
+			handle_setlogin(si, u, parv[2], 0);
+		else
+			handle_clearlogin(si, u);
+	}
+	else if (!strcmp(parv[1], "certfp"))
+	{
+		handle_certfp(si, u, parv[2]);
+	}
+	else if (!strcmp(parv[1], "cloakhost"))
+	{
+		strshare_unref(u->chost);
+		u->chost = strshare_get(parv[2]);
+	}
+}
+
 static void nick_group(hook_user_req_t *hdata)
 {
 	user_t *u;
@@ -757,7 +870,6 @@ void _modinit(module_t * m)
 	server_login = &ngircd_server_login;
 	introduce_nick = &ngircd_introduce_nick;
 	quit_sts = &ngircd_quit_sts;
-	wallops_sts = &ngircd_wallops_sts;
 	join_sts = &ngircd_join_sts;
 	kick = &ngircd_kick;
 	msg = &ngircd_msg;
@@ -776,6 +888,7 @@ void _modinit(module_t * m)
 	ircd_on_login = &ngircd_on_login;
 	ircd_on_logout = &ngircd_on_logout;
 	jupe = &ngircd_jupe;
+	sethost_sts = &ngircd_sethost_sts;
 	invite_sts = &ngircd_invite_sts;
 
 	mode_list = ngircd_mode_list;
@@ -813,6 +926,7 @@ void _modinit(module_t * m)
 	pcommand_add("ERROR", m_error, 1, MSRC_UNREG | MSRC_SERVER);
 	pcommand_add("TOPIC", m_topic, 2, MSRC_USER | MSRC_SERVER);
 	pcommand_add("MOTD", m_motd, 1, MSRC_USER);
+	pcommand_add("METADATA", m_metadata, 3, MSRC_SERVER);
 
 	/* XXX: not sure if this is such a great idea, but Anope does it too */
 	pcommand_add("SQUERY", m_privmsg, 2, MSRC_USER);

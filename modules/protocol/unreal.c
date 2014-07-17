@@ -325,7 +325,7 @@ static unsigned int unreal_server_login(void)
 	me.bursting = true;
 	has_protoctl = false;
 
-	sts("PROTOCTL NICKv2 VHP NICKIP UMODE2 SJOIN SJOIN2 SJ3 NOQUIT TKLEXT ESVID");
+	sts("PROTOCTL NICKv2 VHP NICKIP UMODE2 SJOIN SJOIN2 SJ3 NOQUIT TKLEXT ESVID MLOCK");
 	sts("PROTOCTL SID=%s", me.numeric);
 	sts("SERVER %s 1 :%s", me.name, me.desc);
 
@@ -687,7 +687,7 @@ static void unreal_sasl_sts(char *target, char mode, char *data)
 	sts(":%s SASL %s %s %c %s", saslserv->me->nick, servermask, target, mode, data);
 }
 
-static void unreal_svslogin_sts(char *target, char *nick, char *user, char *host, stringref login)
+static void unreal_svslogin_sts(char *target, char *nick, char *user, char *host, myuser_t *account)
 {
 	char servermask[BUFSIZE], *p;
 	service_t *saslserv;
@@ -702,7 +702,7 @@ static void unreal_svslogin_sts(char *target, char *nick, char *user, char *host
 	if (p != NULL)
 		*p = '\0';
 
-	sts(":%s SVSLOGIN %s %s %s", saslserv->me->nick, servermask, target, login);
+	sts(":%s SVSLOGIN %s %s %s", saslserv->me->nick, servermask, target, entity(account)->name);
 }
 
 static void unreal_mlock_sts(channel_t *c)

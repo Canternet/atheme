@@ -22,31 +22,28 @@ DECLARE_MODULE_V1
 
 static DH *base_dhparams;
 
-mowgli_list_t *mechanisms;
-mowgli_node_t *mnode;
+sasl_mech_register_func_t *regfuncs;
 
-static int mech_start(sasl_session_t *p, char **out, int *out_len);
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len);
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len);
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
 static void mech_finish(sasl_session_t *p);
 sasl_mechanism_t mech = {"DH-BLOWFISH", &mech_start, &mech_step, &mech_finish};
 
 void _modinit(module_t *m)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, mechanisms, "saslserv/main", "sasl_mechanisms");
+	MODULE_TRY_REQUEST_SYMBOL(m, regfuncs, "saslserv/main", "sasl_mech_register_funcs");
 
 	if ((base_dhparams = DH_generate_parameters(256, 5, NULL, NULL)) == NULL)
 		return;
 
-	mnode = mowgli_node_create();
-	mowgli_node_add(&mech, mnode, mechanisms);
+	regfuncs->mech_register(&mech);
 }
 
 void _moddeinit(module_unload_intent_t intent)
 {
 	DH_free(base_dhparams);
 
-	mowgli_node_delete(mnode, mechanisms);
-	mowgli_node_free(mnode);
+	regfuncs->mech_unregister(&mech);
 }
 
 static inline DH *DH_clone(DH *dh)
@@ -65,7 +62,7 @@ static inline DH *DH_clone(DH *dh)
 	return out;
 }
 
-static int mech_start(sasl_session_t *p, char **out, int *out_len)
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len)
 {
 	char *ptr;
 	DH *dh;
@@ -97,14 +94,16 @@ static int mech_start(sasl_session_t *p, char **out, int *out_len)
 	return ASASL_MORE;
 }
 
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len)
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
 {
 	DH *dh = NULL;
 	BF_KEY key;
 	BIGNUM *their_key = NULL;
 	myuser_t *mu;
 	char *ptr, *secret = NULL, *password = NULL;
-	int size, ret = ASASL_FAIL;
+	int ret = ASASL_FAIL;
+	uint16_t size;
+	int secret_size;
 
 	if (!p->mechdata)
 		return ASASL_FAIL;
@@ -113,7 +112,7 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 	/* Their pub_key */
 	if (len < 2)
 		goto end;
-	size = ntohs(*(unsigned int*)message);
+	size = ntohs(*(uint16_t *)message);
 	message += 2;
 	len -= 2;
 	if (size > len)
@@ -136,7 +135,8 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 
 	/* Compute shared secret */
 	secret = (char*)malloc(DH_size(dh));
-	if ((size = DH_compute_key((unsigned char *)secret, their_key, dh)) == -1)
+	secret_size = DH_compute_key((unsigned char *)secret, their_key, dh);
+	if (secret_size <= 0)
 		goto end;
 
 	/* Data must be multiple of block size, and let's be reasonable about size */
@@ -144,7 +144,7 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 		goto end;
 
 	/* Decrypt! */
-	BF_set_key(&key, size, (unsigned char *)secret);
+	BF_set_key(&key, secret_size, (unsigned char *)secret);
 	ptr = password = (char*)malloc(len + 1);
 	password[len] = '\0';
 	while (len)

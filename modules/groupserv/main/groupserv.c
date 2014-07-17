@@ -76,7 +76,12 @@ mygroup_t *mygroup_add_id(const char *id, const char *name)
 	entity(mg)->type = ENT_GROUP;
 
 	if (id)
-		mowgli_strlcpy(entity(mg)->id, id, sizeof(entity(mg)->id));
+	{
+		if (!myentity_find_uid(id))
+			mowgli_strlcpy(entity(mg)->id, id, sizeof(entity(mg)->id));
+		else
+			entity(mg)->id[0] = '\0';
+	}
 	else
 		entity(mg)->id[0] = '\0';
 
@@ -170,6 +175,17 @@ bool groupacs_sourceinfo_has_flag(mygroup_t *mg, sourceinfo_t *si, unsigned int 
 	return groupacs_find(mg, si->smu, flag) != NULL;
 }
 
+unsigned int groupacs_sourceinfo_flags(mygroup_t *mg, sourceinfo_t *si)
+{
+	groupacs_t *ga;
+
+	ga = groupacs_find(mg, si->smu, 0);
+	if (ga == NULL)
+		return 0;
+
+	return ga->flags;
+}
+
 unsigned int mygroup_count_flag(mygroup_t *mg, unsigned int flag)
 {
 	mowgli_node_t *n;
@@ -207,7 +223,7 @@ mowgli_list_t *myuser_get_membership_list(myuser_t *mu)
 	l = mowgli_list_create();
 	privatedata_set(mu, "groupserv:membership", l);
 
-	return l;	
+	return l;
 }
 
 const char *mygroup_founder_names(mygroup_t *mg)

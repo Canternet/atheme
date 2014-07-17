@@ -16,7 +16,7 @@ DECLARE_MODULE_V1
 );
 
 mowgli_list_t sessions;
-mowgli_list_t sasl_mechanisms;
+static mowgli_list_t sasl_mechanisms;
 
 sasl_session_t *find_session(const char *uid);
 sasl_session_t *make_session(const char *uid);
@@ -25,9 +25,14 @@ static void sasl_logcommand(sasl_session_t *p, myuser_t *login, int level, const
 static void sasl_input(sasl_message_t *smsg);
 static void sasl_packet(sasl_session_t *p, char *buf, int len);
 static void sasl_write(char *target, char *data, int length);
-int login_user(sasl_session_t *p);
+static bool may_impersonate(myuser_t *source_mu, myuser_t *target_mu);
+static myuser_t *login_user(sasl_session_t *p);
 static void sasl_newuser(hook_user_nick_t *data);
 static void delete_stale(void *vptr);
+static void sasl_mech_register(sasl_mechanism_t *mech);
+static void sasl_mech_unregister(sasl_mechanism_t *mech);
+
+sasl_mech_register_func_t sasl_mech_register_funcs = { &sasl_mech_register, &sasl_mech_unregister };
 
 /* main services client routine */
 static void saslserv(sourceinfo_t *si, int parc, char *parv[])
@@ -66,12 +71,51 @@ static void saslserv(sourceinfo_t *si, int parc, char *parv[])
 service_t *saslsvs = NULL;
 mowgli_eventloop_timer_t *delete_stale_timer = NULL;
 
+static void sasl_mech_register(sasl_mechanism_t *mech)
+{
+	mowgli_node_t *node;
+
+	slog(LG_DEBUG, "sasl_mech_register(): registering %s", mech->name);
+
+	node = mowgli_node_create();
+	mowgli_node_add(mech, node, &sasl_mechanisms);
+}
+
+static void sasl_mech_unregister(sasl_mechanism_t *mech)
+{
+	mowgli_node_t *n, *tn;
+	sasl_session_t *session;
+
+	slog(LG_DEBUG, "sasl_mech_unregister(): unregistering %s", mech->name);
+
+	MOWGLI_ITER_FOREACH_SAFE(n, tn, sessions.head)
+	{
+		session = n->data;
+		if (session->mechptr == mech)
+		{
+			slog(LG_DEBUG, "sasl_mech_unregister(): destroying session %s", session->uid);
+			destroy_session(session);
+		}
+	}
+
+	MOWGLI_ITER_FOREACH_SAFE(n, tn, sasl_mechanisms.head)
+	{
+		if (n->data == mech)
+		{
+			mowgli_node_delete(n, &sasl_mechanisms);
+			mowgli_node_free(n);
+			break;
+		}
+	}
+}
+
 void _modinit(module_t *m)
 {
 	hook_add_event("sasl_input");
 	hook_add_sasl_input(sasl_input);
 	hook_add_event("user_add");
 	hook_add_user_add(sasl_newuser);
+	hook_add_event("sasl_may_impersonate");
 
 	delete_stale_timer = mowgli_timer_add(base_eventloop, "sasl_delete_stale", delete_stale, NULL, 30);
 
@@ -93,11 +137,12 @@ void _moddeinit(module_unload_intent_t intent)
 
 	authservice_loaded--;
 
+	if (sessions.head != NULL)
+		slog(LG_DEBUG, "saslserv/main: shutting down with a non-empty session list, a mech did not unregister itself!");
+
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, sessions.head)
 	{
 		destroy_session(n->data);
-		mowgli_node_delete(n, &sessions);
-		mowgli_node_free(n);
 	}
 }
 
@@ -151,7 +196,7 @@ void destroy_session(sasl_session_t *p)
 
 	if (p->flags & ASASL_NEED_LOG && p->username != NULL)
 	{
-		mu = myuser_find(p->username);
+		mu = myuser_find_by_nick(p->username);
 		if (mu != NULL && !(ircd->flags & IRCD_SASL_USE_PUID))
 			sasl_logcommand(p, mu, CMDLOG_LOGIN, "LOGIN (session timed out)");
 	}
@@ -173,6 +218,7 @@ void destroy_session(sasl_session_t *p)
 	p->mechptr = NULL; /* We're not freeing the mechanism, just "dereferencing" it */
 	free(p->username);
 	free(p->certfp);
+	free(p->authzid);
 
 	free(p);
 }
@@ -265,7 +311,7 @@ static void sasl_packet(sasl_session_t *p, char *buf, int len)
 	char *cloak, *out = NULL;
 	char temp[BUFSIZE];
 	char mech[61];
-	int out_len = 0;
+	size_t out_len = 0;
 	metadata_t *md;
 
 	/* First piece of data in a session is the name of
@@ -292,7 +338,7 @@ static void sasl_packet(sasl_session_t *p, char *buf, int len)
 			MOWGLI_ITER_FOREACH(n, sasl_mechanisms.head)
 			{
 				sasl_mechanism_t *mptr = n->data;
-				if(l + strlen(mptr->name) > 510)
+				if(l + strlen(mptr->name) > sizeof(temp))
 					break;
 				strcpy(ptr, mptr->name);
 				ptr += strlen(mptr->name);
@@ -328,8 +374,8 @@ static void sasl_packet(sasl_session_t *p, char *buf, int len)
 
 	if(rc == ASASL_DONE)
 	{
-		myuser_t *mu = myuser_find(p->username);
-		if(mu && login_user(p))
+		myuser_t *mu = login_user(p);
+		if(mu)
 		{
 			if ((md = metadata_find(mu, "private:usercloak")))
 				cloak = md->value;
@@ -337,12 +383,15 @@ static void sasl_packet(sasl_session_t *p, char *buf, int len)
 				cloak = "*";
 
 			if (!(mu->flags & MU_WAITAUTH))
-				svslogin_sts(p->uid, "*", "*", cloak, entity(mu)->name);
+				svslogin_sts(p->uid, "*", "*", cloak, mu);
 			sasl_sts(p->uid, 'D', "S");
+			/* Will destroy session on introduction of user to net. */
 		}
 		else
+		{
 			sasl_sts(p->uid, 'D', "F");
-		/* Will destroy session on introduction of user to net. */
+			destroy_session(p);
+		}
 		return;
 	}
 	else if(rc == ASASL_MORE)
@@ -386,7 +435,7 @@ static void sasl_write(char *target, char *data, int length)
 		rem -= nbytes;
 		last = nbytes;
 	}
-	
+
 	/* The end of a packet is indicated by a string not of length 400.
 	 * If last piece is exactly 400 in size, send an empty string to
 	 * finish the transaction.
@@ -400,48 +449,123 @@ static void sasl_logcommand(sasl_session_t *p, myuser_t *mu, int level, const ch
 {
 	va_list args;
 	char lbuf[BUFSIZE];
-	
+
 	va_start(args, fmt);
 	vsnprintf(lbuf, BUFSIZE, fmt, args);
 	slog(level, "%s %s:%s %s", saslsvs->internal_name, mu ? entity(mu)->name : "", p->uid, lbuf);
 	va_end(args);
 }
 
-/* authenticated, now double check that their account is ok for login */
-int login_user(sasl_session_t *p)
+static bool may_impersonate(myuser_t *source_mu, myuser_t *target_mu)
 {
-	myuser_t *mu = myuser_find(p->username);
+	hook_sasl_may_impersonate_t req;
+	char priv[512] = PRIV_IMPERSONATE_ANY;
+	char *classname;
 
-	if(mu == NULL) /* WTF? */
-		return 0;
+	/* Allow same (although this function won't get called in that case anyway) */
+	if(source_mu == target_mu)
+		return true;
 
- 	if (metadata_find(mu, "private:freeze:freezer"))
+	/* Check for wildcard priv */
+	if(has_priv_myuser(source_mu, priv))
+		return true;
+
+	/* Check for target-operclass specific priv */
+	classname = (target_mu->soper && target_mu->soper->classname)
+			? target_mu->soper->classname : "user";
+
+	snprintf(priv, sizeof(priv), PRIV_IMPERSONATE_CLASS_FMT, classname);
+
+	if(has_priv_myuser(source_mu, priv))
+		return true;
+
+	/* Check for target-entity specific priv */
+	snprintf(priv, sizeof(priv), PRIV_IMPERSONATE_ENTITY_FMT, entity(target_mu)->name);
+
+	if(has_priv_myuser(source_mu, priv))
+		return true;
+
+	/* Allow modules to check too */
+	req.source_mu = source_mu;
+	req.target_mu = target_mu;
+	req.allowed = false;
+
+	hook_call_sasl_may_impersonate(&req);
+
+	return req.allowed;
+}
+
+/* authenticated, now double check that their account is ok for login */
+static myuser_t *login_user(sasl_session_t *p)
+{
+	myuser_t *source_mu, *target_mu;
+
+	/* source_mu is the user whose credentials we verified ("authentication id") */
+	/* target_mu is the user who will be ultimately logged in ("authorization id") */
+
+	source_mu = myuser_find_by_nick(p->username);
+	if(source_mu == NULL)
+		return NULL;
+
+	if(p->authzid && *p->authzid)
 	{
-		sasl_logcommand(p, NULL, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (frozen)", entity(mu)->name);
-		return 0;
+		target_mu = myuser_find_by_nick(p->authzid);
+		if(target_mu == NULL)
+			return NULL;
+	}
+	else
+	{
+		target_mu = source_mu;
+		if(p->authzid != NULL)
+			free(p->authzid);
+		p->authzid = sstrdup(p->username);
 	}
 
-	if (MOWGLI_LIST_LENGTH(&mu->logins) >= me.maxlogins)
+	if(metadata_find(source_mu, "private:freeze:freezer"))
 	{
-		sasl_logcommand(p, NULL, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (too many logins)", entity(mu)->name);
-		return 0;
+		sasl_logcommand(p, source_mu, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (frozen)", entity(source_mu)->name);
+		return NULL;
+	}
+
+	if(target_mu != source_mu)
+	{
+		if(!may_impersonate(source_mu, target_mu))
+		{
+			sasl_logcommand(p, source_mu, CMDLOG_LOGIN, "denied IMPERSONATE by \2%s\2 to \2%s\2", entity(source_mu)->name, entity(target_mu)->name);
+			return NULL;
+		}
+
+		sasl_logcommand(p, source_mu, CMDLOG_LOGIN, "allowed IMPERSONATE by \2%s\2 to \2%s\2", entity(source_mu)->name, entity(target_mu)->name);
+
+		if(metadata_find(target_mu, "private:freeze:freezer"))
+		{
+			sasl_logcommand(p, target_mu, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (frozen)", entity(target_mu)->name);
+			return NULL;
+		}
+	}
+
+	if(MOWGLI_LIST_LENGTH(&target_mu->logins) >= me.maxlogins)
+	{
+		sasl_logcommand(p, target_mu, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (too many logins)", entity(target_mu)->name);
+		return NULL;
 	}
 
 	/* Log it with the full n!u@h later */
 	p->flags |= ASASL_NEED_LOG;
 
-	/* We just did SASL authentication for a user.  With IRCds which do not have unique UIDs for users,
-	 * we will likely be expecting the login data to be bursted.
-	 * As a result, we should give the core a heads' up that this is going to happen so that hooks will be
-	 * properly fired...
+	/* We just did SASL authentication for a user.  With IRCds which do not
+	 * have unique UIDs for users, we will likely be expecting the login
+	 * data to be bursted.  As a result, we should give the core a heads'
+	 * up that this is going to happen so that hooks will be properly
+	 * fired...
 	 */
-	if (ircd->flags & IRCD_SASL_USE_PUID)
+	if(ircd->flags & IRCD_SASL_USE_PUID)
 	{
-		mu->flags &= ~MU_NOBURSTLOGIN;
-		mu->flags |= MU_PENDINGLOGIN;
+		target_mu->flags &= ~MU_NOBURSTLOGIN;
+		target_mu->flags |= MU_PENDINGLOGIN;
 	}
 
-	return 1;
+	return target_mu;
 }
 
 /* clean up after a user who is finally on the net */
@@ -465,11 +589,11 @@ static void sasl_newuser(hook_user_nick_t *data)
 	p->flags &= ~ASASL_NEED_LOG;
 
 	/* Find the account */
-	mu = p->username ? myuser_find(p->username) : NULL;
+	mu = p->authzid ? myuser_find_by_nick(p->authzid) : NULL;
 	if (mu == NULL)
 	{
 		notice(saslsvs->nick, u->nick, "Account %s dropped, login cancelled",
-		       p->username ? p->username : "??");
+		       p->authzid ? p->authzid : "??");
 		destroy_session(p);
 		/* We'll remove their ircd login in handle_burstlogin() */
 		return;

@@ -51,6 +51,7 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	bool has_user_auspex;
 	bool hide_info;
 	hook_user_req_t req;
+	hook_info_noexist_req_t noexist_req;
 
 	/* On IRC, default the name to something.
 	 * Not currently documented.
@@ -69,6 +70,9 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		command_fail(si, fault_needmoreparams, _("Syntax: INFO <nickname>"));
 		return;
 	}
+
+	noexist_req.si = si;
+	noexist_req.nick = name;
 
 	has_user_auspex = has_priv(si, PRIV_USER_AUSPEX);
 
@@ -91,9 +95,12 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
 
 			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered anymore, but was marked by %s on %s (%s)."), mun->name, setter, strfbuf, reason);
+			hook_call_user_info_noexist(&noexist_req);
 		}
-		else
+		else {
+			hook_call_user_info_noexist(&noexist_req);
 			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), name);
+		}
 		return;
 	}
 
@@ -133,10 +140,7 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("User reg.  : %s (%s ago)"), strfbuf, time_ago(mu->registered));
 	}
 
-	if (has_user_auspex)
-	{
-		command_success_nodata(si, _("Entity ID  : %s"), entity(mu)->id);
-	}
+	command_success_nodata(si, _("Entity ID  : %s"), entity(mu)->id);
 
 	md = metadata_find(mu, "private:usercloak");
 	vhost = md ? md->value : NULL;
@@ -360,7 +364,7 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
     {
         if (*buf)
             strcat(buf, ", ");
-        
+
         strcat(buf, "NoGreet");
     }
 

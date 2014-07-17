@@ -286,7 +286,7 @@ antiflood_enforce_kickban(user_t *u, channel_t *c)
 static void
 antiflood_enforce_kline(user_t *u, channel_t *c)
 {
-	kline_add("*", u->host, "Flooding", 86400, chansvs.nick);
+	kline_add_user(u, "Flooding", 86400, chansvs.nick);
 	slog(LG_INFO, "ANTIFLOOD:ENFORCE:AKILL: \2%s!%s@%s\2 from \2%s\2", u->nick, u->user, u->vhost, c->name);
 }
 
@@ -408,7 +408,7 @@ cs_set_cmd_antiflood(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	/* allow opers with PRIV_CHAN_ADMIN to override this setting since it has
-	   oper-specific settings (i.e. AKILL action) */ 
+	   oper-specific settings (i.e. AKILL action) */
 	if (!chanacs_source_has_flag(mc, si, CA_SET) && !has_priv(si, PRIV_CHAN_ADMIN))
 	{
 		command_fail(si, fault_noprivs, _("You are not authorized to perform this command."));
@@ -417,7 +417,7 @@ cs_set_cmd_antiflood(sourceinfo_t *si, int parc, char *parv[])
 
 	if (parv[1] == NULL)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET FLOOD");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET ANTIFLOOD");
 		return;
 	}
 
@@ -432,6 +432,11 @@ cs_set_cmd_antiflood(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else if (!strcasecmp(parv[1], "ON"))
 	{
+		if (MC_ANTIFLOOD & mc->flags)
+		{
+			command_fail(si, fault_nochange, _("The \2%s\2 flag is already set for channel \2%s\2."), "ANTIFLOOD", mc->name);
+			return;
+		}
 		mc->flags |= MC_ANTIFLOOD;
 		metadata_delete(mc, METADATA_KEY_ENFORCE_METHOD);
 

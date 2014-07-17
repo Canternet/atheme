@@ -23,6 +23,7 @@ struct sasl_session_ {
 
   char *username;
   char *certfp;
+  char *authzid;
 };
 
 struct sasl_message_ {
@@ -34,10 +35,21 @@ struct sasl_message_ {
 
 struct sasl_mechanism_ {
   char name[60];
-  int (*mech_start) (struct sasl_session_ *sptr, char **buffer, int *buflen);
-  int (*mech_step) (struct sasl_session_ *sptr, char *message, int length, char **buffer, int *buflen);
+  int (*mech_start) (struct sasl_session_ *sptr, char **buffer, size_t *buflen);
+  int (*mech_step) (struct sasl_session_ *sptr, char *message, size_t length, char **buffer, size_t *buflen);
   void (*mech_finish) (struct sasl_session_ *sptr);
 };
+
+typedef struct {
+  myuser_t *source_mu;
+  myuser_t *target_mu;
+  bool allowed;
+} hook_sasl_may_impersonate_t;
+
+typedef struct {
+	void (*mech_register) (struct sasl_mechanism_ *mech);
+	void (*mech_unregister) (struct sasl_mechanism_ *mech);
+} sasl_mech_register_func_t;
 
 #define ASASL_FAIL 0 /* client supplied invalid credentials / screwed up their formatting */
 #define ASASL_MORE 1 /* everything looks good so far, but we're not done yet */

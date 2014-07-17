@@ -15,44 +15,46 @@ DECLARE_MODULE_V1
 	"Atheme Development Group <http://www.atheme.org>"
 );
 
-mowgli_list_t *mechanisms;
-mowgli_node_t *mnode;
-static int mech_start(sasl_session_t *p, char **out, int *out_len);
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len);
+sasl_mech_register_func_t *regfuncs;
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len);
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
 static void mech_finish(sasl_session_t *p);
 sasl_mechanism_t mech = {"PLAIN", &mech_start, &mech_step, &mech_finish};
 
 void _modinit(module_t *m)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, mechanisms, "saslserv/main", "sasl_mechanisms");
-	mnode = mowgli_node_create();
-	mowgli_node_add(&mech, mnode, mechanisms);
+	MODULE_TRY_REQUEST_SYMBOL(m, regfuncs, "saslserv/main", "sasl_mech_register_funcs");
+	regfuncs->mech_register(&mech);
 }
 
 void _moddeinit(module_unload_intent_t intent)
 {
-	mowgli_node_delete(mnode, mechanisms);
+	regfuncs->mech_unregister(&mech);
 }
 
-static int mech_start(sasl_session_t *p, char **out, int *out_len)
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len)
 {
 	return ASASL_MORE;
 }
 
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len)
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
 {
-	char auth[256];
+	char authz[256];
+	char authc[256];
 	char pass[256];
 	myuser_t *mu;
 	char *end;
 
-	/* Skip the authzid entirely */
+	/* Copy the authzid */
 	end = memchr(message, '\0', len);
 	if (end == NULL)
+		return ASASL_FAIL;
+	if (end - message > 255)
 		return ASASL_FAIL;
 	len -= end - message + 1;
 	if (len <= 0)
 		return ASASL_FAIL;
+	memcpy(authz, message, end - message + 1);
 	message = end + 1;
 
 	/* Copy the authcid */
@@ -64,7 +66,7 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 	len -= end - message + 1;
 	if (len <= 0)
 		return ASASL_FAIL;
-	memcpy(auth, message, end - message + 1);
+	memcpy(authc, message, end - message + 1);
 	message = end + 1;
 
 	/* Copy the password */
@@ -77,10 +79,11 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 	pass[end - message] = '\0';
 
 	/* Done dissecting, now check. */
-	if(!(mu = myuser_find_by_nick(auth)))
+	if(!(mu = myuser_find_by_nick(authc)))
 		return ASASL_FAIL;
 
-	p->username = strdup(auth);
+	p->username = strdup(authc);
+	p->authzid = strdup(authz);
 	return verify_password(mu, pass) ? ASASL_DONE : ASASL_FAIL;
 }
 

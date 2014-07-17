@@ -1,8 +1,8 @@
 /*
- * atheme-services: A collection of minimalist IRC services   
+ * atheme-services: A collection of minimalist IRC services
  * linker.c: Abstraction of the dynamic linking system.
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)           
+ * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -61,6 +61,7 @@ mowgli_module_t *linker_open_ext(const char *path, char *errbuf, int errlen)
 	if (0 != stat(buf, &s))
 	{
 		mowgli_strlcpy(errbuf, strerror(errno), errlen);
+		free(buf);
 		return NULL;
 	}
 

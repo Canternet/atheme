@@ -2,6 +2,9 @@
  * Copyright (c) 2011 William Pitcock <nenolod@dereferenced.org>
  *
  * Rights to this code are as documented in doc/LICENSE.
+ *
+ * $chanacs:#channel gives flags to users in /cs flags #channel if
+ *   the user has flags in the $chanacs:#channel
  */
 
 #include "atheme.h"
@@ -19,22 +22,31 @@ static mowgli_patricia_t **exttarget_tree = NULL;
 typedef struct {
 	myentity_t parent;
 	stringref channel;
+	int checking;
 } chanacs_exttarget_t;
 
 static chanacs_t *chanacs_ext_match_user(chanacs_t *ca, user_t *u)
 {
 	chanacs_exttarget_t *ent;
 	mychan_t *mc;
+	unsigned int flags;
 
 	ent = (chanacs_exttarget_t *) ca->entity;
+
+	if (ent->checking > 4) /* arbitrary recursion limit? */
+		return NULL;
 
 	if (!(mc = mychan_find(ent->channel)))
 		return NULL;
 
-	if (chanacs_user_has_flag(mc, u, CA_AKICK))
+	ent->checking++;
+	flags = chanacs_user_flags(mc, u);
+	ent->checking--;
+
+	if (flags & CA_AKICK)
 		return NULL;
 
-	if (chanacs_user_has_flag(mc, u, 0))
+	if (flags)
 		return ca;
 
 	return NULL;
@@ -91,6 +103,7 @@ static myentity_t *chanacs_validate_f(const char *param)
 
 	ext = mowgli_heap_alloc(chanacs_ext_heap);
 	ext->channel = strshare_get(param);
+	ext->checking = 0;
 
 	/* name the entity... $chanacs:param */
 #define NAMEPREFIX "$chanacs:"

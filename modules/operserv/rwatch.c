@@ -79,7 +79,10 @@ void _modinit(module_t *m)
 	f = fopen(path, "r");
 
 	if (f)
+	{
 		load_rwatchdb(path); /* because i'm lazy, let's pass path to the function */
+		fclose(f);
+	}
 	else
 	{
 		db_register_type_handler("RW", db_h_rw);
@@ -153,6 +156,9 @@ static void load_rwatchdb(char *path)
 	while (fgets(rBuf, BUFSIZE * 2, f))
 	{
 		item = strtok(rBuf, " ");
+		if (!item)
+			continue;
+
 		strip(item);
 
 		if (!strcmp(item, "RW"))
@@ -193,11 +199,21 @@ static void load_rwatchdb(char *path)
 	if ((srename(path, newpath)) < 0)
 	{
 		slog(LG_ERROR, "load_rwatchdb(): couldn't rename rwatch database.");
-		return;
+	}
+	else
+	{
+		slog(LG_INFO, "The RWATCH database has been converted to the OpenSEX format.");
+		slog(LG_INFO, "The old RWATCH database now resides in rwatch.db.old which may be deleted.");
 	}
 
-	slog(LG_INFO, "The RWATCH database has been converted to the OpenSEX format.");
-	slog(LG_INFO, "The old RWATCH database now resides in rwatch.db.old which may be deleted.");
+	if (rw != NULL)
+	{
+		free(rw->regex);
+		free(rw->reason);
+		if (rw->re != NULL)
+			regex_destroy(rw->re);
+		free(rw);
+	}
 }
 
 static void db_h_rw(database_handle_t *db, const char *type)

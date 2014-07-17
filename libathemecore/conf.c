@@ -1,8 +1,8 @@
 /*
- * atheme-services: A collection of minimalist IRC services   
+ * atheme-services: A collection of minimalist IRC services
  * conf.c: Services-specific configuration processing.
  *
- * Copyright (c) 2005-2008 Atheme Project (http://www.atheme.org)           
+ * Copyright (c) 2005-2008 Atheme Project (http://www.atheme.org)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -126,8 +126,8 @@ const char *get_conf_opts(void)
 			log_debug_enabled() ? "d" : "",
 			me.auth ? "e" : "",
 			config_options.flood_msgs ? "F" : "",
-			config_options.leave_chans ? "l" : "", 
-			config_options.join_chans ? "j" : "", 
+			config_options.leave_chans ? "l" : "",
+			config_options.join_chans ? "j" : "",
 			chansvs.changets ? "t" : "",
 			!match_mapping ? "R" : "",
 			config_options.raw ? "r" : "",
@@ -228,6 +228,8 @@ void init_newconf(void)
 	add_bool_conf_item("SILENT", &conf_gi_table, 0, &config_options.silent, false);
 	add_bool_conf_item("JOIN_CHANS", &conf_gi_table, 0, &config_options.join_chans, false);
 	add_bool_conf_item("LEAVE_CHANS", &conf_gi_table, 0, &config_options.leave_chans, false);
+	add_bool_conf_item("KLINE_WITH_IDENT", &conf_gi_table, 0, &config_options.kline_with_ident, false);
+	add_bool_conf_item("KLINE_VERIFIED_IDENT", &conf_gi_table, 0, &config_options.kline_verified_ident, false);
 	add_conf_item("UFLAGS", &conf_gi_table, c_gi_uflags);
 	add_conf_item("CFLAGS", &conf_gi_table, c_gi_cflags);
 	add_bool_conf_item("RAW", &conf_gi_table, 0, &config_options.raw, false);
@@ -367,6 +369,11 @@ static int c_uplink(mowgli_config_file_entry_t *ce)
 			continue;
 		}
 	}
+
+	if (strchr(send_password, ' '))
+		conf_report_warning(ce, "send_password for uplink %s is invalid (has spaces); continuing anyway", name);
+	if (strchr(receive_password, ' '))
+		conf_report_warning(ce, "receive_password for uplink %s is invalid (has spaces); continuing anyway", name);
 
 	uplink_add(name, host, send_password, receive_password, vhost, port);
 	return 0;
@@ -810,7 +817,7 @@ static void free_cstructs(struct me *mesrc)
 
 bool conf_rehash(void)
 {
-	struct me *hold_me = scalloc(sizeof(struct me), 1);	/* and keep_me_warm; */
+	struct me *hold_me;	/* and keep_me_warm; */
 	mowgli_config_file_t *cfp;
 
 	/* we're rehashing */
@@ -825,6 +832,7 @@ bool conf_rehash(void)
 		return false;
 	}
 
+	hold_me = scalloc(sizeof(struct me), 1);
 	copy_me(&me, hold_me);
 
 	/* reset everything */

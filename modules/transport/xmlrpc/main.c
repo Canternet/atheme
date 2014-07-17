@@ -79,7 +79,7 @@ static void handle_request(connection_t *cptr, void *requestbuf)
 	xmlrpc_process(requestbuf, cptr);
 	current_cptr = NULL;
 
-	return; 
+	return;
 }
 
 static void xmlrpc_config_ready(void *vptr)
@@ -175,7 +175,10 @@ static void xmlrpc_command_success_nodata(sourceinfo_t *si, const char *message)
 	cptr = si->connection;
 	hd = cptr->userdata;
 	if (hd->sent_reply)
+	{
+		free(newmessage);
 		return;
+	}
 	if (hd->replybuf != NULL)
 	{
 		hd->replybuf = srealloc(hd->replybuf, strlen(hd->replybuf) + strlen(newmessage) + 2);
@@ -505,7 +508,7 @@ static int xmlrpcmethod_ison(void *conn, int parc, char *parv[])
 {
 	user_t *u;
 	int i;
-	char buf[BUFSIZE], buf2[BUFSIZE];
+	char buf[XMLRPC_BUFSIZE], buf2[XMLRPC_BUFSIZE];
 
 	for (i = 0; i < parc; i++)
 	{
@@ -553,7 +556,7 @@ static int xmlrpcmethod_metadata(void *conn, int parc, char *parv[])
 {
 	metadata_t *md;
 	int i;
-	char buf[BUFSIZE];
+	char buf[XMLRPC_BUFSIZE];
 
 	for (i = 0; i < parc; i++)
 	{

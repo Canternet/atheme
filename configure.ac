@@ -7,7 +7,7 @@ dnl Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.59)
 
-AC_INIT(atheme, 7.1.0-alpha1, bugs@atheme.org)
+AC_INIT(atheme, 7.2.0-dev, bugs@atheme.org)
 
 AC_CONFIG_AUX_DIR(autoconf)
 
@@ -19,6 +19,13 @@ BUILDSYS_INIT
 BUILDSYS_SHARED_LIB
 BUILDSYS_PROG_IMPLIB
 LIBS="$LIBS $DYNAMIC_LD_LIBS"
+
+AC_MSG_CHECKING([if you read GIT-Access])
+if ! test -f libmowgli-2/Makefile -a -f modules/contrib/Makefile; then
+	AC_MSG_RESULT(no)
+	AC_ERROR([please read GIT-Access before trying to build from git])
+fi
+AC_MSG_RESULT(yes)
 
 AC_PATH_PROG(RM, rm)
 AC_PATH_PROG(MV, mv)
@@ -352,11 +359,10 @@ if test "x$enablerpath" != "xyes"; then
 	LDFLAGS_RPATH=""
 fi
 
-PKG_CHECK_MODULES(JANSSON, [jansson >= 2.4],
-	[JSON="yes"], [JSON="no"])
+PKG_CHECK_MODULES(LIBQRENCODE, [libqrencode], [LIBQRENCODE="yes"], [LIBQRENCODE="no"])
 
-if test "$JSON" = "yes"; then
-	AC_DEFINE(HAVE_JSON,, Define to 1 if JSON is available)
+if test "$LIBQRENCODE" = "yes"; then
+	AC_DEFINE(HAVE_LIBQRENCODE,, Define to 1 if libqrencode is available)
 fi
 
 AC_ARG_WITH(libmowgli,
@@ -437,7 +443,7 @@ Configuration:
 	Mowgli installation  : ${MOWGLI_SOURCE}
 	PCRE support         : ${with_pcre}
 	Perl support         : ${with_perl}
-	JSON support         : ${JSON}
+	QR Code support      : ${LIBQRENCODE}
 	CFLAGS               : ${CFLAGS}
 	Internationalization : ${USE_NLS}
 

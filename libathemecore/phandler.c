@@ -56,7 +56,7 @@ void (*sethost_sts) (user_t *source, user_t *target, const char *host) = generic
 void (*fnc_sts) (user_t *source, user_t *u, const char *newnick, int type) = generic_fnc_sts;
 void (*holdnick_sts)(user_t *source, int duration, const char *nick, myuser_t *account) = generic_holdnick_sts;
 void (*invite_sts) (user_t *source, user_t *target, channel_t *channel) = generic_invite_sts;
-void (*svslogin_sts) (char *target, char *nick, char *user, char *host, stringref login) = generic_svslogin_sts;
+void (*svslogin_sts) (char *target, char *nick, char *user, char *host, myuser_t *account) = generic_svslogin_sts;
 void (*sasl_sts) (char *target, char mode, char *data) = generic_sasl_sts;
 mowgli_node_t *(*next_matching_ban)(channel_t *c, user_t *u, int type, mowgli_node_t *first) = generic_next_matching_ban;
 mowgli_node_t *(*next_matching_host_chanacs)(mychan_t *mc, user_t *u, mowgli_node_t *first) = generic_next_matching_host_chanacs;
@@ -79,7 +79,17 @@ void generic_introduce_nick(user_t *u)
 
 void generic_wallops_sts(const char *text)
 {
-	slog(LG_INFO, "Don't know how to send wallops: %s", text);
+	/* ugly, but some ircds offer no alternative -- jilles */
+	user_t *u;
+	mowgli_patricia_iteration_state_t state;
+	char buf[BUFSIZE];
+
+	snprintf(buf, sizeof buf, "*** Notice -- %s", text);
+	MOWGLI_PATRICIA_FOREACH(u, &state, userlist)
+	{
+		if (!is_internal_client(u) && is_ircop(u))
+			notice_user_sts(NULL, u, buf);
+	}
 }
 
 void generic_join_sts(channel_t *c, user_t *u, bool isnew, char *modes)
@@ -134,7 +144,7 @@ void generic_notice_channel_sts(user_t *from, channel_t *target, const char *tex
 	slog(LG_INFO, "Cannot send notice to %s (%s): don't know how. Load a protocol module perhaps?", target->name, text);
 }
 
-void generic_wallchops(user_t *sender, channel_t *channel, const char *message)	
+void generic_wallchops(user_t *sender, channel_t *channel, const char *message)
 {
 	/* ugly, but always works -- jilles */
 	mowgli_node_t *n;
@@ -253,15 +263,15 @@ void generic_fnc_sts(user_t *source, user_t *u, const char *newnick, int type)
 
 void generic_holdnick_sts(user_t *source, int duration, const char *nick, myuser_t *account)
 {
-	/* nothing to do here. */	
+	/* nothing to do here. */
 }
 
 void generic_invite_sts(user_t *source, user_t *target, channel_t *channel)
 {
-	/* nothing to do here. */	
+	/* nothing to do here. */
 }
 
-void generic_svslogin_sts(char *target, char *nick, char *user, char *host, stringref login)
+void generic_svslogin_sts(char *target, char *nick, char *user, char *host, myuser_t *account)
 {
 	/* nothing to do here. */
 }

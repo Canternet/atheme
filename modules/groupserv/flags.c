@@ -26,7 +26,7 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 	mygroup_t *mg;
 	myuser_t *mu;
 	groupacs_t *ga;
-	unsigned int flags = 0;
+	unsigned int flags = 0, oldflags = 0;
 	unsigned int dir = 0;
 	char *c;
 	bool operoverride = false;
@@ -43,7 +43,7 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		command_fail(si, fault_nosuch_target, _("The group \2%s\2 does not exist."), parv[0]);
 		return;
 	}
-	
+
 	if (!groupacs_sourceinfo_has_flag(mg, si, GA_FLAGS))
 	{
 		if (has_priv(si, PRIV_GROUP_AUSPEX))
@@ -113,90 +113,34 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 	if (ga != NULL)
 		flags = ga->flags;
 
-	/* XXX: this sucks. :< We have to keep this here instead of using the "global" function
-	 * because of the MU_NEVEROP check which is really only needed in FLAGS. 
-	 */
-	c = parv[2];
-	while (*c)
-	{
-		switch(*c)
-		{
-		case '+':
-			dir = 0;
-			break;
-		case '-':
-			dir = 1;
-			break;
-		case '*':
-			if (dir)
-				flags = 0;
-			else
-				flags = GA_ALL;
-			break;
-		case 'F':
-			if (dir)
-				flags &= ~GA_FOUNDER;
-			else
-				flags |= GA_FOUNDER;
-			break;
-		case 'f':
-			if (dir)
-				flags &= ~GA_FLAGS;
-			else
-				flags |= GA_FLAGS;
-			break;
-		case 's':
-			if (dir)
-				flags &= ~GA_SET;
-			else
-				flags |= GA_SET;
-			break;
-		case 'v':
-			if (dir)
-				flags &= ~GA_VHOST;
-			else
-				flags |= GA_VHOST;
-			break;
-		case 'c':
-			if (dir)
-				flags &= ~GA_CHANACS;
-			else
-			{
-				if (mu->flags & MU_NEVEROP)
-				{
-					command_fail(si, fault_noprivs, _("\2%s\2 does not wish to be added to channel access lists (NEVEROP set)."), entity(mu)->name);
-					return;
-				}
-				flags |= GA_CHANACS;
-			}
-			break;
-		case 'm':
-			if (dir)
-				flags &= ~GA_MEMOS;
-			else
-				flags |= GA_MEMOS;
-			break;
-		case 'b':
-			if (dir)
-				flags &= ~GA_BAN;
-			else
-				flags |= GA_BAN;
-			break;
-		case 'i':
-			if (dir)
-				flags &= ~GA_INVITE;
-			else
-				flags |= GA_INVITE;
-			break;
-		default:
-			break;
-		}
+	oldflags = flags;
+	flags = gs_flags_parser(parv[2], 1, flags);
 
-		c++;
+	/* check for MU_NEVEROP and forbid committing the change if it's enabled */
+	if (!(oldflags & GA_CHANACS) && (flags & GA_CHANACS))
+	{
+		if (mu->flags & MU_NEVEROP)
+		{
+			command_fail(si, fault_noprivs, _("\2%s\2 does not wish to be added to channel access lists (NEVEROP set)."), entity(mu)->name);
+			return;
+		}
 	}
 
-	if (flags & GA_FOUNDER)
+	if ((flags & GA_FOUNDER) && !(oldflags & GA_FOUNDER))
+	{
+		if (!(groupacs_sourceinfo_flags(mg, si) & GA_FOUNDER))
+		{
+			flags &= ~GA_FOUNDER;
+			goto no_founder;
+		}
+
 		flags |= GA_FLAGS;
+	}
+	else if ((oldflags & GA_FOUNDER) && !(flags & GA_FOUNDER) && !(groupacs_sourceinfo_flags(mg, si) & GA_FOUNDER))
+	{
+		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		return;
+	}
 
 	if (!(flags & GA_FOUNDER) && groupacs_find(mg, mu, GA_FOUNDER))
 	{
@@ -213,6 +157,7 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		}
 	}
 
+no_founder:
 	if (ga != NULL && flags != 0)
 		ga->flags = flags;
 	else if (ga != NULL)
@@ -222,7 +167,7 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_SET, "FLAGS:REMOVE: \2%s\2 on \2%s\2", entity(mu)->name, entity(mg)->name);
 		return;
 	}
-	else 
+	else
 	{
 		if (MOWGLI_LIST_LENGTH(&mg->acs) > gs_config->maxgroupacs && (!(mg->flags & MG_ACSNOLIMIT)))
 		{

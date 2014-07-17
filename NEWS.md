@@ -1,3 +1,216 @@
+Atheme Services 7.2 Development Notes
+=====================================
+
+nickserv
+--------
+- Make `VHOST` set cloak assigner and timestamp the same way HostServ does
+- Make `INFO` call the `user_info_noexist` hook for queries that don't match an account
+- Allow implementing custom filters for `LIST`
+
+chanserv
+--------
+- Add a `$server:` exttarget accepting server masks
+
+groupserv
+---------
+- Hook into `sasl_may_impersonate` to support group-membership checks
+
+saslserv
+--------
+- Add support for SASL authorization identities
+- Add a `sasl_may_impersonate` hook
+- Bug fixes in DH-AES and DH-BLOWFISH
+
+alis
+----
+- Add a `list ... -showsecret` flag (chan:auspex) to list secret channels
+
+perl api
+--------
+- Export SaslServ's `sasl_may_impersonate` hook
+
+ircd protocol
+-------------
+- inspircd: Hopefully fix ignored account names when linking to the network
+- inspircd: Various improvements to InspIRCd 2.0 support
+- inspircd: Remove InspIRCd 1.2 and 2.1beta support
+- ircnet: Implement oper-wallops, using individual notices
+- ngircd: Enable +qaohv support
+- ngircd: Ignore non-# channels for now
+- ngircd: Implement oper-wallops, using individual notices
+- unreal: Request MLOCK messages when linking to the network
+- sporksircd: Nuke obsolete module
+
+other
+-----
+- various: Fix quite a few resource leaks and possible null derefs
+- crypto/pbkdf2: Detect malformed (truncated) hashes
+- contrib/cap\_sasl.pl: Import various fixes from freenode's v1.5
+- contrib/cap\_sasl.pl: Implement SASL EXTERNAL, ECDSA-NIST256P-CHALLENGE
+- contrib/cap\_sasl.pl: Fix crash if irssi has ICB or SILC plugins loaded
+- contrib/cap\_sasl.pl: Fix crash if disconnected while waiting for SASL reply
+
+Atheme Services 7.1 Release Notes
+=================================
+In addition to assorted bugfixes in various subsystems from 7.0, the
+following changes have been introduced in 7.1.
+
+ircd protocol
+-------------
+- ngircd: New protocol module.
+- nefarious: Add Nefarious 2 SASL support.
+- nefarious: Send account timestamp in svslogin.
+- elemental-ircd: New protocol module.
+- dreamforge: Remove protocol module.
+- inspircd: Add support for server-side MLOCK and TOPICLOCK enforcement
+- inspircd: Add support for matching extbans modifying matching logic
+- inspircd: Add +H to channel modes
+- inspircd: Add +X and +w to list-like mode list
+- ircd-seven: Support charybdis extension cmodes on ircd-seven as well.
+- ts6-generic: Add support for serverinfo::hidden
+- unreal: Add support for extbans.
+- unreal: Add cmode +P for permanent channel.
+
+buildsys
+--------
+- MacOS 10.5 required for OS X builds.
+- V=1 option to make for verbose output.
+- Allow parallel building, i.e. with -j option.
+- Dependencies tracked on a per-sourceunit basis
+- Allow --disable-rpath to modify buildsys param LDFLAGS_RPATH
+- Install default email templates
+- Add --with(out)-libmowgli to force use of internal mowgli
+
+chanserv
+--------
+- antiflood: New module to react to channel flooding
+- quiet: Channel statuses are removed from the target user to ensure
+  that the quiet takes effect.
+- quiet: Allow unquieting improper masks on the quiet list.
+- quiet: Notify target user when anything changes about them.
+- quiet: Honor protected mode like with kick/kickban.
+- quiet: Support IRCDs with quiet extbans like UnrealIRCd and InspIRCd.
+- flags: New exempt flag +e, split from +r. Databases should be upgraded
+  automatically.
+- flags: Require FORCE argument and chan:auspex to oper override.
+- flags: Allow users with +f and +o (+v) to set +-O (+-V) on self.
+- access: Do not allow changing +F via ROLE command.
+- Support multiple users as arguments for owner, op, halfop, voice,
+  and quiet.
+
+nickserv
+--------
+- sendpass: Accept grouped nicks.
+- register: Allow any number of emailexempts.
+- Do net send 'spam' notice if chanserv does not exist.
+- Add confirmation for badmail:del
+- listemail: Match on canonical addresses too
+- info: Show setpass to services admins with user:auspex
+- info_lastquit: New module to show last quit message in INFO
+- resetpass: Allow specifying any grouped nickname.
+- drop: Request confirmation when dropping an account.
+- access: Allow TLDs
+- Log sendpass sender and time
+- Show entity ID in 'ACC' and 'INFO' commands.
+
+groupserv
+---------
+- Restrict +f from +F-ing themselves
+- Prevent +f-F from removing founders
+- Prevent removing last founder of a group
+- Make sure +F always have +f
+- Notify users when they are invited to a group.
+
+sasl
+----
+- Add ecdsa-nist256p-challenge mechanism
+- Add dh-aes scheme, intended to replace dh-blowfish.
+- Disable reload capability on all modules.
+
+perl api
+--------
+- Add function to return entity ID
+- Allow sending wallops
+- Allow setting vhosts
+- Allow transferring and dropping channels
+- Change myuser_find to myuser_find_ext to allow lookups by UID.
+- Add config.xs to retrieve config values from the Perl API
+- Add functions to channel.xs to register a channel and to retrieve a
+  limit, key, and ts.
+- Allow channelregistration.xs to get/set flags and get used time
+- Add registration and last seen time in account.xs
+
+email
+-----
+- Put the network name in the subject field of outgoing emails.
+- Add a module canonicalizing gmail addresses.
+- Use canonical email addresses when checking for registration limits.
+
+libathemecore
+-------------
+- Allow different send and receive passwords for uplinks
+- Respect founder_flags config setting during channel succession
+- Denote default crypt provider in version output.
+- Include reason with kline expiration messages.
+- Allow customization of the address for email from services.
+- Add option to kline user@host instead of *@host
+- Add qrcode API
+
+botserv
+-------
+- Blacklist '/' from various fields.
+- Monkeypatch notice() to rewrite source from chanserv to botserv.
+
+crypto
+------
+- Rename 'fallback' crypt provider to 'plaintext'
+- Allow crypto modules to be loaded and the database to be updated to
+  the preferred crypto scheme on the fly.
+- pbkdf2: New module implementing PBKDF2-HMAC digest scheme.
+
+misc
+----
+- JSONRPC: A JSONRPC transport module was added.
+- xmlrpc: Add metadata accessor
+- security/cmdperm: New module which dynamically infers virtual
+  permissions, such as command:chanserv:register
+- alis: Strip mIRC color/control codes from topics.
+- operserv/clones: Add option to give a few warning kills before applying
+  a k-line
+- Codebase is stringref clean (GitHub issue #60)
+- memoserv/delete: Only accept numeric indexes.
+- chanfix: Allow admins with chan:admin to register regardless of
+  chanfix score.
+- memoserv: Make inbox size customizable.
+- Add dragon, a new, modular, ircd link performance benchmarking toolkit.
+- Flood k-lines use IP address where available instead of hostname.
+- Add !snotices and !wallops logging targets.
+- Record vHost assigner and timestamp, and display in NS INFO output.
+- Contrib modules have their own git repo.
+- Add a git .mailmap
+- gameserv/dice: Ensure loop paramaters are integers limited to 1000
+
+atheme.conf
+-----------
+Be sure to check atheme.conf.example for more information on what each
+of these settings does.
+- Add 'registeremail' setting to serverinfo{}, specifying address that
+  services emails should originate from.
+- Add 'hidden' setting to serverinfo{}, specifying that the services server
+  should be hidden in /links output (limited to some ircds).
+- Split 'password' setting in uplink{} into 'send_password' and
+  'receive_password' (optional).
+- Move 'maxnicks' setting from serverinfo{} to nickserv{}
+- Move 'maxchans' setting from serverinfo{} to chanserv{}
+- Add 'antiflood_enforce_method' to chanserv{} for chanserv/antiflood
+- Add 'maxmemos' setting to memoserv{}
+- Add !snotices and !wallops logfiles
+- Add 'permissive_mode' setting to general{}, specifying manner of
+  command denials.
+- Add 'kline_with_ident' and 'kline_verified_ident' to general{}
+- Add 'binddn' and 'bindauth' conf items to ldap{}
+- Document "user" operclass.
+
 Atheme Services 7.0 Release Notes
 =================================
 All bugfixes from the 6.0 branch of Atheme are also in 7.0.

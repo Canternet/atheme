@@ -25,10 +25,9 @@ DECLARE_MODULE_V1
 	"Atheme Development Group <http://www.atheme.org>"
 );
 
-mowgli_list_t *mechanisms;
-mowgli_node_t *mnode;
-static int mech_start(sasl_session_t *p, char **out, int *out_len);
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len);
+sasl_mech_register_func_t *regfuncs;
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len);
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
 static void mech_finish(sasl_session_t *p);
 sasl_mechanism_t mech = {"ECDSA-NIST256P-CHALLENGE", &mech_start, &mech_step, &mech_finish};
 
@@ -47,17 +46,16 @@ typedef struct {
 
 void _modinit(module_t *m)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, mechanisms, "saslserv/main", "sasl_mechanisms");
-	mnode = mowgli_node_create();
-	mowgli_node_add(&mech, mnode, mechanisms);
+	MODULE_TRY_REQUEST_SYMBOL(m, regfuncs, "saslserv/main", "sasl_mech_register_funcs");
+	regfuncs->mech_register(&mech);
 }
 
 void _moddeinit(module_unload_intent_t intent)
 {
-	mowgli_node_delete(mnode, mechanisms);
+	regfuncs->mech_unregister(&mech);
 }
 
-static int mech_start(sasl_session_t *p, char **out, int *out_len)
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len)
 {
 	ecdsa_session_t *s = mowgli_alloc(sizeof(ecdsa_session_t));
 	p->mechdata = s;
@@ -70,11 +68,11 @@ static int mech_start(sasl_session_t *p, char **out, int *out_len)
 	return ASASL_MORE;
 }
 
-static int mech_step_accname(sasl_session_t *p, char *message, int len, char **out, int *out_len)
+static int mech_step_accname(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
 {
 	ecdsa_session_t *s = p->mechdata;
 	myuser_t *mu;
-	char *username;
+	char *end;
 	unsigned char pubkey_raw[BUFSIZE];
 	const unsigned char *pubkey_raw_p;
 	metadata_t *md;
@@ -82,12 +80,14 @@ static int mech_step_accname(sasl_session_t *p, char *message, int len, char **o
 
 	memset(pubkey_raw, '\0', sizeof pubkey_raw);
 
-	username = mowgli_alloc(len + 5);
-	memcpy(username, message, len);
-	username[len] = '\0';
-
-	p->username = sstrdup(username);
-	mowgli_free(username);
+	end = memchr(message, '\0', len);
+	if (end == NULL)
+		p->username = sstrndup(message, len);
+	else
+	{
+		p->username = sstrndup(message, end-message);
+		p->authzid = sstrndup(end+1, len-1-(end-message));
+	}
 
 	mu = myuser_find_by_nick(p->username);
 	if (mu == NULL)
@@ -118,7 +118,7 @@ static int mech_step_accname(sasl_session_t *p, char *message, int len, char **o
 	return ASASL_MORE;
 }
 
-static int mech_step_response(sasl_session_t *p, char *message, int len, char **out, int *out_len)
+static int mech_step_response(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
 {
 	ecdsa_session_t *s = p->mechdata;
 
@@ -128,9 +128,9 @@ static int mech_step_response(sasl_session_t *p, char *message, int len, char **
 	return ASASL_DONE;
 }
 
-typedef int (*mech_stepfn_t)(sasl_session_t *p, char *message, int len, char **out, int *out_len);
+typedef int (*mech_stepfn_t)(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
 
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len)
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
 {
 	static mech_stepfn_t mech_steps[ECDSA_ST_COUNT] = {
 		[ECDSA_ST_ACCNAME] = &mech_step_accname,

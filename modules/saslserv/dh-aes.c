@@ -46,31 +46,28 @@ DECLARE_MODULE_V1
 
 static DH *base_dhparams;
 
-mowgli_list_t *mechanisms;
-mowgli_node_t *mnode;
+sasl_mech_register_func_t *regfuncs;
 
-static int mech_start(sasl_session_t *p, char **out, int *out_len);
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len);
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len);
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
 static void mech_finish(sasl_session_t *p);
 sasl_mechanism_t mech = {"DH-AES", &mech_start, &mech_step, &mech_finish};
 
 void _modinit(module_t *m)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, mechanisms, "saslserv/main", "sasl_mechanisms");
+	MODULE_TRY_REQUEST_SYMBOL(m, regfuncs, "saslserv/main", "sasl_mech_register_funcs");
 
 	if ((base_dhparams = DH_generate_parameters(256, 5, NULL, NULL)) == NULL)
 		return;
 
-	mnode = mowgli_node_create();
-	mowgli_node_add(&mech, mnode, mechanisms);
+	regfuncs->mech_register(&mech);
 }
 
 void _moddeinit(module_unload_intent_t intent)
 {
 	DH_free(base_dhparams);
 
-	mowgli_node_delete(mnode, mechanisms);
-	mowgli_node_free(mnode);
+	regfuncs->mech_unregister(&mech);
 }
 
 static inline DH *DH_clone(DH *dh)
@@ -89,7 +86,7 @@ static inline DH *DH_clone(DH *dh)
 	return out;
 }
 
-static int mech_start(sasl_session_t *p, char **out, int *out_len)
+static int mech_start(sasl_session_t *p, char **out, size_t *out_len)
 {
 	char *ptr;
 	DH *dh;
@@ -121,7 +118,7 @@ static int mech_start(sasl_session_t *p, char **out, int *out_len)
 	return ASASL_MORE;
 }
 
-static int mech_step(sasl_session_t *p, char *message, int len, char **out, int *out_len)
+static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
 {
 	DH *dh = NULL;
 	AES_KEY key;
@@ -129,7 +126,9 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 	myuser_t *mu;
 	char *secret = NULL, *userpw = NULL, *ptr = NULL;
 	char iv[AES_BLOCK_SIZE];
-	int size, ret = ASASL_FAIL;
+	int ret = ASASL_FAIL;
+	uint16_t size;
+	int secret_size;
 
 	if (!p->mechdata)
 		return ASASL_FAIL;
@@ -139,7 +138,7 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 	if (len <= 2)
 		goto end;
 
-	size = ntohs(*(unsigned int*)message);
+	size = ntohs(*(uint16_t *)message);
 	message += 2;
 	len -= 2;
 
@@ -166,12 +165,13 @@ static int mech_step(sasl_session_t *p, char *message, int len, char **out, int 
 
 	/* Compute shared secret */
 	secret = malloc(DH_size(dh));
-	if ((size = DH_compute_key(secret, their_key, dh)) == -1)
+	secret_size = DH_compute_key(secret, their_key, dh);
+	if (secret_size <= 0)
 		goto end;
 
 	/* Decrypt! (AES_set_decrypt_key takes bits not bytes, hence multiply
 	 * by 8) */
-	AES_set_decrypt_key(secret, size * 8, &key);
+	AES_set_decrypt_key(secret, secret_size * 8, &key);
 
 	ptr = userpw = malloc(len + 1);
 	userpw[len] = '\0';

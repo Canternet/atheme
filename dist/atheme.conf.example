@@ -52,7 +52,7 @@
  * Charybdis IRCd                               modules/protocol/charybdis
  * DreamForge 4.6.7 or later                    modules/protocol/dreamforge
  * Hybrid 7.1.2 and later                       modules/protocol/hybrid
- * InspIRCd 1.2 - 2.1 (link protocol 1201-1204) modules/protocol/inspircd
+ * InspIRCd 2.0                                 modules/protocol/inspircd
  * ircd-ratbox 2.0 and later                    modules/protocol/ratbox
  * IRCNet ircd (ircd 2.11)                      modules/protocol/ircnet
  * ircd-seven                                   modules/protocol/ircd-seven
@@ -60,7 +60,6 @@
  * Nefarious IRCu 0.4.0 or later                modules/protocol/nefarious
  * ngIRCd 19 or later [experimental]            modules/protocol/ngircd
  * ShadowIRCd 5.0 or later                      modules/protocol/shadowircd
- * SporksIRCd                                   modules/protocol/sporksircd
  * UnrealIRCd 3.2 or later                      modules/protocol/unreal
  *
  * If your IRCd vendor has supplied a module file, build it and load it here
@@ -278,6 +277,7 @@ loadmodule "modules/nickserv/vhost";
  * CLOSE command                                modules/chanserv/close
  * CLONE command                                modules/chanserv/clone
  * CLEAR command                                modules/chanserv/clear
+ * CLEAR AKICKS command                         modules/chanserv/clear_akicks
  * CLEAR BANS command                           modules/chanserv/clear_bans
  * CLEAR FLAGS command                          modules/chanserv/clear_flags
  * CLEAR USERS command                          modules/chanserv/clear_users
@@ -344,6 +344,7 @@ loadmodule "modules/chanserv/ban";
 loadmodule "modules/chanserv/clone";
 loadmodule "modules/chanserv/close";
 loadmodule "modules/chanserv/clear";
+loadmodule "modules/chanserv/clear_akicks";
 loadmodule "modules/chanserv/clear_bans";
 loadmodule "modules/chanserv/clear_flags";
 loadmodule "modules/chanserv/clear_users";
@@ -770,12 +771,14 @@ loadmodule "modules/transport/xmlrpc";
  * $registered exttarget match type             modules/exttarget/registered
  * $channel exttarget match type                modules/exttarget/channel
  * $chanacs exttarget match type                modules/exttarget/chanacs
+ * $server exttarget match type                 modules/exttarget/server
  */
 #loadmodule "modules/exttarget/main";
 #loadmodule "modules/exttarget/oper";
 #loadmodule "modules/exttarget/registered";
 #loadmodule "modules/exttarget/channel";
 #loadmodule "modules/exttarget/chanacs";
+#loadmodule "modules/exttarget/server";
 
 /* Other modules.
  *
@@ -848,7 +851,7 @@ serverinfo {
 	 * If this is enabled, Atheme will indicate to the uplink IRCd
 	 * that it should not be included in /links output.  This only works
 	 * on the following IRCds at present: charybdis, hybrid, ircd-seven,
-	 * ratbox, shadowircd, sporksircd.
+	 * ratbox, shadowircd.
 	 */
 	#hidden;
 
@@ -868,7 +871,7 @@ serverinfo {
 	 * Options include:
 	 *      debug, all      - meta-keyword for all possible categories
 	 *      trace           - meta-keyword for a little bit of info
-	 *      misc            - like trace, but with some more miscillaneous info
+	 *      misc            - like trace, but with some more miscellaneous info
 	 *      notice          - meta-keyword for notice-like information
 	 * ------------------------------------------------------------------------------
 	 *      error           - critical errors
@@ -2036,6 +2039,18 @@ general {
 	 * Setting this to 0 makes all KLINE's permanent.
 	 */
 	kline_time = 7;
+
+	/* (*)kline_with_ident
+	 * KLINE user@host instead of *@host.
+	 * Applies to all automatic KLINE's set by services.
+	 */
+	#kline_with_ident;
+
+	/* (*)kline_verified_ident
+	 * KLINE *@host if the first character of the ident is ~,
+	 * irrespective of the value of kline_with_ident.
+	 * /
+	#kline_verified_ident;
 
 	/* (*)clone_time
 	 * This is the default expiry time for CLONE exemptions in minutes.
