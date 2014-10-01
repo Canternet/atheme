@@ -424,6 +424,7 @@ E void myuser_name_restore(const char *name, myuser_t *mu);
 E mycertfp_t *mycertfp_add(myuser_t *mu, const char *certfp);
 E void mycertfp_delete(mycertfp_t *mcfp);
 E mycertfp_t *mycertfp_find(const char *certfp);
+E mowgli_patricia_t *mycertfp_storage();
 
 E mychan_t *mychan_add(char *name);
 //inline mychan_t *mychan_find(const char *name);

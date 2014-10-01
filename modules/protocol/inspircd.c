@@ -210,6 +210,7 @@ static bool has_shun = false;
 static bool has_svstopic_topiclock = false;
 static int has_protocol = 0;
 
+
 #define PROTOCOL_MINIMUM 1202 /* we do not support anything older than this */
 #define PROTOCOL_PREFERRED_STR "1202"
 
@@ -1332,6 +1333,52 @@ static void m_encap(sourceinfo_t *si, int parc, char *parv[])
 		smsg.buf = parv[5];
 		smsg.ext = parc >= 6 ? parv[6] : NULL;
 		hook_call_sasl_input(&smsg);
+	}
+	else if (!irccasecmp(parv[1], "TRANSFP"))
+	{
+		// :08C ENCAP * TRANSFP old new
+		// :08C ENCAP * TRANSFP DELETE 32
+		mycertfp_t *c_cert = NULL;
+		myuser_t *c_mu = NULL;
+		char* c_line = NULL;
+		size_t c_len = 0;
+		size_t c_strlen = 0;
+
+		if (parc < 4)
+			return;
+
+		if (!irccasecmp(parv[2], "DELETE"))
+		{
+			mowgli_patricia_t *fpstore = mycertfp_storage();
+			mowgli_patricia_iteration_state_t fpstate;
+			mycertfp_t *curfp;
+			int fplen = atoi(parv[3]);
+
+			reset_fp_iteration:
+			MOWGLI_PATRICIA_FOREACH(curfp, &fpstate, fpstore)
+			{
+				if (strlen(curfp->certfp) != fplen)
+					continue;
+				mycertfp_delete(curfp);
+				// We just tampered with the list - obviously can't continue iterating it
+				goto reset_fp_iteration;
+			}
+
+			return;
+		}
+
+		if (!(c_cert = mycertfp_find(parv[2])))
+			return;
+
+		if (!(c_mu = c_cert->mu))
+			return;
+
+		// Have we already added this cert to the user?
+		if (mycertfp_find(parv[3]))
+			return;
+
+		// This call can fail if their list is full. If it is, fuck 'em.
+		mycertfp_add(c_mu, parv[3]);
 	}
 }
 

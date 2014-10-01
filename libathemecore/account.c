@@ -957,6 +957,11 @@ mycertfp_t *mycertfp_find(const char *certfp)
 	return mowgli_patricia_retrieve(certfplist, certfp);
 }
 
+mowgli_patricia_t *mycertfp_storage()
+{
+	return certfplist;
+}
+
 /***************
  * M Y C H A N *
  ***************/
