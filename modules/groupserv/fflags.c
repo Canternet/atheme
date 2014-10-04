@@ -24,7 +24,7 @@ static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
 	mygroup_t *mg;
-	myuser_t *mu;
+	myentity_t *mt;
 	groupacs_t *ga;
 	unsigned int flags = 0;
 
@@ -47,26 +47,41 @@ static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if ((mu = myuser_find_ext(parv[1])) == NULL)
+	if ((mt = myentity_find_ext(parv[1])) == NULL)
 	{
 		command_fail(si, fault_nosuch_target, _("\2%s\2 is not a registered account."), parv[1]);
 		return;
 	}
 
-	ga = groupacs_find(mg, mu, 0);
+	ga = groupacs_find(mg, mt, 0, false);
 	if (ga != NULL)
 		flags = ga->flags;
 
 	flags = gs_flags_parser(parv[2], 1, flags);
 
+	if (!(flags & GA_FOUNDER) && groupacs_find(mg, mt, GA_FOUNDER, false))
+	{
+		if (mygroup_count_flag(mg, GA_FOUNDER) == 1)
+		{
+			command_fail(si, fault_noprivs, _("You may not remove the last founder."));
+			return;
+		}
+
+		if (!groupacs_sourceinfo_has_flag(mg, si, GA_FOUNDER))
+		{
+			command_fail(si, fault_noprivs, _("You may not remove a founder's +F access."));
+			return;
+		}
+	}
+
 	if (ga != NULL && flags != 0)
 		ga->flags = flags;
 	else if (ga != NULL)
 	{
-		groupacs_delete(mg, mu);
-		command_success_nodata(si, _("\2%s\2 has been removed from \2%s\2."), entity(mu)->name, entity(mg)->name);
-		wallops("\2%s\2 is removing flags for \2%s\2 on \2%s\2", get_oper_name(si), entity(mu)->name, entity(mg)->name);
-		logcommand(si, CMDLOG_ADMIN, "FFLAGS:REMOVE: \2%s\2 on \2%s\2", entity(mu)->name, entity(mg)->name);
+		groupacs_delete(mg, mt);
+		command_success_nodata(si, _("\2%s\2 has been removed from \2%s\2."), mt->name, entity(mg)->name);
+		wallops("\2%s\2 is removing flags for \2%s\2 on \2%s\2", get_oper_name(si), mt->name, entity(mg)->name);
+		logcommand(si, CMDLOG_ADMIN, "FFLAGS:REMOVE: \2%s\2 on \2%s\2", mt->name, entity(mg)->name);
 		return;
 	}
 	else
@@ -76,7 +91,7 @@ static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 			command_fail(si, fault_toomany, _("Group %s access list is full."), entity(mg)->name);
 			return;
 		}
-		ga = groupacs_add(mg, mu, flags);
+		ga = groupacs_add(mg, mt, flags);
 	}
 
 	MOWGLI_ITER_FOREACH(n, entity(mg)->chanacs.head)
@@ -84,17 +99,17 @@ static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 		chanacs_t *ca = n->data;
 
 		verbose(ca->mychan, "\2%s\2 now has flags \2%s\2 in the group \2%s\2 which communally has \2%s\2 on \2%s\2.",
-			entity(mu)->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name,
+			mt->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name,
 			bitmask_to_flags(ca->level), ca->mychan->name);
 
 		hook_call_channel_acl_change(&(hook_channel_acl_req_t){ .ca = ca });
 	}
 
-	command_success_nodata(si, _("\2%s\2 now has flags \2%s\2 on \2%s\2."), entity(mu)->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name);
+	command_success_nodata(si, _("\2%s\2 now has flags \2%s\2 on \2%s\2."), mt->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name);
 
 	/* XXX */
-	wallops("\2%s\2 is modifying flags(\2%s\2) for \2%s\2 on \2%s\2", get_oper_name(si), gflags_tostr(ga_flags, ga->flags), entity(mu)->name, entity(mg)->name);
-	logcommand(si, CMDLOG_ADMIN, "FFLAGS: \2%s\2 now has flags \2%s\2 on \2%s\2", entity(mu)->name, gflags_tostr(ga_flags,  ga->flags), entity(mg)->name);
+	wallops("\2%s\2 is modifying flags(\2%s\2) for \2%s\2 on \2%s\2", get_oper_name(si), gflags_tostr(ga_flags, ga->flags), mt->name, entity(mg)->name);
+	logcommand(si, CMDLOG_ADMIN, "FFLAGS: \2%s\2 now has flags \2%s\2 on \2%s\2", mt->name, gflags_tostr(ga_flags,  ga->flags), entity(mg)->name);
 }
 
 void _modinit(module_t *m)

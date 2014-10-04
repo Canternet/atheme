@@ -19,7 +19,7 @@ saslserv
 --------
 - Add support for SASL authorization identities
 - Add a `sasl_may_impersonate` hook
-- Bug fixes in DH-AES and DH-BLOWFISH
+- The DH-AES and DH-BLOWFISH mechanisms were removed in their entirety.
 
 alis
 ----
@@ -31,6 +31,7 @@ perl api
 
 ircd protocol
 -------------
+- Add user flag for tracking external services clients
 - inspircd: Hopefully fix ignored account names when linking to the network
 - inspircd: Various improvements to InspIRCd 2.0 support
 - inspircd: Remove InspIRCd 1.2 and 2.1beta support
@@ -170,7 +171,6 @@ crypto
 
 misc
 ----
-- JSONRPC: A JSONRPC transport module was added.
 - xmlrpc: Add metadata accessor
 - security/cmdperm: New module which dynamically infers virtual
   permissions, such as command:chanserv:register

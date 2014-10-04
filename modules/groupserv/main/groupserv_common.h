@@ -30,6 +30,8 @@ struct mygroup_ {
 	time_t regtime;
 
 	unsigned int flags;
+
+	bool visited;
 };
 
 #define GA_FOUNDER		0x00000001
@@ -40,7 +42,9 @@ struct mygroup_ {
 #define GA_VHOST		0x00000020
 #define GA_BAN			0x00000040
 #define GA_INVITE		0x00000080
-#define GA_ALL			(GA_FLAGS | GA_CHANACS | GA_MEMOS | GA_SET | GA_VHOST | GA_INVITE)
+#define GA_ACLVIEW		0x00000100
+#define GA_ALL			(GA_FLAGS | GA_CHANACS | GA_MEMOS | GA_SET | GA_VHOST | GA_INVITE | GA_ACLVIEW)
+#define GA_ALL_OLD		(GA_FLAGS | GA_CHANACS | GA_MEMOS | GA_SET | GA_VHOST | GA_INVITE)
 
 #define PRIV_GROUP_ADMIN "group:admin"
 #define PRIV_GROUP_AUSPEX "group:auspex"
@@ -51,7 +55,7 @@ struct groupacs_ {
 	object_t parent;
 
 	mygroup_t *mg;
-	myuser_t *mu;
+	myentity_t *mt;
 	unsigned int flags;
 
 	mowgli_node_t gnode;

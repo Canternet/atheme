@@ -89,7 +89,7 @@ static void logfile_join_service(service_t *svs)
 	{
 		logfile_t *lf = n->data;
 
-		if (*lf->log_path != '#')
+		if (!VALID_GLOBAL_CHANNEL_PFX(lf->log_path))
 			continue;
 		c = channel_find(lf->log_path);
 		if (c == NULL || !(c->flags & CHAN_LOG))
@@ -362,7 +362,7 @@ logfile_t *logfile_new(const char *path, unsigned int log_mask)
 		lf->log_type = LOG_INTERACTIVE;
 		lf->write_func = logfile_write_snotices;
 	}
-	else if (*path != '#')
+	else if (!VALID_GLOBAL_CHANNEL_PFX(path))
 	{
 		object_init(object(lf), path, logfile_delete_file);
 		if ((lf->log_file = fopen(path, "a")) == NULL)
@@ -702,14 +702,14 @@ void logcommand_user(service_t *svs, user_t *source, int level, const char *fmt,
 				entity(source->myuser)->name, entity(source->myuser)->id);
 
 	slog_ext(LOG_NONINTERACTIVE, level, "%s %s:%s!%s@%s[%s] %s",
-			svs != NULL ? svs->nick : me.name,
+			service_get_log_target(svs),
 			accountbuf,
 			source->nick, source->user, source->host,
 			source->ip != NULL ? source->ip : source->host,
 			lbuf);
 	showaccount = source->myuser == NULL || irccasecmp(entity(source->myuser)->name, source->nick);
 	slog_ext(LOG_INTERACTIVE, level, "%s %s%s%s%s %s",
-			svs != NULL ? svs->nick : me.name,
+			service_get_log_target(svs),
 			source->nick,
 			showaccount ? " (" : "",
 			showaccount ? (source->myuser ? entity(source->myuser)->name : "") : "",
@@ -749,14 +749,14 @@ void logcommand_external(service_t *svs, const char *type, connection_t *source,
 	va_end(args);
 
 	slog_ext(LOG_NONINTERACTIVE, level, "%s %s:%s(%s)[%s] %s",
-			svs != NULL ? svs->nick : me.name,
+			service_get_log_target(svs),
 			mu != NULL ? entity(mu)->name : "",
 			type,
 			source != NULL ? source->hbuf : "<noconn>",
 			sourcedesc != NULL ? sourcedesc : "<unknown>",
 			lbuf);
 	slog_ext(LOG_INTERACTIVE, level, "%s <%s>%s %s",
-			svs != NULL ? svs->nick : me.name,
+			service_get_log_target(svs),
 			type,
 			mu != NULL ? entity(mu)->name : "",
 			lbuf);

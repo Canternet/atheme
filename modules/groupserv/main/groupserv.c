@@ -14,6 +14,7 @@ struct gflags ga_flags[] = {
 	{ 'v', GA_VHOST },
 	{ 'i', GA_INVITE },
 	{ 'b', GA_BAN },
+	{ 'A', GA_ACLVIEW },
 	{ 0, 0 }
 };
 
@@ -52,7 +53,7 @@ static void mygroup_delete(mygroup_t *mg)
 		groupacs_t *ga = n->data;
 
 		mowgli_node_delete(&ga->gnode, &mg->acs);
-		mowgli_node_delete(&ga->unode, myuser_get_membership_list(ga->mu));
+		mowgli_node_delete(&ga->unode, myentity_get_membership_list(ga->mt));
 		object_unref(ga);
 	}
 
@@ -114,72 +115,92 @@ static void groupacs_des(groupacs_t *ga)
 	mowgli_heap_free(groupacs_heap, ga);
 }
 
-groupacs_t *groupacs_add(mygroup_t *mg, myuser_t *mu, unsigned int flags)
+groupacs_t *groupacs_add(mygroup_t *mg, myentity_t *mt, unsigned int flags)
 {
 	groupacs_t *ga;
 
 	return_val_if_fail(mg != NULL, NULL);
-	return_val_if_fail(mu != NULL, NULL);
+	return_val_if_fail(mt != NULL, NULL);
 
 	ga = mowgli_heap_alloc(groupacs_heap);
 	object_init(object(ga), NULL, (destructor_t) groupacs_des);
 
 	ga->mg = mg;
-	ga->mu = mu;
+	ga->mt = mt;
 	ga->flags = flags;
 
 	mowgli_node_add(ga, &ga->gnode, &mg->acs);
-	mowgli_node_add(ga, &ga->unode, myuser_get_membership_list(mu));
+	mowgli_node_add(ga, &ga->unode, myentity_get_membership_list(mt));
 
 	return ga;
 }
 
-groupacs_t *groupacs_find(mygroup_t *mg, myuser_t *mu, unsigned int flags)
+groupacs_t *groupacs_find(mygroup_t *mg, myentity_t *mt, unsigned int flags, bool allow_recurse)
 {
 	mowgli_node_t *n;
+	groupacs_t *out = NULL;
 
 	return_val_if_fail(mg != NULL, NULL);
-	return_val_if_fail(mu != NULL, NULL);
+	return_val_if_fail(mt != NULL, NULL);
+
+	mg->visited = true;
 
 	MOWGLI_ITER_FOREACH(n, mg->acs.head)
 	{
 		groupacs_t *ga = n->data;
 
-		if (flags)
+		if (out != NULL)
+			break;
+
+		if (isgroup(ga->mt) && allow_recurse && !(group(ga->mt)->visited))
 		{
-			if (ga->mu == mu && ga->mg == mg && (ga->flags & flags))
-				return ga;
+			groupacs_t *ga2;
+
+			ga2 = groupacs_find(group(ga->mt), mt, flags, allow_recurse);
+
+			if (ga2 != NULL)
+				out = ga;
 		}
-		else if (ga->mu == mu && ga->mg == mg)
-			return ga;
+		else
+		{
+			if (flags)
+			{
+				if (ga->mt == mt && ga->mg == mg && (ga->flags & flags))
+					out = ga;
+			}
+			else if (ga->mt == mt && ga->mg == mg)
+				out = ga;
+		}
 	}
 
-	return NULL;
+	mg->visited = false;
+
+	return out;
 }
 
-void groupacs_delete(mygroup_t *mg, myuser_t *mu)
+void groupacs_delete(mygroup_t *mg, myentity_t *mt)
 {
 	groupacs_t *ga;
 
-	ga = groupacs_find(mg, mu, 0);
+	ga = groupacs_find(mg, mt, 0, false);
 	if (ga != NULL)
 	{
 		mowgli_node_delete(&ga->gnode, &mg->acs);
-		mowgli_node_delete(&ga->unode, myuser_get_membership_list(mu));
+		mowgli_node_delete(&ga->unode, myentity_get_membership_list(mt));
 		object_unref(ga);
 	}
 }
 
 bool groupacs_sourceinfo_has_flag(mygroup_t *mg, sourceinfo_t *si, unsigned int flag)
 {
-	return groupacs_find(mg, si->smu, flag) != NULL;
+	return groupacs_find(mg, entity(si->smu), flag, true) != NULL;
 }
 
 unsigned int groupacs_sourceinfo_flags(mygroup_t *mg, sourceinfo_t *si)
 {
 	groupacs_t *ga;
 
-	ga = groupacs_find(mg, si->smu, 0);
+	ga = groupacs_find(mg, entity(si->smu), 0, true);
 	if (ga == NULL)
 		return 0;
 
@@ -210,18 +231,16 @@ unsigned int mygroup_count_flag(mygroup_t *mg, unsigned int flag)
 	return count;
 }
 
-mowgli_list_t *myuser_get_membership_list(myuser_t *mu)
+mowgli_list_t *myentity_get_membership_list(myentity_t *mt)
 {
 	mowgli_list_t *l;
 
-	return_val_if_fail(isuser(mu), NULL);
-
-	l = privatedata_get(mu, "groupserv:membership");
+	l = privatedata_get(mt, "groupserv:membership");
 	if (l != NULL)
 		return l;
 
 	l = mowgli_list_create();
-	privatedata_set(mu, "groupserv:membership", l);
+	privatedata_set(mt, "groupserv:membership", l);
 
 	return l;
 }
@@ -236,35 +255,35 @@ const char *mygroup_founder_names(mygroup_t *mg)
         MOWGLI_ITER_FOREACH(n, mg->acs.head)
         {
                 ga = n->data;
-                if (ga->mu != NULL && ga->flags & GA_FOUNDER)
+                if (ga->mt != NULL && ga->flags & GA_FOUNDER)
                 {
                         if (names[0] != '\0')
                                 mowgli_strlcat(names, ", ", sizeof names);
-                        mowgli_strlcat(names, entity(ga->mu)->name, sizeof names);
+                        mowgli_strlcat(names, ga->mt->name, sizeof names);
                 }
         }
         return names;
 }
 
-unsigned int myuser_count_group_flag(myuser_t *mu, unsigned int flagset)
+unsigned int myentity_count_group_flag(myentity_t *mt, unsigned int flagset)
 {
 	mowgli_list_t *l;
 	mowgli_node_t *n;
 	unsigned int count = 0;
 
-	l = myuser_get_membership_list(mu);
+	l = myentity_get_membership_list(mt);
 	MOWGLI_ITER_FOREACH(n, l->head)
 	{
 		groupacs_t *ga = n->data;
 
-		if (ga->mu == mu && ga->flags & flagset)
+		if (ga->mt == mt && ga->flags & flagset)
 			count++;
 	}
 
 	return count;
 }
 
-unsigned int gs_flags_parser(char *flagstring, int allow_minus, unsigned int flags)
+unsigned int gs_flags_parser(char *flagstring, bool allow_minus, unsigned int flags)
 {
 	char *c;
 	unsigned int dir = 0;
@@ -278,12 +297,10 @@ unsigned int gs_flags_parser(char *flagstring, int allow_minus, unsigned int fla
 		case '+':
 			dir = 0;
 			break;
-		if (allow_minus == 1)
-		{
-			case '-':
+		case '-':
+			if (allow_minus)
 				dir = 1;
-				break;
-		}
+			break;
 		case '*':
 			if (dir)
 				flags = 0;
@@ -395,4 +412,39 @@ void remove_group_chanacs(mygroup_t *mg)
 		else /* not founder */
 			object_unref(ca);
 	}
+}
+
+/*
+ * mygroup_rename(mygroup_t *mg, const char *name)
+ *
+ * Renames a group.
+ *
+ * Inputs:
+ *      - group to rename
+ *      - new name
+ *
+ * Outputs:
+ *      - nothing
+ *
+ * Side Effects:
+ *      - a group is renamed.
+ */
+void mygroup_rename(mygroup_t *mg, const char *name)
+{
+	stringref newname;
+	char nb[NICKLEN];
+
+	return_if_fail(mg != NULL);
+	return_if_fail(name != NULL);
+	return_if_fail(strlen(name) < NICKLEN);
+
+	mowgli_strlcpy(nb, entity(mg)->name, NICKLEN);
+	newname = strshare_get(name);
+
+	myentity_del(entity(mg));
+
+	strshare_unref(entity(mg)->name);
+	entity(mg)->name = newname;
+
+	myentity_put(entity(mg));
 }

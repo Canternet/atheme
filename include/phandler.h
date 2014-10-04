@@ -216,12 +216,16 @@ E void (*holdnick_sts)(user_t *source, int duration, const char *nick, myuser_t 
 E void (*svslogin_sts)(char *target, char *nick, char *user, char *host, myuser_t *account);
 /* send sasl message */
 E void (*sasl_sts) (char *target, char mode, char *data);
+/* send sasl mech list */
+E void (*sasl_mechlist_sts)(const char *mechlist);
 /* find next channel ban (or other ban-like mode) matching user */
 E mowgli_node_t *(*next_matching_ban)(channel_t *c, user_t *u, int type, mowgli_node_t *first);
 /* find next host channel access matching user */
 E mowgli_node_t *(*next_matching_host_chanacs)(mychan_t *mc, user_t *u, mowgli_node_t *first);
 /* check a nickname for validity; normally you don't need to override this */
 E bool (*is_valid_nick)(const char *nick);
+/* check a username for validity; normally you don't need to override this */
+E bool (*is_valid_username)(const char *username);
 /* check a vhost for validity; the core will already have checked for
  * @!?*, space, empty, : at start, length and cidr masks */
 E bool (*is_valid_host)(const char *host);
@@ -235,6 +239,8 @@ E void (*topiclock_sts)(channel_t *c);
  * pretty much the same thing either way.
  */
 E void (*quarantine_sts)(user_t *source, user_t *victim, long duration, const char *reason);
+/* Ask the proto module if this is valid as an extban */
+E bool (*is_extban)(const char *mask);
 
 E unsigned int generic_server_login(void);
 E void generic_introduce_nick(user_t *u);
@@ -270,13 +276,16 @@ E void generic_fnc_sts(user_t *source, user_t *u, const char *newnick, int type)
 E void generic_holdnick_sts(user_t *source, int duration, const char *nick, myuser_t *account);
 E void generic_svslogin_sts(char *target, char *nick, char *user, char *host, myuser_t *account);
 E void generic_sasl_sts(char *target, char mode, char *data);
+E void generic_sasl_mechlist_sts(const char *mechlist);
 E mowgli_node_t *generic_next_matching_ban(channel_t *c, user_t *u, int type, mowgli_node_t *first);
 E mowgli_node_t *generic_next_matching_host_chanacs(mychan_t *mc, user_t *u, mowgli_node_t *first);
 E bool generic_is_valid_host(const char *host);
 E bool generic_is_valid_nick(const char *nick);
+E bool generic_is_valid_username(const char *username);
 E void generic_mlock_sts(channel_t *c);
 E void generic_topiclock_sts(channel_t *c);
 E void generic_quarantine_sts(user_t *source, user_t *victim, long duration, const char *reason);
+E bool generic_is_extban(const char *mask);
 
 E struct cmode_ *mode_list;
 E struct extmode *ignore_mode_list;

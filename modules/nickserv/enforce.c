@@ -274,6 +274,7 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 	user_t *u;
 	mowgli_node_t *n, *tn;
 	enforce_timeout_t *timeout;
+	char lau[BUFSIZE];
 
 	/* Absolutely do not do anything like this if nicks
 	 * are not considered owned */
@@ -308,6 +309,13 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 	}
 	if ((si->smu == mn->owner) || verify_password(mn->owner, password))
 	{
+		if (user_is_channel_banned(si->su, 'b') || user_is_channel_banned(si->su, 'q') ||
+		    user_is_channel_banned(u, 'b') || user_is_channel_banned(u, 'q'))
+		{
+			command_fail(si, fault_noprivs, _("You can not regain your nickname while banned or quieted on a channel."));
+			return;
+		}
+
 		/* if this (nick, host) is waiting to be enforced, remove it */
 		if (si->su != NULL)
 		{
@@ -348,6 +356,51 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 			}
 			fnc_sts(nicksvs.me->me, si->su, target, FNC_FORCE);
 		}
+
+		if (MOWGLI_LIST_LENGTH(&mn->owner->logins) >= me.maxlogins)
+		{
+			command_fail(si, fault_toomany, _("You were not logged in."));
+			command_fail(si, fault_toomany, _("There are already \2%zu\2 sessions logged in to \2%s\2 (maximum allowed: %u)."), MOWGLI_LIST_LENGTH(&mn->owner->logins), entity(mn->owner)->name, me.maxlogins);
+
+			lau[0] = '\0';
+			MOWGLI_ITER_FOREACH(n, mn->owner->logins.head)
+			{
+				if (lau[0] != '\0')
+					mowgli_strlcat(lau, ", ", sizeof lau);
+				mowgli_strlcat(lau, ((user_t *)n->data)->nick, sizeof lau);
+			}
+			command_fail(si, fault_toomany, _("Logged in nicks are: %s"), lau);
+
+			return;
+		}
+
+		/* identify them to the target nick's account if they aren't yet */
+		if (si->smu != mn->owner)
+		{
+			/* if they are identified to another account, nuke their session first */
+			if (si->smu != NULL)
+			{
+				command_success_nodata(si, _("You have been logged out of \2%s\2."), entity(si->smu)->name);
+
+				if (ircd_on_logout(si->su, entity(si->smu)->name))
+					/* logout killed the user... */
+					return;
+				si->smu->lastlogin = CURRTIME;
+				MOWGLI_ITER_FOREACH_SAFE(n, tn, si->smu->logins.head)
+				{
+					if (n->data == si->su)
+					{
+						mowgli_node_delete(n, &si->smu->logins);
+						mowgli_node_free(n);
+						break;
+					}
+				}
+				si->su->myuser = NULL;
+			}
+
+			myuser_login(si->service, si->su, mn->owner, true);
+		}
+
 		return;
 	}
 	if (!password)

@@ -26,12 +26,14 @@ E int match_mapping;
 #define C_ALPHA 0x00000001
 #define C_DIGIT 0x00000002
 #define C_NICK  0x00000004
+#define C_USER  0x00000008
 
 E const unsigned int charattrs[];
 
 #define IsAlpha(c)      (charattrs[(unsigned char) (c)] & C_ALPHA)
 #define IsDigit(c)      (charattrs[(unsigned char) (c)] & C_DIGIT)
 #define IsNickChar(c)   (charattrs[(unsigned char) (c)] & C_NICK)
+#define IsUserChar(c)   (charattrs[(unsigned char) (c)] & C_USER)
 #define IsAlphaNum(c)   (IsAlpha((c)) || IsDigit((c)))
 #define IsNon(c)        (!IsAlphaNum((c)))
 
@@ -56,6 +58,7 @@ E char *collapse(char *);
 /* regex_create() flags */
 #define AREGEX_ICASE	1 /* case insensitive */
 #define AREGEX_PCRE	2 /* use libpcre engine */
+#define AREGEX_KLINE	4 /* XXX for rwatch, match kline */
 
 typedef struct atheme_regex_ atheme_regex_t;
 

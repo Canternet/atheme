@@ -374,7 +374,7 @@ void service_delete(service_t *sptr)
 	mowgli_heap_free(service_heap, sptr);
 }
 
-service_t *service_add_static(const char *name, const char *user, const char *host, const char *real, void (*handler)(sourceinfo_t *si, int parc, char *parv[]))
+service_t *service_add_static(const char *name, const char *user, const char *host, const char *real, void (*handler)(sourceinfo_t *si, int parc, char *parv[]), service_t *logtarget)
 {
 	service_t *sptr;
 	char internal_name[NICKLEN + 10];
@@ -389,6 +389,7 @@ service_t *service_add_static(const char *name, const char *user, const char *ho
 	sptr->host = sstrdup(host);
 	sptr->real = sstrdup(real);
 	sptr->botonly = true;
+	sptr->logtarget = logtarget;
 
 	servtree_update(NULL);
 
@@ -468,7 +469,7 @@ void servtree_update(void *dummy)
 			if (u != NULL)
 				kill_user(NULL, u, "Nick taken by service");
 			sptr->me = user_add(sptr->nick, sptr->user, sptr->host, NULL, NULL, ircd->uses_uid ? uid_get() : NULL, sptr->real, me.me, CURRTIME);
-			sptr->me->flags |= UF_IRCOP | UF_INVIS;
+			sptr->me->flags |= UF_IRCOP | UF_INVIS | UF_SERVICE;
 			if ((sptr == chansvs.me) && !chansvs.fantasy)
 				sptr->me->flags |= UF_DEAF;
 
@@ -568,6 +569,9 @@ void service_named_bind_command(const char *svs, command_t *cmd)
 	return_if_fail(cmd != NULL);
 
 	sptr = service_find(svs);
+	if (sptr == NULL)
+		return;
+
 	service_bind_command(sptr, cmd);
 }
 
@@ -579,6 +583,9 @@ void service_named_unbind_command(const char *svs, command_t *cmd)
 	return_if_fail(cmd != NULL);
 
 	sptr = service_find(svs);
+	if (sptr == NULL)
+		return;
+
 	service_unbind_command(sptr, cmd);
 }
 

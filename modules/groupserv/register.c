@@ -50,7 +50,7 @@ static void gs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if (myuser_count_group_flag(si->smu, GA_FOUNDER) > gs_config->maxgroups &&
+	if (myentity_count_group_flag(entity(si->smu), GA_FOUNDER) > gs_config->maxgroups &&
 	    !has_priv(si, PRIV_REG_NOLIMIT))
 	{
 		command_fail(si, fault_toomany, _("You have too many groups registered."));
@@ -64,7 +64,7 @@ static void gs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
         }
 
 	mg = mygroup_add(parv[0]);
-	groupacs_add(mg, si->smu, GA_ALL | GA_FOUNDER);
+	groupacs_add(mg, entity(si->smu), GA_ALL | GA_FOUNDER);
 
 	logcommand(si, CMDLOG_REGISTER, "REGISTER: \2%s\2", entity(mg)->name);
 	command_success_nodata(si, _("The group \2%s\2 has been registered to \2%s\2."), entity(mg)->name, entity(si->smu)->name);

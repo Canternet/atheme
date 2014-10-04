@@ -76,6 +76,8 @@ static bool check_rejoindelay(const char *, channel_t *, mychan_t *, user_t *, m
 static bool check_delaymsg(const char *, channel_t *, mychan_t *, user_t *, myuser_t *);
 static bool check_history(const char *, channel_t *, mychan_t *, user_t *, myuser_t *);
 
+static unsigned int max_rejoindelay = 5;
+
 struct extmode inspircd_ignore_mode_list[] = {
   { 'f', check_flood },
   { 'F', check_nickflood },
@@ -109,6 +111,7 @@ struct cmode_ inspircd_user_mode_list[] = {
   { 'i', UF_INVIS    },
   { 'o', UF_IRCOP    },
   { 'd', UF_DEAF     },
+  { 'k', UF_IMMUNE   },
   { '\0', 0 }
 };
 
@@ -181,6 +184,16 @@ static mowgli_node_t *inspircd_next_matching_ban(channel_t *c, user_t *u, int ty
 	}
 
 	return NULL;
+}
+
+static bool inspircd_is_extban(const char *mask)
+{
+	const size_t mask_len = strlen(mask);
+	/* e.g R:Test */
+	if (mask_len < 2 || mask[1] != ':')
+		return false;
+
+	return true;
 }
 
 /* CAPABilities */
@@ -260,7 +273,7 @@ static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t 
 	channel_t *target_c;
 	mychan_t *target_mc;
 
-	if (*value != '#' || strlen(value) > 50)
+	if (!VALID_GLOBAL_CHANNEL_PFX(value) || strlen(value) > 50)
 		return false;
 	if (u == NULL && mu == NULL)
 		return true;
@@ -354,8 +367,8 @@ static void inspircd_introduce_nick(user_t *u)
 	const char *umode = user_get_umodestr(u);
 
 	sts(":%s UID %s %lu %s %s %s %s 0.0.0.0 %lu %s%s%s%s :%s", me.numeric, u->uid, (unsigned long)u->ts, u->nick, u->host, u->host, u->user, (unsigned long)u->ts, umode, has_hideopermod ? "H" : "", has_hidechansmod ? "I" : "", has_servprotectmod ? "k" : "", u->gecos);
-	if (is_ircop(u))
-		sts(":%s OPERTYPE Services", u->uid);
+	if (is_ircop(u) && !has_servprotectmod)
+		sts(":%s OPERTYPE Service", u->uid);
 }
 
 static void inspircd_quit_sts(user_t *u, const char *reason)
@@ -409,7 +422,7 @@ static void inspircd_msg(const char *from, const char *target, const char *fmt, 
 	vsnprintf(buf, BUFSIZE, fmt, ap);
 	va_end(ap);
 
-	sts(":%s PRIVMSG %s :%s", from_p->uid, *target != '#' ? user->uid : target, buf);
+	sts(":%s PRIVMSG %s :%s", from_p->uid, !VALID_GLOBAL_CHANNEL_PFX(target) ? user->uid : target, buf);
 }
 
 static void inspircd_msg_global_sts(user_t *from, const char *mask, const char *text)
@@ -487,7 +500,7 @@ static void inspircd_qline_sts(const char *server, const char *name, long durati
 
 	svs = service_find("operserv");
 
-	if (*name != '#')
+	if (!VALID_GLOBAL_CHANNEL_PFX(name))
 	{
 		sts(":%s ADDLINE Q %s %s %lu %ld :%s", me.numeric, name, svs != NULL ? svs->nick : me.name, (unsigned long)CURRTIME, duration, reason);
 		return;
@@ -502,7 +515,7 @@ static void inspircd_qline_sts(const char *server, const char *name, long durati
 /* server-to-server UNQLINE wrapper */
 static void inspircd_unqline_sts(const char *server, const char *name)
 {
-	if (*name != '#')
+	if (!VALID_GLOBAL_CHANNEL_PFX(name))
 	{
 		sts(":%s QLINE %s", ME, name);
 		return;
@@ -706,6 +719,11 @@ static void inspircd_sasl_sts(char *target, char mode, char *data)
 		return;
 
 	sts(":%s ENCAP %s SASL %s %s %c %s", ME, s->sid, svs->me->uid, target, mode, data);
+}
+
+static void inspircd_sasl_mechlist_sts(const char *mechlist)
+{
+	sts(":%s METADATA * saslmechlist :%s", ME, mechlist);
 }
 
 static void inspircd_quarantine_sts(user_t *source, user_t *victim, long duration, const char *reason)
@@ -1161,13 +1179,14 @@ static void m_squit(sourceinfo_t *si, int parc, char *parv[])
 static void m_server(sourceinfo_t *si, int parc, char *parv[])
 {
 	server_t *s;
+	char ver[BUFSIZE];
 
 	slog(LG_DEBUG, "m_server(): new server: %s", parv[0]);
 	if (si->s == NULL)
 	{
 		sts(":%s BURST", me.numeric);
-		sts(":%s VERSION :%s. %s %s",
-				me.numeric, PACKAGE_STRING, me.numeric, get_conf_opts());
+		get_version_string(ver, sizeof(ver));
+		sts(":%s VERSION :%s", me.numeric, ver);
 		services_init();
 		sts(":%s ENDBURST", me.numeric);
 	}
@@ -1368,12 +1387,8 @@ static void m_metadata(sourceinfo_t *si, int parc, char *parv[])
 
 		if (parv[2][0] == '\0')
 			handle_clearlogin(si, u);
-		else if (si->s == u->server && (!(si->s->flags & SF_EOB) ||
-					(u->myuser != NULL &&
-					 !irccasecmp(entity(u->myuser)->name, parv[2]))))
-			handle_burstlogin(u, parv[2], 0);
 		else
-			handle_setlogin(si, u, parv[2], 0);
+			handle_burstlogin(u, parv[2], 0);
 	}
 	else if (!irccasecmp(parv[1], "ssl_cert"))
 	{
@@ -1498,6 +1513,8 @@ static void m_capab(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else if ((strcasecmp(parv[0], "MODULES") == 0 || strcasecmp(parv[0], "MODSUPPORT") == 0) && parc > 1)
 	{
+		char *it = NULL;
+
 		if (strstr(parv[1], "m_services_account.so"))
 		{
 			has_servicesmod = true;
@@ -1529,6 +1546,12 @@ static void m_capab(sourceinfo_t *si, int parc, char *parv[])
 		if (strstr(parv[1], "m_topiclock.so"))
 		{
 			has_svstopic_topiclock = true;
+		}
+		if ((it = strstr(parv[1], "m_kicknorejoin.so")) != NULL)
+		{
+			it = strchr(it, '=');
+			if (it)
+				max_rejoindelay = atoi(it + 1);
 		}
 		TAINT_ON(strstr(parv[1], "m_invisible.so") != NULL, "invisible (m_invisible) is not presently supported correctly in atheme, and won't be due to ethical obligations");
 	}
@@ -1619,9 +1642,11 @@ void _modinit(module_t * m)
 	holdnick_sts = &inspircd_holdnick_sts;
 	svslogin_sts = &inspircd_svslogin_sts;
 	sasl_sts = &inspircd_sasl_sts;
+	sasl_mechlist_sts = &inspircd_sasl_mechlist_sts;
 	quarantine_sts = &inspircd_quarantine_sts;
 	mlock_sts = &inspircd_mlock_sts;
 	topiclock_sts = &inspircd_topiclock_sts;
+	is_extban = &inspircd_is_extban;
 
 	mode_list = inspircd_mode_list;
 	ignore_mode_list = inspircd_ignore_mode_list;

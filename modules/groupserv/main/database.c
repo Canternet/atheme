@@ -7,6 +7,7 @@
 #define GDBV_VERSION	4
 
 static unsigned int loading_gdbv = -1;
+static unsigned int their_ga_all;
 
 static void write_groupdb(database_handle_t *db)
 {
@@ -17,6 +18,10 @@ static void write_groupdb(database_handle_t *db)
 
 	db_start_row(db, "GDBV");
 	db_write_uint(db, GDBV_VERSION);
+	db_commit_row(db);
+
+	db_start_row(db, "GFA");
+	db_write_word(db, gflags_tostr(ga_flags, GA_ALL));
 	db_commit_row(db);
 
 	MYENTITY_FOREACH_T(mt, &state, ENT_GROUP)
@@ -43,7 +48,7 @@ static void write_groupdb(database_handle_t *db)
 
 			db_start_row(db, "GACL");
 			db_start_row(db, entity(mg)->name);
-			db_start_row(db, entity(ga->mu)->name);
+			db_start_row(db, ga->mt->name);
 			db_start_row(db, flags);
 			db_commit_row(db);
 		}
@@ -66,6 +71,23 @@ static void db_h_gdbv(database_handle_t *db, const char *type)
 {
 	loading_gdbv = db_sread_uint(db);
 	slog(LG_INFO, "groupserv: opensex data schema version is %d.", loading_gdbv);
+
+	their_ga_all = GA_ALL_OLD;
+}
+
+static void db_h_gfa(database_handle_t *db, const char *type)
+{
+	const char *flags = db_sread_word(db);
+
+	gflags_fromstr(ga_flags, flags, &their_ga_all);
+	if (their_ga_all & ~GA_ALL)
+	{
+		slog(LG_ERROR, "db-h-gfa: losing flags %s from file", gflags_tostr(ga_flags, their_ga_all & ~GA_ALL));
+	}
+	if (~their_ga_all & GA_ALL)
+	{
+		slog(LG_ERROR, "db-h-gfa: making up flags %s not present in file", gflags_tostr(ga_flags, ~their_ga_all & GA_ALL));
+	}
 }
 
 static void db_h_grp(database_handle_t *db, const char *type)
@@ -109,15 +131,15 @@ static void db_h_grp(database_handle_t *db, const char *type)
 static void db_h_gacl(database_handle_t *db, const char *type)
 {
 	mygroup_t *mg;
-	myuser_t *mu;
+	myentity_t *mt;
 	unsigned int flags = GA_ALL;	/* GDBV 1 entires had full access */
 
 	const char *name = db_sread_word(db);
-	const char *user = db_sread_word(db);
+	const char *entity = db_sread_word(db);
 	const char *flagset;
 
 	mg = mygroup_find(name);
-	mu = myuser_find(user);
+	mt = myentity_find(entity);
 
 	if (mg == NULL)
 	{
@@ -125,9 +147,9 @@ static void db_h_gacl(database_handle_t *db, const char *type)
 		return;
 	}
 
-	if (mu == NULL)
+	if (mt == NULL)
 	{
-		slog(LG_INFO, "db-h-gacl: line %d: groupacs for nonexistent user %s", db->line, user);
+		slog(LG_INFO, "db-h-gacl: line %d: groupacs for nonexistent entity %s", db->line, entity);
 		return;
 	}
 
@@ -137,9 +159,15 @@ static void db_h_gacl(database_handle_t *db, const char *type)
 
 		if (!gflags_fromstr(ga_flags, flagset, &flags))
 			slog(LG_INFO, "db-h-gacl: line %d: confused by flags: %s", db->line, flagset);
+
+		/* ACL view permission was added, so make up the permission (#279), but only if the database
+		 * is from atheme 7.1 or earlier. --kaniini
+		 */
+		if (!(their_ga_all & GA_ACLVIEW) && ((flags & GA_ALL_OLD) == their_ga_all))
+			flags |= GA_ACLVIEW;
 	}
 
-	groupacs_add(mg, mu, flags);
+	groupacs_add(mg, mt, flags);
 }
 
 static void db_h_mdg(database_handle_t *db, const char *type)
@@ -169,6 +197,7 @@ void gs_db_init(void)
 	db_register_type_handler("GRP", db_h_grp);
 	db_register_type_handler("GACL", db_h_gacl);
 	db_register_type_handler("MDG", db_h_mdg);
+	db_register_type_handler("GFA", db_h_gfa);
 }
 
 void gs_db_deinit(void)
@@ -179,4 +208,5 @@ void gs_db_deinit(void)
 	db_unregister_type_handler("GRP");
 	db_unregister_type_handler("GACL");
 	db_unregister_type_handler("MDG");
+	db_unregister_type_handler("GFA");
 }

@@ -94,7 +94,7 @@ static const char *get_template_name(mychan_t *mc, unsigned int level)
 	return iter.res;
 }
 
-static void do_list(sourceinfo_t *si, mychan_t *mc)
+static void do_list(sourceinfo_t *si, mychan_t *mc, unsigned int flags)
 {
 	chanacs_t *ca;
 	mowgli_node_t *n;
@@ -122,6 +122,10 @@ static void do_list(sourceinfo_t *si, mychan_t *mc)
 		char mod_date[64];
 
 		ca = n->data;
+
+		if (flags && !(ca->level & flags))
+			continue;
+
 		template = get_template_name(mc, ca->level);
 		mod_ago = ca->tmodified ? time_ago(ca->tmodified) : "?";
 
@@ -129,11 +133,11 @@ static void do_list(sourceinfo_t *si, mychan_t *mc)
 		strftime(mod_date, sizeof mod_date, TIME_FORMAT, &tm);
 
 		if (template != NULL)
-			command_success_nodata(si, _("%-5d %-22s %-20s (%s) [modified %s ago, on %s]"),
-				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), template, mod_ago, mod_date);
+			command_success_nodata(si, _("%-5d %-22s %-20s (%s) (%s) [modified %s ago, on %s]"),
+				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), template, mc->name, mod_ago, mod_date);
 		else
-			command_success_nodata(si, _("%-5d %-22s %-20s [modified %s ago, on %s]"),
-				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), mod_ago, mod_date);
+			command_success_nodata(si, _("%-5d %-22s %-20s (%s) [modified %s ago, on %s]"),
+				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), mc->name, mod_ago, mod_date);
 		i++;
 	}
 
@@ -179,9 +183,11 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if (!target)
+	if (!target || (target && target[0] == '+' && flagstr == NULL))
 	{
-		do_list(si, mc);
+		unsigned int flags = (target != NULL) ? flags_to_bitmask(target, 0) : 0;
+
+		do_list(si, mc, flags);
 		return;
 	}
 
@@ -214,7 +220,7 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 	 */
 	else if (!strcasecmp(target, "LIST") && myentity_find_ext(target) == NULL)
 	{
-		do_list(si, mc);
+		do_list(si, mc, 0);
 		free(target);
 
 		return;

@@ -191,7 +191,7 @@ static bool check_flood(const char *value, channel_t *c, mychan_t *mc, user_t *u
 	ep = evalbuf + 1;
 
 	/* check that the parameter ends with a ] */
-	if ((p = strchr(ep, ']')) != NULL)
+	if ((p = strchr(ep, ']')) == NULL)
 		return false;
 
 	/* we have a ], blast it away and check for a colon. */
@@ -233,7 +233,7 @@ static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t 
 	channel_t *target_c;
 	mychan_t *target_mc;
 
-	if (*value != '#' || strlen(value) > 50)
+	if (!VALID_GLOBAL_CHANNEL_PFX(value) || strlen(value) > 50)
 		return false;
 	if (u == NULL && mu == NULL)
 		return true;
@@ -1244,6 +1244,20 @@ static void unreal_user_mode(user_t *u, const char *changes)
 		}
 }
 
+static bool unreal_is_extban(const char *mask)
+{
+	const char mask_len = strlen(mask);
+	unsigned char offset = 0;
+
+	if (mask_len < 4 || mask[0] != '~' || mask[2] != ':')
+		return false;
+
+	if ((mask[1] < 'a' || mask[1] > 'z') && (mask[1] < 'A' || mask[1] > 'Z'))
+		return false;
+
+	return true;
+}
+
 static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 {
 	if (*parv[0] == '#')
@@ -1521,6 +1535,7 @@ void _modinit(module_t * m)
 	svslogin_sts = &unreal_svslogin_sts;
 	quarantine_sts = &unreal_quarantine_sts;
 	mlock_sts = &unreal_mlock_sts;
+	is_extban = &unreal_is_extban;
 
 	next_matching_ban = &unreal_next_matching_ban;
 	mode_list = unreal_mode_list;

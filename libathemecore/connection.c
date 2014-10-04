@@ -402,7 +402,7 @@ connection_t *connection_open_tcp(char *host, char *vhost, unsigned int port,
 		return NULL;
 	}
 
-	if (!(s = socket(addr->ai_family, SOCK_STREAM, 0)))
+	if ((s = socket(addr->ai_family, SOCK_STREAM, 0)) < 0)
 	{
 		slog(LG_ERROR, "connection_open_tcp(): unable to create socket.");
 		freeaddrinfo(addr);
@@ -473,6 +473,7 @@ connection_t *connection_open_tcp(char *host, char *vhost, unsigned int port,
 		else
 			slog(LG_ERROR, "connection_open_tcp(): failed to connect to %s: %d (%s)", host, ioerrno(), strerror(ioerrno()));
 		close(s);
+		freeaddrinfo(addr);
 		return NULL;
 	}
 
@@ -521,7 +522,7 @@ connection_t *connection_open_listener_tcp(char *host, unsigned int port,
 		return NULL;
 	}
 
-	if (!(s = socket(addr->ai_family, SOCK_STREAM, 0)))
+	if ((s = socket(addr->ai_family, SOCK_STREAM, 0)) < 0)
 	{
 		slog(LG_ERROR, "connection_open_listener_tcp(): unable to create socket.");
 		freeaddrinfo(addr);

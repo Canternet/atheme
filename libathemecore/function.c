@@ -772,7 +772,8 @@ int sendemail(user_t *u, myuser_t *mu, const char *type, const char *email, cons
 /* various access level checkers */
 bool is_founder(mychan_t *mychan, myentity_t *mt)
 {
-	return_val_if_fail(mt != NULL, false);
+	if (mt == NULL)
+		return false;
 
 	if (chanacs_entity_has_flag(mychan, mt, CA_FOUNDER))
 		return true;
@@ -807,6 +808,14 @@ bool is_autokline_exempt(user_t *user)
 		if (0 == match(n->data, buf))
 			return true;
 	}
+	return false;
+}
+
+bool is_service(user_t *user)
+{
+	if (UF_SERVICE & user->flags)
+		return true;
+
 	return false;
 }
 
