@@ -8,6 +8,7 @@
 
 #include "atheme.h"
 #include "gameserv_common.h"
+#include <string.h>
 
 DECLARE_MODULE_V1
 (
@@ -71,6 +72,50 @@ static void command_eightball(sourceinfo_t *si, int parc, char *parv[])
 		N_("We won't go there"),
 		N_("No chance at all!")
 	};
+
+	static const char *alcohol[21] = {
+		"booze",
+		"rum",
+		"vodka",
+		"gin",
+		"tequila",
+		"beer",
+		"wine",
+		"cider",
+		"liquor",
+		"bourbon",
+		"drink",
+		"whiskey",
+		"scotch",
+		"mead",
+		"schnapps",
+		"liquer",
+		"sake",
+		"sochu",
+		"rye",
+		"absinthe",
+		"jager"
+	};
+
+
+        if(parv)
+        {
+		for(int i = 0; i < parc; i++)
+			for(int j = 0; parv[i][j]; j++)
+				parv[i][j] = tolower(parv[i][j]);
+                
+		for(int i = 0; i < parc; i++)
+		{
+			for(int j = 0; j < 21; j++)
+			{
+				if(strstr(parv[i],alcohol[j]) != 0)
+	                	{
+                        	gs_command_report(si, "%s", eightball_responses[rand() % 11]);
+				return;
+            		 	}
+			}
+		}
+        }
 
 	gs_command_report(si, "%s", eightball_responses[rand() % 28]);
 }
