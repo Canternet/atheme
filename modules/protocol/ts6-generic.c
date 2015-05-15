@@ -9,7 +9,7 @@
 /*
  * protocol/ts6-generic
  *
- * This module is not very useful on it's own.  It implements
+ * This module is not very useful on it's own.	It implements
  * the basis of the TS6 extended linking profile, which is used
  * by hybrid, charybdis, ratbox (--enable-services), weircd
  * and others.
@@ -73,7 +73,7 @@ static unsigned int ts6_server_login(void)
 		ircd->uses_uid = false;
 		ret = sts("PASS %s :TS", curr_uplink->send_pass);
 	}
-	else if (strlen(me.numeric) == 3 && isdigit(*me.numeric))
+	else if (strlen(me.numeric) == 3 && isdigit((unsigned char)*me.numeric))
 	{
 		ircd->uses_uid = true;
 		ret = sts("PASS %s TS 6 :%s", curr_uplink->send_pass, me.numeric);
@@ -321,6 +321,24 @@ static void ts6_unqline_sts(const char *server, const char *name)
 	sts(":%s ENCAP %s UNRESV %s", svs != NULL ? CLIENT_NAME(svs->me) : ME, server, name);
 }
 
+/* server-to-server DLINE wrapper */
+static void ts6_dline_sts(const char *server, const char *host, long duration, const char *reason)
+{
+	service_t *svs;
+
+	svs = service_find("operserv");
+	sts(":%s ENCAP %s DLINE %ld %s :%s", svs != NULL ? CLIENT_NAME(svs->me) : ME, server, duration, host, reason);
+}
+
+/* server-to-server UNDLINE wrapper */
+static void ts6_undline_sts(const char *server, const char *host)
+{
+	service_t *svs;
+
+	svs = service_find("operserv");
+	sts(":%s ENCAP %s UNDLINE %s", svs != NULL ? CLIENT_NAME(svs->me) : ME, server, host);
+}
+
 /* topic wrapper */
 static void ts6_topic_sts(channel_t *c, user_t *source, const char *setter, time_t ts, time_t prevts, const char *topic)
 {
@@ -430,7 +448,7 @@ static bool ts6_on_logout(user_t *u, const char *account)
 
 /* XXX we don't have an appropriate API for this, what about making JUPE
  * serverside like in P10?
- *       --nenolod
+ *	 --nenolod
  */
 static void ts6_jupe(const char *server, const char *reason)
 {
@@ -516,7 +534,7 @@ static void ts6_holdnick_sts(user_t *source, int duration, const char *nick, myu
 
 static void ts6_mlock_sts(channel_t *c)
 {
-	mychan_t *mc = MYCHAN_FROM(c);
+	mychan_t *mc = mychan_from(c);
 
 	if (use_mlock == false)
 		return;
@@ -541,7 +559,7 @@ static void m_mlock(sourceinfo_t *si, int parc, char *parv[])
 	if (!(c = channel_find(parv[1])))
 		return;
 
-	if (!(mc = MYCHAN_FROM(c)))
+	if (!(mc = mychan_from(c)))
 	{
 		/* Unregistered channel. Clear the MLOCK. */
 		sts(":%s MLOCK %lu %s :", ME, (unsigned long)c->ts, c->name);
@@ -913,11 +931,11 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 	/* if it's only 2 then it's a nickname change */
 	else if (parc == 2)
 	{
-                if (!si->su)
-                {
-                        slog(LG_DEBUG, "m_nick(): server trying to change nick: %s", si->s != NULL ? si->s->name : "<none>");
-                        return;
-                }
+		if (!si->su)
+		{
+			slog(LG_DEBUG, "m_nick(): server trying to change nick: %s", si->s != NULL ? si->s->name : "<none>");
+			return;
+		}
 
 		slog(LG_DEBUG, "m_nick(): nickname change from `%s': %s", si->su->nick, parv[0]);
 
@@ -1278,6 +1296,7 @@ static void m_encap(sourceinfo_t *si, int parc, char *parv[])
 		smsg.mode = *parv[4];
 		smsg.buf = parv[5];
 		smsg.ext = parc >= 6 ? parv[6] : NULL;
+		smsg.server = si->s ? si->s : NULL;
 		hook_call_sasl_input(&smsg);
 	}
 	else if (!irccasecmp(parv[1], "RSMSG"))
@@ -1381,7 +1400,7 @@ static void m_capab(sourceinfo_t *si, int parc, char *parv[])
 
 	/* Now we know whether or not we should enable services support,
 	 * so burst the clients.
-	 *       --nenolod
+	 *	 --nenolod
 	 */
 	services_init();
 }
@@ -1475,6 +1494,8 @@ void _modinit(module_t * m)
 	sasl_sts = &ts6_sasl_sts;
 	is_valid_host = &ts6_is_valid_host;
 	mlock_sts = &ts6_mlock_sts;
+	dline_sts = &ts6_dline_sts;
+	undline_sts = &ts6_undline_sts;
 
 	pcommand_add("PING", m_ping, 1, MSRC_USER | MSRC_SERVER);
 	pcommand_add("PONG", m_pong, 1, MSRC_SERVER);

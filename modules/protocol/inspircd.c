@@ -15,55 +15,54 @@ DECLARE_MODULE_V1("protocol/inspircd", true, _modinit, NULL, PACKAGE_STRING, "At
 /* *INDENT-OFF* */
 
 ircd_t InspIRCd = {
-	"InspIRCd",                     /* IRCd name */
-	"$",                            /* TLD Prefix, used by Global. */
-	true,                           /* Whether or not we use IRCNet/TS6 UID */
-	false,                          /* Whether or not we use RCOMMAND */
-	true,                           /* Whether or not we support channel owners. */
-	true,                           /* Whether or not we support channel protection. */
-	true,                           /* Whether or not we support halfops. */
-	false,                          /* Whether or not we use P10 */
-	true,                           /* Whether or not we use vHosts. */
-	CMODE_OPERONLY | CMODE_PERM | CMODE_IMMUNE,	    /* Oper-only cmodes */
-	CSTATUS_OWNER,                  /* Integer flag for owner channel flag. */
-	CSTATUS_PROTECT,                /* Integer flag for protect channel flag. */
-	CSTATUS_HALFOP,                 /* Integer flag for halfops. */
-	"+q",                           /* Mode we set for owner. */
-	"+a",                           /* Mode we set for protect. */
-	"+h",                           /* Mode we set for halfops. */
-	PROTOCOL_INSPIRCD,              /* Protocol type */
-	CMODE_PERM,                     /* Permanent cmodes */
-	CMODE_IMMUNE,                   /* Oper-immune cmode */
-	"beIgXw",                       /* Ban-like cmodes */
-	'e',                            /* Except mchar */
-	'I',                            /* Invex mchar */
-	IRCD_CIDR_BANS | IRCD_HOLDNICK  /* Flags */
+	.ircdname = "InspIRCd",
+	.tldprefix = "$",
+	.uses_uid = true,
+	.uses_rcommand = false,
+	.uses_owner = true,
+	.uses_protect = true,
+	.uses_halfops = true,
+	.uses_p10 = false,
+	.uses_vhost = true,
+	.oper_only_modes = CMODE_OPERONLY | CMODE_PERM,
+	.owner_mode = CSTATUS_OWNER,
+	.protect_mode = CSTATUS_PROTECT,
+	.halfops_mode = CSTATUS_HALFOP,
+	.owner_mchar = "+q",
+	.protect_mchar = "+a",
+	.halfops_mchar = "+h",
+	.type = PROTOCOL_INSPIRCD,
+	.perm_mode = CMODE_PERM,
+	.oimmune_mode = 0,
+	.ban_like_modes = "beIgXw",
+	.except_mchar = 'e',
+	.invex_mchar = 'I',
+	.flags = IRCD_CIDR_BANS | IRCD_HOLDNICK,
 };
 
 struct cmode_ inspircd_mode_list[] = {
-  { 'i', CMODE_INVITE   },
-  { 'm', CMODE_MOD      },
-  { 'n', CMODE_NOEXT    },
-  { 'p', CMODE_PRIV     },
-  { 's', CMODE_SEC      },
-  { 't', CMODE_TOPIC    },
-  { 'c', CMODE_NOCOLOR  },
-  { 'M', CMODE_MODREG   },
-  { 'R', CMODE_REGONLY  },
+  { 'i', CMODE_INVITE	},
+  { 'm', CMODE_MOD	},
+  { 'n', CMODE_NOEXT	},
+  { 'p', CMODE_PRIV	},
+  { 's', CMODE_SEC	},
+  { 't', CMODE_TOPIC	},
+  { 'c', CMODE_NOCOLOR	},
+  { 'M', CMODE_MODREG	},
+  { 'R', CMODE_REGONLY	},
   { 'O', CMODE_OPERONLY },
-  { 'S', CMODE_STRIP    },
-  { 'K', CMODE_NOKNOCK  },
+  { 'S', CMODE_STRIP	},
+  { 'K', CMODE_NOKNOCK	},
   { 'A', CMODE_NOINVITE },
-  { 'C', CMODE_NOCTCP   },
-  { 'N', CMODE_STICKY   },
-  { 'G', CMODE_CENSOR   },
-  { 'P', CMODE_PERM     },
+  { 'C', CMODE_NOCTCP	},
+  { 'N', CMODE_STICKY	},
+  { 'G', CMODE_CENSOR	},
+  { 'P', CMODE_PERM	},
   { 'B', CMODE_NOCAPS	},
   { 'z', CMODE_SSLONLY	},
   { 'T', CMODE_NONOTICE },
-  { 'u', CMODE_HIDING   },
-  { 'Q', CMODE_PEACE    },
-  { 'Y', CMODE_IMMUNE	},
+  { 'u', CMODE_HIDING	},
+  { 'Q', CMODE_PEACE	},
   { 'D', CMODE_DELAYJOIN },
   { '\0', 0 }
 };
@@ -90,20 +89,22 @@ struct extmode inspircd_ignore_mode_list[] = {
 };
 
 struct cmode_ inspircd_status_mode_list[] = {
-  { 'q', CSTATUS_OWNER   },
+  { 'Y', CSTATUS_IMMUNE	 },
+  { 'q', CSTATUS_OWNER	 },
   { 'a', CSTATUS_PROTECT },
-  { 'o', CSTATUS_OP      },
+  { 'o', CSTATUS_OP	 },
   { 'h', CSTATUS_HALFOP  },
-  { 'v', CSTATUS_VOICE   },
+  { 'v', CSTATUS_VOICE	 },
   { '\0', 0 }
 };
 
 struct cmode_ inspircd_prefix_mode_list[] = {
-  { '~', CSTATUS_OWNER   },
+  { '!', CSTATUS_IMMUNE	 },
+  { '~', CSTATUS_OWNER	 },
   { '&', CSTATUS_PROTECT },
-  { '@', CSTATUS_OP      },
+  { '@', CSTATUS_OP	 },
   { '%', CSTATUS_HALFOP  },
-  { '+', CSTATUS_VOICE   },
+  { '+', CSTATUS_VOICE	 },
   { '\0', 0 }
 };
 
@@ -190,7 +191,7 @@ static bool inspircd_is_extban(const char *mask)
 {
 	const size_t mask_len = strlen(mask);
 	/* e.g R:Test */
-	if (mask_len < 2 || mask[1] != ':')
+	if (mask_len < 2 || mask[1] != ':' || strchr(mask, ' '))
 		return false;
 
 	return true;
@@ -253,7 +254,7 @@ static bool check_jointhrottle(const char *value, channel_t *c, mychan_t *mc, us
 				return false;
 			arg2 = p + 1;
 		}
-		else if (!isdigit(*p))
+		else if (!isdigit((unsigned char)*p))
 			return false;
 		p++;
 	}
@@ -279,7 +280,7 @@ static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t 
 	if (u == NULL && mu == NULL)
 		return true;
 	target_c = channel_find(value);
-	target_mc = MYCHAN_FROM(target_c);
+	target_mc = mychan_from(target_c);
 	if (target_c == NULL && target_mc == NULL)
 		return false;
 	return true;
@@ -291,7 +292,7 @@ static bool check_rejoindelay(const char *value, channel_t *c, mychan_t *mc, use
 
 	while (*ch)
 	{
-		if (!isdigit(*ch))
+		if (!isdigit((unsigned char)*ch))
 			return false;
 		ch++;
 	}
@@ -311,7 +312,7 @@ static bool check_delaymsg(const char *value, channel_t *c, mychan_t *mc, user_t
 
 	while (*ch)
 	{
-		if (!isdigit(*ch))
+		if (!isdigit((unsigned char)*ch))
 			return false;
 		ch++;
 	}
@@ -489,9 +490,8 @@ static void inspircd_unkline_sts(const char *server, const char *user, const cha
 {
 	service_t *svs;
 
-	/* I know this looks wrong, but it's really not. Trust me. --w00t */
 	svs = service_find("operserv");
-	sts(":%s GLINE %s@%s", svs != NULL ? svs->me->uid : ME, user, host);
+	sts(":%s DELLINE G %s@%s", svs != NULL ? svs->me->uid : ME, user, host);
 }
 
 /* server-to-server QLINE wrapper */
@@ -518,7 +518,7 @@ static void inspircd_unqline_sts(const char *server, const char *name)
 {
 	if (!VALID_GLOBAL_CHANNEL_PFX(name))
 	{
-		sts(":%s QLINE %s", ME, name);
+		sts(":%s DELLINE Q %s", ME, name);
 		return;
 	}
 
@@ -526,6 +526,24 @@ static void inspircd_unqline_sts(const char *server, const char *name)
 		sts(":%s CBAN %s", ME, name);
 	else
 		slog(LG_INFO, "SQLINE: Could not remove SQLINE on \2%s\2 due to m_cban not being loaded in inspircd.", name);
+}
+
+/* server-to-server ZLINE/DLINE wrapper */
+static void inspircd_dline_sts(const char *server, const char *host, long duration, const char *reason)
+{
+	service_t *svs;
+
+	svs = service_find("operserv");
+	sts(":%s ADDLINE Z %s %s %lu %ld :%s", me.numeric, host, svs != NULL ? svs->nick : me.name, (unsigned long)CURRTIME, duration, reason);
+}
+
+/* server-to-server UNZLINE/UNDLINE wrapper */
+static void inspircd_undline_sts(const char *server, const char *host)
+{
+	service_t *svs;
+
+	svs = service_find("operserv");
+	sts(":%s DELLINE Z %s", svs != NULL ? svs->me->uid : ME, host);
 }
 
 /* topic wrapper */
@@ -735,7 +753,7 @@ static void inspircd_quarantine_sts(user_t *source, user_t *victim, long duratio
 
 static void inspircd_mlock_sts(channel_t *c)
 {
-	mychan_t *mc = MYCHAN_FROM(c);
+	mychan_t *mc = mychan_from(c);
 
 	if (mc == NULL)
 		return;
@@ -745,7 +763,7 @@ static void inspircd_mlock_sts(channel_t *c)
 
 static void  inspircd_topiclock_sts(channel_t *c)
 {
-	mychan_t *mc = MYCHAN_FROM(c);
+	mychan_t *mc = mychan_from(c);
 	if (mc == NULL || !has_svstopic_topiclock)
 		return;
 
@@ -1332,6 +1350,7 @@ static void m_encap(sourceinfo_t *si, int parc, char *parv[])
 		smsg.mode = *parv[4];
 		smsg.buf = parv[5];
 		smsg.ext = parc >= 6 ? parv[6] : NULL;
+		smsg.server = si->s ? si->s : NULL;
 		hook_call_sasl_input(&smsg);
 	}
 	else if (!irccasecmp(parv[1], "TRANSFP"))
@@ -1387,7 +1406,7 @@ static inline void verify_mlock(channel_t *c, time_t ts, const char *their_mlock
 	const char *mlock_str;
 	mychan_t *mc;
 
-	mc = MYCHAN_FROM(c);
+	mc = mychan_from(c);
 	if (mc == NULL)
 		return;
 
@@ -1398,6 +1417,18 @@ static inline void verify_mlock(channel_t *c, time_t ts, const char *their_mlock
 	mlock_str = mychan_get_sts_mlock(mc);
 	if (strcmp(mlock_str, their_mlock))
 		return mlock_sts(c);
+}
+
+static void verify_topiclock(channel_t *c, bool state)
+{
+	bool mystate;
+	mychan_t *mc = mychan_from(c);
+	if (!mc)
+		return;
+
+	mystate = mc->flags & MC_TOPICLOCK;
+	if (state != mystate)
+		inspircd_topiclock_sts(c);
 }
 
 /*
@@ -1471,6 +1502,13 @@ static void m_metadata(sourceinfo_t *si, int parc, char *parv[])
 	{
 		c = channel_find(parv[0]);
 		verify_mlock(c, 0, parv[2]);
+	}
+	else if (!irccasecmp(parv[1], "topiclock"))
+	{
+		bool state = (!strcmp(parv[2], "1"));
+		c = channel_find(parv[0]);
+		if (c)
+			verify_topiclock(c, state);
 	}
 }
 
@@ -1694,6 +1732,8 @@ void _modinit(module_t * m)
 	mlock_sts = &inspircd_mlock_sts;
 	topiclock_sts = &inspircd_topiclock_sts;
 	is_extban = &inspircd_is_extban;
+	dline_sts = &inspircd_dline_sts;
+	undline_sts = &inspircd_undline_sts;
 
 	mode_list = inspircd_mode_list;
 	ignore_mode_list = inspircd_ignore_mode_list;

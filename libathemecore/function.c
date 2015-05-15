@@ -281,7 +281,7 @@ int validemail(const char *email)
 	/* no mail to IP addresses, this should be done using [10.2.3.4]
 	 * like syntax but we do not allow that either
 	 */
-	if (isdigit(lastdot[1]))
+	if (isdigit((unsigned char)lastdot[1]))
 		return 0;
 
 	/* make sure there are at least 4 characters besides the above
@@ -736,8 +736,8 @@ int sendemail(user_t *u, myuser_t *mu, const char *type, const char *email, cons
 		replace(buf, sizeof buf, "&to&", to);
 		replace(buf, sizeof buf, "&replyto&", me.adminemail);
 		replace(buf, sizeof buf, "&date&", date);
-		replace(buf, sizeof buf, "&accountname&", mu != NULL ? entity(mu)->name : "Guest");
-		replace(buf, sizeof buf, "&entityname&", u != NULL ? entity(u)->name : "???");
+		replace(buf, sizeof buf, "&accountname&", entity(mu)->name);
+		replace(buf, sizeof buf, "&entityname&", u->myuser ? entity(u->myuser)->name : u->nick);
 		replace(buf, sizeof buf, "&netname&", me.netname);
 		replace(buf, sizeof buf, "&param&", param);
 		replace(buf, sizeof buf, "&sourceinfo&", sourceinfo);

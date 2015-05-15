@@ -209,6 +209,18 @@ static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
 		command_fail(si, fault_noprivs, _("You cannot RELEASE yourself."));
 		return;
 	}
+	if (password && metadata_find(mn->owner, "private:freeze:freezer"))
+	{
+		command_fail(si, fault_authfail, "You cannot release \2%s\2 because the account has been frozen.", target);
+		logcommand(si, CMDLOG_DO, "failed RELEASE \2%s\2 (frozen)", target);
+		return;
+	}
+	if (password && (mn->owner->flags & MU_NOPASSWORD))
+	{
+		command_fail(si, fault_authfail, _("Password authentication is disabled for this account."));
+		logcommand(si, CMDLOG_DO, "failed RELEASE \2%s\2 (password authentication disabled)", target);
+		return;
+	}
 	if ((si->smu == mn->owner) || verify_password(mn->owner, password))
 	{
 		/* if this (nick, host) is waiting to be enforced, remove it */
@@ -246,7 +258,7 @@ static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
 					holdnick_sts(nicksvs.me->me, 60 + arc4random() % 60, u->nick, mn->owner);
 				else
 					u->flags |= UF_DOENFORCE;
-				command_success_nodata(si, _("%s has been released."), target);
+				command_success_nodata(si, _("\2%s\2 has been released."), target);
 				logcommand(si, CMDLOG_DO, "RELEASE: \2%s!%s@%s\2", u->nick, u->user, u->vhost);
 			}
 		}
@@ -307,10 +319,21 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 		command_fail(si, fault_noprivs, _("You cannot REGAIN yourself."));
 		return;
 	}
+	if (password && metadata_find(mn->owner, "private:freeze:freezer"))
+	{
+		command_fail(si, fault_authfail, "You cannot regain \2%s\2 because the account has been frozen.", target);
+		logcommand(si, CMDLOG_DO, "failed REGAIN \2%s\2 (frozen)", target);
+		return;
+	}
+	if (password && (mn->owner->flags & MU_NOPASSWORD))
+	{
+		command_fail(si, fault_authfail, _("Password authentication is disabled for this account."));
+		logcommand(si, CMDLOG_DO, "failed REGAIN \2%s\2 (password authentication disabled)", target);
+		return;
+	}
 	if ((si->smu == mn->owner) || verify_password(mn->owner, password))
 	{
-		if (user_is_channel_banned(si->su, 'b') || user_is_channel_banned(si->su, 'q') ||
-		    user_is_channel_banned(u, 'b') || user_is_channel_banned(u, 'q'))
+		if (si->su != NULL && (user_is_channel_banned(si->su, 'b') || user_is_channel_banned(si->su, 'q')))
 		{
 			command_fail(si, fault_noprivs, _("You can not regain your nickname while banned or quieted on a channel."));
 			return;
@@ -494,7 +517,7 @@ static void check_registration(hook_user_register_check_t *hdata)
 	if (hdata->approved)
 		return;
 
-	if (!strncasecmp(hdata->account, nicksvs.enforce_prefix, prefixlen) && isdigit(hdata->account[prefixlen]))
+	if (!strncasecmp(hdata->account, nicksvs.enforce_prefix, prefixlen) && isdigit((unsigned char)hdata->account[prefixlen]))
 	{
 		command_fail(hdata->si, fault_badparams, "The nick \2%s\2 is reserved and cannot be registered.", hdata->account);
 		hdata->approved = 1;

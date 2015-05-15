@@ -9,9 +9,6 @@
 #ifndef CHANNELS_H
 #define CHANNELS_H
 
-#define MYCHAN_FROM(chan)		(ENSURE_TYPE((chan), channel_t *) != NULL ? \
-						((chan)->mychan != NULL ? (chan)->mychan : mychan_find((chan)->name)) : NULL)
-
 #define VALID_GLOBAL_CHANNEL_PFX(name)	(*(name) == '#' || *(name) == '+' || *(name) == '!')
 #define VALID_CHANNEL_PFX(name)		(VALID_GLOBAL_CHANNEL_PFX(name) || *(name) == '&')
 
@@ -25,6 +22,7 @@ struct channel_
   char **extmodes; /* non-standard simple modes with param eg +j */
 
   unsigned int nummembers;
+  unsigned int numsvcmembers;
 
   time_t ts;
 
@@ -79,6 +77,7 @@ struct chanban_
 #define CSTATUS_OWNER   0x00000004      /* unreal/inspircd +q */
 #define CSTATUS_PROTECT 0x00000008      /* unreal/inspircd +a */
 #define CSTATUS_HALFOP  0x00000010      /* unreal/inspircd +h */
+#define CSTATUS_IMMUNE	0x00000020	/* inspircd-style per-user immune */
 
 /* chanban_t.flags */
 #define CBAN_ANTIFLOOD  0x00000001	/* chanserv/antiflood set this */
@@ -133,6 +132,12 @@ typedef struct {
 	user_t *u;
 	channel_t *c;
 } hook_channel_mode_t;
+
+typedef struct {
+	chanuser_t *cu;
+	const char mchar;
+	const unsigned int mvalue;
+} hook_channel_mode_change_t;
 
 /* cmode.c */
 E char *flags_to_string(unsigned int flags);

@@ -94,12 +94,18 @@ int remove_ban_exceptions(user_t *source, channel_t *chan, user_t *target)
 
 void try_kick_real(user_t *source, channel_t *chan, user_t *target, const char *reason)
 {
+	chanuser_t *cu;
+
 	return_if_fail(source != NULL);
 	return_if_fail(chan != NULL);
 	return_if_fail(target != NULL);
 	return_if_fail(reason != NULL);
 
-	if (chan->modes & ircd->oimmune_mode && is_ircop(target))
+	cu = chanuser_find(chan, target);
+	if (cu == NULL)
+		return;
+
+	if ((chan->modes & ircd->oimmune_mode || cu->modes & CSTATUS_IMMUNE) && is_ircop(target))
 	{
 		wallops("Not kicking oper %s!%s@%s from protected %s (%s: %s)",
 				target->nick, target->user, target->vhost,
@@ -1133,7 +1139,7 @@ bool check_vhost_validity(sourceinfo_t *si, const char *host)
 		return false;
 	}
 	p = strrchr(host, '/');
-	if (p != NULL && isdigit(p[1]))
+	if (p != NULL && isdigit((unsigned char)p[1]))
 	{
 		command_fail(si, fault_badparams, _("The vhost provided looks like a CIDR mask."));
 		return false;

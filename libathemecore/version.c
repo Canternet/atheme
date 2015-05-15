@@ -13,7 +13,7 @@ const char *revision = SERNO;
 const char *infotext[] =
 {
   "Atheme IRC Services --",
-  "Copyright (c) 2005-2013 Atheme Development Group (http://www.atheme.org)",
+  "Copyright (c) 2005-2015 Atheme Development Group (http://www.atheme.org)",
   "Portions copyright (c) 2004 Shrike Developers (http://www.malkier.net)",
   " ",
   "Permission to use, copy, modify, and/or distribute this software for any",
@@ -44,6 +44,7 @@ const char *infotext[] =
   "  Adam, Adam <adam@sigterm.info>",
   "  aji, Alex Iadicicco <alex@ajitek.net>",
   "  alambert, Alex Lambert <alambert@quickfire.org>",
+  "  Attila, Attila Molnar <attilamolnar@hush.com>",
   "  beu, Elfyn McBratney <elfyn.mcbratney@gmail.com>",
   "  binki, Nathan Phillip Brink <ohnobinki@ohnopublishing.net>",
   "  Dianora, Diane Bruce <db@db.net>",

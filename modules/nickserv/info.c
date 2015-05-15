@@ -140,7 +140,8 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("User reg.  : %s (%s ago)"), strfbuf, time_ago(mu->registered));
 	}
 
-	command_success_nodata(si, _("Entity ID  : %s"), entity(mu)->id);
+	if (config_options.show_entity_id || has_user_auspex)
+		command_success_nodata(si, _("Entity ID  : %s"), entity(mu)->id);
 
 	md = metadata_find(mu, "private:usercloak");
 	vhost = md ? md->value : NULL;
@@ -367,6 +368,13 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 
         strcat(buf, "NoGreet");
     }
+	if (MU_NOPASSWORD & mu->flags)
+	{
+		if (*buf)
+			strcat(buf, ", ");
+
+		strcat(buf, "NoPassword");
+	}
 
 	if (*buf)
 		command_success_nodata(si, _("Flags      : %s"), buf);

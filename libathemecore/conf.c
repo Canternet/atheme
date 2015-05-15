@@ -61,6 +61,7 @@ static struct Token uflags[] = {
   { "PRIVATE",   MU_PRIVATE      },
   { "QUIETCHG",  MU_QUIETCHG     },
   { "NEVERGROUP", MU_NEVERGROUP  },
+  { "NOPASSWORD", MU_NOPASSWORD  },
   { "NONE",      0               },
   { NULL, 0 }
 };
@@ -77,6 +78,7 @@ static struct Token cflags[] = {
   { "PRIVATE",     MC_PRIVATE     },
   { "LIMITFLAGS",  MC_LIMITFLAGS  },
   { "ANTIFLOOD",   MC_ANTIFLOOD   },
+  { "PUBACL",      MC_PUBACL      },
   { "NONE",        0              },
   { NULL, 0 }
 };
@@ -250,6 +252,7 @@ void init_newconf(void)
 	add_dupstr_conf_item("LANGUAGE", &conf_gi_table, 0, &config_options.language, "en");
 	add_conf_item("EXEMPTS", &conf_gi_table, c_gi_exempts);
 	add_conf_item("IMMUNE_LEVEL", &conf_gi_table, c_gi_immune_level);
+	add_bool_conf_item("SHOW_ENTITY_ID", &conf_gi_table, 0, &config_options.show_entity_id, false);
 
 	/* language:: stuff */
 	add_dupstr_conf_item("NAME", &conf_la_table, 0, &me.language_name, NULL);
@@ -301,7 +304,7 @@ static int c_uplink(mowgli_config_file_entry_t *ce)
 		conf_report_warning(ce, "uplink's server name %s should not be the same as our server name, continuing anyway", ce->vardata);
 	else if (!strchr(ce->vardata, '.'))
 		conf_report_warning(ce, "uplink's server name %s is invalid, continuing anyway", ce->vardata);
-	else if (isdigit(ce->vardata[0]))
+	else if (isdigit((unsigned char)ce->vardata[0]))
 		conf_report_warning(ce, "uplink's server name %s starts with a digit, probably invalid (continuing anyway)", ce->vardata);
 
 	name = ce->vardata;
@@ -896,7 +899,7 @@ bool conf_check(void)
 		return false;
 	}
 
-	if (isdigit(me.name[0]))
+	if (isdigit((unsigned char)me.name[0]))
 		slog(LG_ERROR, "conf_check(): `name' in %s starts with a digit, probably invalid (continuing anyway)", config_file);
 
 	if (!me.desc)

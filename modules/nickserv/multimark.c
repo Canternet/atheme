@@ -31,9 +31,12 @@ static void account_drop_hook(myuser_t *mu);
 static void nick_group_hook(hook_user_req_t *hdata);
 static void nick_ungroup_hook(hook_user_req_t *hdata);
 static void account_register_hook(myuser_t *mu);
+static void multimark_needforce(hook_user_needforce_t *hdata);
 
-static inline mowgli_list_t *multimark_list(myuser_t *mu);
+static bool is_user_marked(myuser_t *mu);
+
 int get_multimark_max(myuser_t *mu);
+static inline mowgli_list_t *multimark_list(myuser_t *mu);
 
 static mowgli_patricia_t *restored_marks;
 
@@ -43,6 +46,7 @@ struct multimark {
 	char *setter_uid;
 	char *setter_name;
 	char *restored_from_uid;
+	char *restored_from_account;
 	time_t time;
 	int number;
 	char *mark;
@@ -52,6 +56,7 @@ struct multimark {
 struct restored_mark {
 	char *account_uid;
 	char *account_name;
+	char *nick;
 	char *setter_uid;
 	char *setter_name;
 	time_t time;
@@ -88,6 +93,12 @@ static bool multimark_match(const mynick_t *mn, const void *arg)
 static bool is_marked(const mynick_t *mn, const void *arg)
 {
 	myuser_t *mu = mn->owner;
+
+	return is_user_marked(mu);
+}
+
+static bool is_user_marked(myuser_t *mu)
+{
 	mowgli_list_t *l = multimark_list(mu);
 
 	return MOWGLI_LIST_LENGTH(l) != 0;
@@ -122,6 +133,9 @@ void _modinit(module_t *m)
 
 	hook_add_event("user_info_noexist");
 	hook_add_user_info_noexist(show_multimark_noexist);
+
+	hook_add_event("user_needforce");
+	hook_add_user_needforce(multimark_needforce);
 
 	hook_add_event("user_drop");
 	hook_add_user_drop(account_drop_hook);
@@ -241,6 +255,8 @@ static void write_multimark_db(database_handle_t *db)
 				db_write_word(db, mm->restored_from_uid);
 			}
 
+			db_write_word(db, mm->restored_from_account);
+
 			db_write_uint(db, mm->time);
 			db_write_int(db, mm->number);
 			db_write_str(db, mm->mark);
@@ -256,6 +272,7 @@ static void write_multimark_db(database_handle_t *db)
 			db_start_row(db, "RM");
 			db_write_word(db, rm->account_uid);
 			db_write_word(db, rm->account_name);
+			db_write_word(db, rm->nick);
 			db_write_word(db, rm->setter_uid);
 			db_write_word(db, rm->setter_name);
 			db_write_uint(db, rm->time);
@@ -275,6 +292,7 @@ static void db_h_mm(database_handle_t *db, const char *type)
 	const char *setter_uid = db_sread_word(db);
 	const char *setter_name = db_sread_word(db);
 	const char *restored_from_uid = db_sread_word(db);
+	const char *restored_from_account = db_sread_word(db);
 	time_t time = db_sread_uint(db);
 	int number = db_sread_int(db);
 	const char *mark = db_sread_str(db);
@@ -287,11 +305,11 @@ static void db_h_mm(database_handle_t *db, const char *type)
 
 	mm->setter_uid = sstrdup(setter_uid);
 	mm->setter_name = sstrdup(setter_name);
-	mm->restored_from_uid = sstrdup(restored_from_uid);
+	mm->restored_from_account = sstrdup(restored_from_account);
 
-	if (!strcasecmp (mm->restored_from_uid, "NULL"))
+	if (strcasecmp(restored_from_uid, "NULL"))
 	{
-		mm->restored_from_uid = NULL;
+		mm->restored_from_uid = sstrdup(restored_from_uid);
 	}
 
 	mm->time = time;
@@ -308,17 +326,19 @@ static void db_h_rm(database_handle_t *db, const char *type)
 
 	const char *account_uid = db_sread_word(db);
 	const char *account_name = db_sread_word(db);
+	const char *nick = db_sread_word(db);
 	const char *setter_uid = db_sread_word(db);
 	const char *setter_name = db_sread_word(db);
 	time_t time = db_sread_uint(db);
 	const char *mark = db_sread_str(db);
 
-	mowgli_list_t *l = restored_mark_list(account_name);
+	mowgli_list_t *l = restored_mark_list(nick);
 
 	restored_mark_t *rm = smalloc(sizeof(restored_mark_t));
 
 	rm->account_uid = sstrdup(account_uid);
 	rm->account_name = sstrdup(account_name);
+	rm->nick = sstrdup(nick);
 	rm->setter_uid = sstrdup(setter_uid);
 	rm->setter_name = sstrdup(setter_name);
 	rm->time = time;
@@ -326,7 +346,7 @@ static void db_h_rm(database_handle_t *db, const char *type)
 
 	mowgli_node_add(rm, &rm->node, l);
 
-	mowgli_patricia_add(restored_marks, account_name, l);
+	mowgli_patricia_add(restored_marks, nick, l);
 }
 
 /* Copy old style marks */
@@ -383,6 +403,7 @@ static void migrate_user(myuser_t *mu)
 
 	mm->setter_name = sstrdup(setter);
 	mm->restored_from_uid = NULL;
+	mm->restored_from_account = NULL;
 
 	mm->time = time;
 	mm->number = get_multimark_max(mu);
@@ -396,6 +417,21 @@ static void migrate_user(myuser_t *mu)
 	metadata_delete(mu, "private:mark:timestamp");
 }
 
+static void migrate_all(sourceinfo_t *si)
+{
+	myentity_iteration_state_t state;
+	myentity_t *mt;
+
+	command_success_nodata(si, _("Migrating mark data..."));
+
+	MYENTITY_FOREACH_T(mt, &state, ENT_USER)
+	{
+		myuser_t *mu = user(mt);
+		migrate_user(mu);
+	}
+
+	command_success_nodata(si, _("Mark data migrated successfully."));
+}
 
 int get_multimark_max(myuser_t *mu)
 {
@@ -427,9 +463,10 @@ static void nick_ungroup_hook(hook_user_req_t *hdata)
 	multimark_t *mm;
 
 	char *uid = entity(mu)->id;
-	const char *name = hdata->mn->nick;
+	const char *nick = hdata->mn->nick;
+	const char *account = entity(mu)->name;
 
-	mowgli_list_t *rml = restored_mark_list(name);
+	mowgli_list_t *rml = restored_mark_list(nick);
 
 	MOWGLI_ITER_FOREACH(n, l->head)
 	{
@@ -437,7 +474,8 @@ static void nick_ungroup_hook(hook_user_req_t *hdata)
 
 		restored_mark_t *rm = smalloc(sizeof(restored_mark_t));
 		rm->account_uid = sstrdup(uid);
-		rm->account_name = sstrdup(name);
+		rm->nick = sstrdup(nick);
+		rm->account_name = sstrdup(account);
 		rm->setter_uid = sstrdup(mm->setter_uid);
 		rm->setter_name = sstrdup(mm->setter_name);
 		rm->time = mm->time;
@@ -446,11 +484,16 @@ static void nick_ungroup_hook(hook_user_req_t *hdata)
 		mowgli_node_add(rm, &rm->node, rml);
 	}
 
-	mowgli_patricia_add(restored_marks, name, rml);
+	mowgli_patricia_add(restored_marks, nick, rml);
 }
 
 static void account_drop_hook(myuser_t *mu)
 {
+	// Let's turn old marks to new marks at this point,
+	// so that they are preserved.
+
+	migrate_user(mu);
+
 	mowgli_list_t *l = multimark_list(mu);
 
 	mowgli_node_t *n;
@@ -466,6 +509,7 @@ static void account_drop_hook(myuser_t *mu)
 
 		restored_mark_t *rm = smalloc(sizeof(restored_mark_t));
 		rm->account_uid = sstrdup(uid);
+		rm->nick = sstrdup(name);
 		rm->account_name = sstrdup(name);
 		rm->setter_uid = sstrdup(mm->setter_uid);
 		rm->setter_name = sstrdup(mm->setter_name);
@@ -480,17 +524,24 @@ static void account_drop_hook(myuser_t *mu)
 
 static void account_register_hook(myuser_t *mu)
 {
-	mowgli_list_t *l = multimark_list(mu);
-
+	mowgli_list_t *l;
 	mowgli_node_t *n, *tn;
+
 	restored_mark_t *rm;
+	mowgli_list_t *rml;
 
 	const char *name = entity(mu)->name;
 
 	char *setter_name;
 	myuser_t *setter;
 
-	mowgli_list_t *rml = restored_mark_list(name);
+	//Migrate any old-style marks that have already been restored at user
+	//creation.
+
+	migrate_user(mu);
+
+	l = multimark_list(mu);
+	rml = restored_mark_list(name);
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, rml->head)
 	{
@@ -501,6 +552,7 @@ static void account_register_hook(myuser_t *mu)
 		mm->setter_uid = sstrdup(rm->setter_uid);
 		mm->setter_name = sstrdup(rm->setter_name);
 		mm->restored_from_uid = rm->account_uid;
+		mm->restored_from_account = rm->account_name;
 		mm->time = rm->time;
 		mm->number = get_multimark_max(mu);
 		mm->mark = sstrdup(rm->mark);
@@ -516,16 +568,21 @@ static void account_register_hook(myuser_t *mu)
 static void nick_group_hook(hook_user_req_t *hdata)
 {
 	myuser_t *smu = hdata->si->smu;
-	mowgli_list_t *l = multimark_list(smu);
+	mowgli_list_t *l;
 
 	mowgli_node_t *n, *tn, *n2;
 	multimark_t *mm2;
+
+	mowgli_list_t *rml;
 	restored_mark_t *rm;
 
 	char *uid = entity(smu)->id;
 	const char *name = hdata->mn->nick;
 
-	mowgli_list_t *rml = restored_mark_list(name);
+	migrate_user(smu);
+
+	l = multimark_list(smu);
+	rml = restored_mark_list(name);
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, rml->head)
 	{
@@ -555,6 +612,7 @@ static void nick_group_hook(hook_user_req_t *hdata)
 		mm->setter_uid = sstrdup(rm->setter_uid);
 		mm->setter_name = sstrdup(rm->setter_name);
 		mm->restored_from_uid = rm->account_uid;
+		mm->restored_from_account = rm->account_name;
 		mm->time = rm->time;
 		mm->number = get_multimark_max(smu);
 		mm->mark = sstrdup(rm->mark);
@@ -577,6 +635,14 @@ static void show_multimark(hook_user_req_t *hdata)
 	myuser_t *setter;
 	const char *setter_name;
 
+	bool has_user_auspex;
+
+	has_user_auspex = has_priv(hdata->si, PRIV_USER_AUSPEX);
+
+	if (!has_user_auspex) {
+		return;
+	}
+
 	migrate_user(hdata->mu);
 	l = multimark_list(hdata->mu);
 
@@ -587,7 +653,7 @@ static void show_multimark(hook_user_req_t *hdata)
 
 		strftime(time, sizeof time, TIME_FORMAT, &tm);
 
-		if ( setter = myuser_find_uid(mm->setter_uid) )
+		if ((setter = myuser_find_uid(mm->setter_uid)) != NULL)
 		{
 			setter_name = entity(setter)->name;
 		}
@@ -596,9 +662,9 @@ static void show_multimark(hook_user_req_t *hdata)
 			setter_name = mm->setter_name;
 		}
 
-		if ( mm->restored_from_uid == NULL )
+		if (mm->restored_from_uid == NULL)
 		{
-			if ( strcasecmp (setter_name, mm->setter_name) )
+			if (strcasecmp(setter_name, mm->setter_name))
 			{
 				command_success_nodata(
 					hdata->si,
@@ -624,16 +690,16 @@ static void show_multimark(hook_user_req_t *hdata)
 		}
 		else
 		{
-			if ( strcasecmp (setter_name, mm->setter_name) )
+			if (strcasecmp(setter_name, mm->setter_name))
 			{
 				myuser_t *user;
-				if (user = myuser_find_uid(mm->restored_from_uid))
+				if ((user = myuser_find_uid(mm->restored_from_uid)) != NULL)
 				{
 					command_success_nodata(
 						hdata->si,
 						_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 (\2%s\2) by \2%s\2 (%s) on \2%s\2: %s"),
 						mm->number,
-						mm->restored_from_uid,
+						mm->restored_from_account,
 						entity(user)->name,
 						setter_name,
 						mm->setter_name,
@@ -647,7 +713,7 @@ static void show_multimark(hook_user_req_t *hdata)
 						hdata->si,
 						_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 by \2%s\2 (%s) on \2%s\2: %s"),
 						mm->number,
-						mm->restored_from_uid,
+						mm->restored_from_account,
 						setter_name,
 						mm->setter_name,
 						time,
@@ -658,13 +724,13 @@ static void show_multimark(hook_user_req_t *hdata)
 			else
 			{
 				myuser_t *user;
-				if (user = myuser_find_uid(mm->restored_from_uid))
+				if ((user = myuser_find_uid(mm->restored_from_uid)) != NULL)
 				{
 					command_success_nodata(
 						hdata->si,
 						_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 (\2%s\2) by \2%s\2 on \2%s\2: %s"),
 						mm->number,
-						mm->restored_from_uid,
+						mm->restored_from_account,
 						entity(user)->name,
 						setter_name,
 						time,
@@ -677,7 +743,7 @@ static void show_multimark(hook_user_req_t *hdata)
 						hdata->si,
 						_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 by \2%s\2 on \2%s\2: %s"),
 						mm->number,
-						mm->restored_from_uid,
+						mm->restored_from_account,
 						setter_name,
 						time,
 						mm->mark
@@ -700,6 +766,14 @@ static void show_multimark_noexist(hook_info_noexist_req_t *hdata)
 	myuser_t *setter;
 	const char *setter_name;
 
+	bool has_user_auspex;
+
+	has_user_auspex = has_priv(hdata->si, PRIV_USER_AUSPEX);
+
+	if (!has_user_auspex) {
+		return;
+	}
+
 	mowgli_list_t *l = restored_mark_list(nick);
 
 	MOWGLI_ITER_FOREACH(n, l->head)
@@ -709,7 +783,7 @@ static void show_multimark_noexist(hook_info_noexist_req_t *hdata)
 
 		strftime(time, sizeof time, TIME_FORMAT, &tm);
 
-		if ( setter = myuser_find_uid(rm->setter_uid) )
+		if ((setter = myuser_find_uid(rm->setter_uid)) != NULL)
 		{
 			setter_name = entity(setter)->name;
 		}
@@ -718,7 +792,7 @@ static void show_multimark_noexist(hook_info_noexist_req_t *hdata)
 			setter_name = rm->setter_name;
 		}
 
-		if ( strcasecmp (setter_name, rm->setter_name) )
+		if (strcasecmp(setter_name, rm->setter_name))
 		{
 			command_success_nodata(
 				hdata->si,
@@ -744,6 +818,17 @@ static void show_multimark_noexist(hook_info_noexist_req_t *hdata)
 	}
 }
 
+static void multimark_needforce(hook_user_needforce_t *hdata)
+{
+	myuser_t *mu;
+	bool marked;
+
+	mu = hdata->mu;
+	marked = is_user_marked(mu);
+
+	hdata->allowed = !marked;
+}
+
 static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 {
 	char *target = parv[0];
@@ -763,10 +848,28 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 
 	mowgli_list_t *rl;
 
+	bool has_admin;
+
+	if (target && !strcasecmp(target, "MIGRATE") && !action)
+	{
+		has_admin = has_priv(si, PRIV_ADMIN);
+
+		if (!has_admin)
+		{
+			command_fail(si, fault_noprivs, _("You need the %s privilege for this operation."), PRIV_ADMIN);
+		}
+		else
+		{
+			migrate_all(si);
+		}
+
+		return;
+	}
+
 	if (!target || !action)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "MARK");
-		command_fail(si, fault_needmoreparams, _("usage: MARK <target> <ADD|DEL|LIST> [note]"));
+		command_fail(si, fault_needmoreparams, _("usage: MARK <target> <ADD|DEL|LIST|MIGRATE> [note]"));
 		return;
 	}
 
@@ -791,6 +894,7 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 		mm->setter_uid = sstrdup(entity(si->smu)->id);
 		mm->setter_name = sstrdup(entity(si->smu)->name);
 		mm->restored_from_uid = NULL;
+		mm->restored_from_account = NULL;
 		mm->time = CURRTIME;
 		mm->number = get_multimark_max(mu);
 		mm->mark = sstrdup(info);
@@ -819,7 +923,7 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 
 				strftime(time, sizeof time, TIME_FORMAT, &tm);
 
-				if ( setter = myuser_find_uid(rm->setter_uid) )
+				if ((setter = myuser_find_uid(rm->setter_uid)) != NULL)
 				{
 					setter_name = entity(setter)->name;
 				}
@@ -828,7 +932,7 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 					setter_name = rm->setter_name;
 				}
 
-				if ( strcasecmp (setter_name, rm->setter_name) )
+				if (strcasecmp(setter_name, rm->setter_name))
 				{
 					command_success_nodata(
 						si,
@@ -865,7 +969,7 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 
 			strftime(time, sizeof time, TIME_FORMAT, &tm);
 
-			if ( setter = myuser_find_uid(mm->setter_uid) )
+			if ((setter = myuser_find_uid(mm->setter_uid)) != NULL)
 			{
 				setter_name = entity(setter)->name;
 			}
@@ -874,9 +978,9 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 				setter_name = mm->setter_name;
 			}
 
-			if ( mm->restored_from_uid == NULL )
+			if (mm->restored_from_uid == NULL)
 			{
-				if ( strcasecmp (setter_name, mm->setter_name) )
+				if (strcasecmp(setter_name, mm->setter_name))
 				{
 					command_success_nodata(
 						si,
@@ -902,16 +1006,16 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 			}
 			else
 			{
-				if ( strcasecmp (setter_name, mm->setter_name) )
+				if (strcasecmp(setter_name, mm->setter_name))
 				{
 					myuser_t *user;
-					if (user = myuser_find_uid(mm->restored_from_uid))
+					if ((user = myuser_find_uid(mm->restored_from_uid)) != NULL)
 					{
 						command_success_nodata(
 							si,
 							_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 (\2%s\2) by \2%s\2 (%s) on \2%s\2: %s"),
 							mm->number,
-							mm->restored_from_uid,
+							mm->restored_from_account,
 							entity(user)->name,
 							setter_name,
 							mm->setter_name,
@@ -925,7 +1029,7 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 							si,
 							_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 by \2%s\2 (%s) on \2%s\2: %s"),
 							mm->number,
-							mm->restored_from_uid,
+							mm->restored_from_account,
 							setter_name,
 							mm->setter_name,
 							time,
@@ -936,13 +1040,13 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 				else
 				{
 					myuser_t *user;
-					if (user = myuser_find_uid(mm->restored_from_uid))
+					if ((user = myuser_find_uid(mm->restored_from_uid)) != NULL)
 					{
 						command_success_nodata(
 							si,
 							_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 (\2%s\2) by \2%s\2 on \2%s\2: %s"),
 							mm->number,
-							mm->restored_from_uid,
+							mm->restored_from_account,
 							entity(user)->name,
 							setter_name,
 							time,
@@ -955,7 +1059,7 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 							si,
 							_("\2(Restored)\2 Mark \2%d\2 originally set on \2%s\2 by \2%s\2 on \2%s\2: %s"),
 							mm->number,
-							mm->restored_from_uid,
+							mm->restored_from_account,
 							setter_name,
 							time,
 							mm->mark
@@ -983,13 +1087,14 @@ static void ns_cmd_multimark(sourceinfo_t *si, int parc, char *parv[])
 		{
 			mm = n->data;
 
-			if ( mm->number == num )
+			if (mm->number == num)
 			{
 				mowgli_node_delete(&mm->node, l);
 
 				free(mm->setter_uid);
 				free(mm->setter_name);
 				free(mm->restored_from_uid);
+				free(mm->restored_from_account);
 				free(mm->mark);
 				free(mm);
 

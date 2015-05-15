@@ -116,6 +116,7 @@ struct myuser_
 #define MU_REGNOLIMIT  0x00010000
 #define MU_NEVERGROUP  0x00020000
 #define MU_PENDINGLOGIN 0x00040000
+#define MU_NOPASSWORD  0x00080000
 
 /* memoserv rate limiting parameters */
 #define MEMO_MAX_NUM   5
@@ -186,6 +187,7 @@ struct mychan_
 #define MC_PRIVATE     0x00000400
 #define MC_NOSYNC      0x00000800
 #define MC_ANTIFLOOD   0x00001000
+#define MC_PUBACL      0x00002000
 
 /* The following are temporary state */
 #define MC_INHABIT     0x80000000 /* we're on channel to enforce akick/staffonly/close */
@@ -349,6 +351,12 @@ typedef struct {
 	sourceinfo_t *si;
 	const char *nick;
 } hook_info_noexist_req_t;
+
+typedef struct {
+	sourceinfo_t *si;
+	myuser_t *mu;
+	int allowed;
+} hook_user_needforce_t;
 
 /* pmodule.c XXX */
 E bool backend_loaded;

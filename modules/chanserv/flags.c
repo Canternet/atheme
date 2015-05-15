@@ -101,7 +101,7 @@ static void do_list(sourceinfo_t *si, mychan_t *mc, unsigned int flags)
 	bool operoverride = false;
 	unsigned int i = 1;
 
-	if (!chanacs_source_has_flag(mc, si, CA_ACLVIEW))
+	if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))
 	{
 		if (has_priv(si, PRIV_CHAN_AUSPEX))
 			operoverride = true;
@@ -280,7 +280,7 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 
 		if (!flagstr)
 		{
-			if (!chanacs_source_has_flag(mc, si, CA_ACLVIEW))
+			if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))
 			{
 				command_fail(si, fault_noprivs, _("You are not authorized to execute this command."));
 				return;
@@ -397,6 +397,12 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 					chanacs_close(ca);
 					return;
 				}
+				if (!myentity_allow_foundership(mt))
+				{
+					command_fail(si, fault_toomany, _("\2%s\2 cannot take foundership of a channel."), mt->name);
+					chanacs_close(ca);
+					return;
+				}
 			}
 			if (addflags & CA_FOUNDER)
 				addflags |= CA_FLAGS, removeflags &= ~CA_FLAGS;
@@ -475,7 +481,7 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		flagstr = bitmask_to_flags2(addflags, removeflags);
 		command_success_nodata(si, _("Flags \2%s\2 were set on \2%s\2 in \2%s\2."), flagstr, target, channel);
 		logcommand(si, CMDLOG_SET, "FLAGS: \2%s\2 \2%s\2 \2%s\2", mc->name, target, flagstr);
-		verbose(mc, "\2%s\2 set flags \2%s\2 on \2%s\2.", get_source_name(si), flagstr, target);
+		verbose(mc, "\2%s\2 set flags \2%s\2 on \2%s\2", get_source_name(si), flagstr, target);
 	}
 
 	free(target);

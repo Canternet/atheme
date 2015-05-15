@@ -109,7 +109,8 @@ loadmodule "modules/backend/opensex";
  *
  * The following crypto modules are available:
  *
- * PBKDF2 cryptography                          modules/crypto/pbkdf2
+ * PBKDF2 cryptography (new)                    modules/crypto/pbkdf2v2
+ * PBKDF2 cryptography (old)                    modules/crypto/pbkdf2
  * POSIX-style crypt(3)                         modules/crypto/posix
  * IRCServices (also Anope etc) compatibility   modules/crypto/ircservices
  * Raw MD5 (Anope compatibility)                modules/crypto/rawmd5
@@ -120,11 +121,12 @@ loadmodule "modules/backend/opensex";
  *
  * To transition between crypto schemes, load the preferred scheme first
  * and as users login, they will be migrated to the new preferred scheme. Like:
+ * loadmodule "modules/crypto/pbkdf2v2";
  * loadmodule "modules/crypto/pbkdf2";
  * loadmodule "modules/crypto/posix";
  * loadmodule "modules/crypto/ircservices";
  *
- * The rawsha1 and pbkdf2 modules require OpenSSL.
+ * The rawsha1 and pbkdf2/pbkdf2v2 modules require OpenSSL.
  */
 loadmodule "modules/crypto/posix";
 
@@ -149,7 +151,7 @@ loadmodule "modules/crypto/posix";
  * Here you can disable or enable certain features of NickServ, by
  * defining which modules are loaded. You can even disable NickServ
  * entirely. Please note however, that an authentication service
- * (either NickServ, or UserServ) are required for proper functionality.
+ * (either NickServ, or UserServ) is required for proper functionality.
  *
  * The CrackLib password validation module requires CrackLib to be
  * installed on your system in order to use.
@@ -200,6 +202,7 @@ loadmodule "modules/crypto/posix";
  * PRIVMSG instead of NOTICE (SET PRIVMSG cmd)  modules/nickserv/set_privmsg
  * Account info hiding (SET PRIVATE command)    modules/nickserv/set_private
  * SET PROPERTY command                         modules/nickserv/set_property
+ * SET PUBKEY command                           modules/nickserv/set_pubkey
  * SET QUIETCHG command                         modules/nickserv/set_quietchg
  * Password retrieval uses code (SETPASS cmd)   modules/nickserv/setpass
  * STATUS command                               modules/nickserv/status
@@ -255,6 +258,7 @@ loadmodule "modules/nickserv/set_password";
 #loadmodule "modules/nickserv/set_privmsg";
 #loadmodule "modules/nickserv/set_private";
 loadmodule "modules/nickserv/set_property";
+loadmodule "modules/nickserv/set_pubkey";
 loadmodule "modules/nickserv/set_quietchg";
 loadmodule "modules/nickserv/status";
 loadmodule "modules/nickserv/taxonomy";
@@ -306,7 +310,6 @@ loadmodule "modules/nickserv/vhost";
  * SET EMAIL command                            modules/chanserv/set_email
  * SET ENTRYMSG command                         modules/chanserv/set_entrymsg
  * SET FANTASY command                          modules/chanserv/set_fantasy
- * SET FOUNDER command                          modules/chanserv/set_founder
  * SET GAMESERV command                         modules/chanserv/set_gameserv
  * SET GUARD command                            modules/chanserv/set_guard
  * SET KEEPTOPIC command                        modules/chanserv/set_keeptopic
@@ -315,6 +318,7 @@ loadmodule "modules/nickserv/vhost";
  * SET PREFIX command                           modules/chanserv/set_prefix
  * Channel info hiding (SET PRIVATE command)    modules/chanserv/set_private
  * SET PROPERTY command                         modules/chanserv/set_property
+ * SET PUBACL command                           modules/chanserv/set_pubacl
  * SET RESTRICTED command                       modules/chanserv/set_restricted
  * SET SECURE command                           modules/chanserv/set_secure
  * SET TOPICLOCK command                        modules/chanserv/set_topiclock
@@ -373,7 +377,6 @@ loadmodule "modules/chanserv/set_core";
 loadmodule "modules/chanserv/set_email";
 loadmodule "modules/chanserv/set_entrymsg";
 loadmodule "modules/chanserv/set_fantasy";
-loadmodule "modules/chanserv/set_founder";
 #loadmodule "modules/chanserv/set_gameserv";
 loadmodule "modules/chanserv/set_guard";
 loadmodule "modules/chanserv/set_keeptopic";
@@ -382,6 +385,7 @@ loadmodule "modules/chanserv/set_mlock";
 loadmodule "modules/chanserv/set_prefix";
 #loadmodule "modules/chanserv/set_private";
 loadmodule "modules/chanserv/set_property";
+#loadmodule "modules/chanserv/set_pubacl";
 loadmodule "modules/chanserv/set_restricted";
 loadmodule "modules/chanserv/set_secure";
 loadmodule "modules/chanserv/set_topiclock";
@@ -1171,11 +1175,11 @@ chanserv {
 	 */
 	templates {
 		vop = "+AV";
-		hop = "+AHhitrv";
-		aop = "+AOhiortv";
-		sop = "+AOafhiorstv";
+		hop = "+AHehitrv";
+		aop = "+AOehiortv";
+		sop = "+AOaefhiorstv";
 
-		founder = "+AFORafhiorstv";
+		founder = "+AFORaefhiorstv";
 
 		/* some examples (which are commented out...) */
 		#member = "+Ai";
@@ -1239,7 +1243,7 @@ chanserv {
 	 * This MUST include at least 'F' or it will be ignored.
 	 * If it is not set, Atheme will give the user all channel flags.
 	 */
-	#founder_flags = "AFORfiorstv";
+	#founder_flags = "AFORefiorstv";
 
 	/* (*)akick_time
 	 * The default expiration time (in minutes) for AKICKs.
@@ -1424,6 +1428,11 @@ saslserv {
 	 * The realname (gecos) information we want SaslServ to have.
 	 */
 	real = "SASL Authentication Agent";
+
+	/* (*)hide_server_names
+	 * Hide server names in the bad_password message.
+	 */
+	#hide_server_names;
 };
 
 /* MemoServ configuration.
@@ -1979,7 +1988,7 @@ general {
 	/* (*)cflags
 	 * The default flags to set for channels upon registration.
 	 * Valid values are: hold, secure, verbose, verbose_ops, keeptopic,
-	 * topiclock, guard, private, nosync, limitflags and none.
+	 * topiclock, guard, private, nosync, limitflags, pubacl and none.
 	 */
 	cflags = { verbose; guard; };
 
@@ -2117,6 +2126,12 @@ general {
 	 *    ircop  - require any ircop privileges for kick immunity (umode +o) 
 	 */
 	immune_level = immune;
+
+	/* show_entity_id
+	 * This makes nick/user & group entity IDs visible to everyone, rather
+	 * than just opers with user:auspex or group:auspex privileges.
+	 */
+	show_entity_id;
 };
 
 /******************************************************************************

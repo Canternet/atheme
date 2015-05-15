@@ -45,10 +45,16 @@ static const char *generic_gen_salt(void)
 	return buf;
 }
 
+static bool generic_needs_param_upgrade(const char *user_pass_string)
+{
+	return 0;
+}
+
 static const crypt_impl_t fallback_crypt_impl = {
 	.id = "plaintext",
 	.crypt = &generic_crypt_string,
 	.salt = &generic_gen_salt,
+	.needs_param_upgrade = &generic_needs_param_upgrade,
 };
 
 const crypt_impl_t *crypt_get_default_provider(void)
@@ -126,7 +132,7 @@ const crypt_impl_t *crypt_verify_password(const char *uinput, const char *pass)
 		ci = n->data;
 		cstr = ci->crypt(uinput, pass);
 
-		if (!strcmp(cstr, pass))
+		if (cstr != NULL && !strcmp(cstr, pass))
 			return ci;
 	}
 

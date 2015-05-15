@@ -578,7 +578,7 @@ static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if (!chanacs_source_has_flag(mc, si, CA_ACLVIEW))
+	if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))
 	{
 		if (has_priv(si, PRIV_CHAN_AUSPEX))
 			operoverride = true;
@@ -655,7 +655,7 @@ static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if (!chanacs_source_has_flag(mc, si, CA_ACLVIEW))
+	if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))
 	{
 		if (has_priv(si, PRIV_CHAN_AUSPEX))
 			operoverride = true;
@@ -940,6 +940,12 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 		if (!myentity_can_register_channel(mt))
 		{
 			command_fail(si, fault_toomany, _("\2%s\2 has too many channels registered."), mt->name);
+			chanacs_close(ca);
+			return;
+		}
+		if (!myentity_allow_foundership(mt))
+		{
+			command_fail(si, fault_toomany, _("\2%s\2 cannot take foundership of a channel."), mt->name);
 			chanacs_close(ca);
 			return;
 		}
