@@ -37,6 +37,7 @@ static void sasl_mech_register(sasl_mechanism_t *mech);
 static void sasl_mech_unregister(sasl_mechanism_t *mech);
 static void mechlist_build_string(char *ptr, size_t buflen);
 static void mechlist_do_rebuild();
+static const char *sasl_get_source_name(sourceinfo_t *si);
 
 sasl_mech_register_func_t sasl_mech_register_funcs = { &sasl_mech_register, &sasl_mech_unregister };
 
@@ -128,6 +129,7 @@ void _modinit(module_t *m)
 	hook_add_event("server_eob");
 	hook_add_server_eob(sasl_server_eob);
 	hook_add_event("sasl_may_impersonate");
+	hook_add_event("user_can_login");
 
 	delete_stale_timer = mowgli_timer_add(base_eventloop, "sasl_delete_stale", delete_stale, NULL, 30);
 
@@ -235,8 +237,47 @@ void destroy_session(sasl_session_t *p)
 	free(p->username);
 	free(p->certfp);
 	free(p->authzid);
+	free(p->host);
+	free(p->ip);
 
 	free(p);
+}
+
+typedef struct {
+	sourceinfo_t parent;
+	sasl_session_t *sess;
+} sasl_sourceinfo_t;
+
+static void sasl_sourceinfo_delete(sasl_sourceinfo_t *ssi)
+{
+	return_if_fail(ssi != NULL);
+
+	free(ssi);
+}
+
+static struct sourceinfo_vtable sasl_vtable = {
+	.description = "SASL",
+	.get_source_name = sasl_get_source_name,
+	.get_source_mask = sasl_get_source_name
+};
+
+static sourceinfo_t *sasl_sourceinfo_create(sasl_session_t *p)
+{
+	sasl_sourceinfo_t *ssi;
+
+	ssi = smalloc(sizeof(sasl_sourceinfo_t));
+	object_init(object(ssi), "<sasl sourceinfo>", (destructor_t) sasl_sourceinfo_delete);
+
+	ssi->parent.s = p->server;
+	ssi->parent.connection = curr_uplink->conn;
+	if (p->host)
+		ssi->parent.sourcedesc = p->host;
+	ssi->parent.service = saslsvs;
+	ssi->parent.v = &sasl_vtable;
+	ssi->parent.force_language = language_find("en");
+	ssi->sess = p;
+
+	return &ssi->parent;
 }
 
 /* interpret an AUTHENTICATE message */
@@ -247,55 +288,64 @@ static void sasl_input(sasl_message_t *smsg)
 	char *tmpbuf;
 	int tmplen;
 
-	/* Abort packets, or maybe some other kind of (D)one */
-	if(smsg->mode == 'D')
+	switch(smsg->mode)
 	{
-		destroy_session(p);
-		return;
-	}
-
-	if(smsg->mode != 'S' && smsg->mode != 'C')
+	case 'H':
+		/* (H)ost information */
+		p->host = sstrdup(smsg->buf);
+		p->ip   = sstrdup(smsg->ext);
 		return;
 
-	if(smsg->mode == 'S' && smsg->ext != NULL &&
-			!strcmp(smsg->buf, "EXTERNAL"))
-	{
-		free(p->certfp);
-		p->certfp = sstrdup(smsg->ext);
-	}
-
-	if(p->buf == NULL)
-	{
-		p->buf = (char *)malloc(len + 1);
-		p->p = p->buf;
-		p->len = len;
-	}
-	else
-	{
-		if(p->len + len + 1 > 8192) /* This is a little much... */
+	case 'S':
+		/* (S)tart authentication */
+		if(smsg->mode == 'S' && smsg->ext != NULL && !strcmp(smsg->buf, "EXTERNAL"))
 		{
-			sasl_sts(p->uid, 'D', "F");
-			destroy_session(p);
-			return;
+			free(p->certfp);
+			p->certfp = sstrdup(smsg->ext);
+		}
+		/* fallthrough to 'C' */
+
+	case 'C':
+		/* (C)lient data */
+		if(p->buf == NULL)
+		{
+			p->buf = (char *)malloc(len + 1);
+			p->p = p->buf;
+			p->len = len;
+		}
+		else
+		{
+			if(p->len + len + 1 > 8192) /* This is a little much... */
+			{
+				sasl_sts(p->uid, 'D', "F");
+				destroy_session(p);
+				return;
+			}
+
+			p->buf = (char *)realloc(p->buf, p->len + len + 1);
+			p->p = p->buf + p->len;
+			p->len += len;
 		}
 
-		p->buf = (char *)realloc(p->buf, p->len + len + 1);
-		p->p = p->buf + p->len;
-		p->len += len;
-	}
+		memcpy(p->p, smsg->buf, len);
 
-	memcpy(p->p, smsg->buf, len);
+		/* Messages not exactly 400 bytes are the end of a packet. */
+		if(len < 400)
+		{
+			p->buf[p->len] = '\0';
+			tmpbuf = p->buf;
+			tmplen = p->len;
+			p->buf = p->p = NULL;
+			p->len = 0;
+			sasl_packet(p, tmpbuf, tmplen);
+			free(tmpbuf);
+		}
+		return;
 
-	/* Messages not exactly 400 bytes are the end of a packet. */
-	if(len < 400)
-	{
-		p->buf[p->len] = '\0';
-		tmpbuf = p->buf;
-		tmplen = p->len;
-		p->buf = p->p = NULL;
-		p->len = 0;
-		sasl_packet(p, tmpbuf, tmplen);
-		free(tmpbuf);
+	case 'D':
+		/* (D)one -- when we receive it, means client abort */
+		destroy_session(p);
+		return;
 	}
 }
 
@@ -454,26 +504,8 @@ static void sasl_packet(sasl_session_t *p, char *buf, int len)
 		myuser_t *mu = myuser_find_by_nick(p->username);
 		if (mu)
 		{
-			char description[BUFSIZE];
-
-			if (p->server && !hide_server_names)
-				snprintf(description, BUFSIZE, "Unknown user on %s (via SASL)", p->server->name);
-			else
-				snprintf(description, BUFSIZE, "Unknown user (via SASL)");
-
-			struct sourceinfo_vtable sasl_vtable = {
-				.description = description
-			};
-
-			sourceinfo_t *si = sourceinfo_create();
-			si->service = saslsvs;
-			si->sourcedesc = p->uid;
-			si->connection = curr_uplink->conn;
-			si->v = &sasl_vtable;
-			si->force_language = language_find("en");
-
+			sourceinfo_t *si = sasl_sourceinfo_create(p);
 			bad_password(si, mu);
-
 			object_unref(si);
 		}
 	}
@@ -564,6 +596,7 @@ static bool may_impersonate(myuser_t *source_mu, myuser_t *target_mu)
 static myuser_t *login_user(sasl_session_t *p)
 {
 	myuser_t *source_mu, *target_mu;
+	hook_user_login_check_t req;
 
 	/* source_mu is the user whose credentials we verified ("authentication id") */
 	/* target_mu is the user who will be ultimately logged in ("authorization id") */
@@ -571,6 +604,16 @@ static myuser_t *login_user(sasl_session_t *p)
 	source_mu = myuser_find_by_nick(p->username);
 	if(source_mu == NULL)
 		return NULL;
+
+	req.si = sasl_sourceinfo_create(p);
+	req.mu = source_mu;
+	req.allowed = true;
+	hook_call_user_can_login(&req);
+	if (!req.allowed)
+	{
+		sasl_logcommand(p, source_mu, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (denied by hook)", entity(source_mu)->name);
+		return NULL;
+	}
 
 	if(p->authzid && *p->authzid)
 	{
@@ -601,6 +644,15 @@ static myuser_t *login_user(sasl_session_t *p)
 		}
 
 		sasl_logcommand(p, source_mu, CMDLOG_LOGIN, "allowed IMPERSONATE by \2%s\2 to \2%s\2", entity(source_mu)->name, entity(target_mu)->name);
+
+		req.mu = target_mu;
+		req.allowed = true;
+		hook_call_user_can_login(&req);
+		if (!req.allowed)
+		{
+			sasl_logcommand(p, source_mu, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (denied by hook)", entity(target_mu)->name);
+			return NULL;
+		}
 
 		if(metadata_find(target_mu, "private:freeze:freezer"))
 		{
@@ -637,6 +689,7 @@ static myuser_t *login_user(sasl_session_t *p)
 static void sasl_newuser(hook_user_nick_t *data)
 {
 	user_t *u = data->u;
+	sasl_mechanism_t *mptr;
 	sasl_session_t *p;
 	myuser_t *mu;
 
@@ -664,11 +717,13 @@ static void sasl_newuser(hook_user_nick_t *data)
 		return;
 	}
 
+	mptr = p->mechptr;
+
 	destroy_session(p);
 
 	myuser_login(saslsvs, u, mu, false);
 
-	logcommand_user(saslsvs, u, CMDLOG_LOGIN, "LOGIN");
+	logcommand_user(saslsvs, u, CMDLOG_LOGIN, "LOGIN (%s)", mptr->name);
 }
 
 /* This function is run approximately once every 30 seconds.
@@ -692,6 +747,26 @@ static void delete_stale(void *vptr)
 		} else
 			p->flags |= ASASL_MARKED_FOR_DELETION;
 	}
+}
+
+static const char *sasl_get_source_name(sourceinfo_t *si)
+{
+	static char result[HOSTLEN+NICKLEN+10];
+	char description[BUFSIZE];
+	sasl_sourceinfo_t *ssi = (sasl_sourceinfo_t *) si;
+
+	if (ssi->sess->server && !hide_server_names)
+		snprintf(description, BUFSIZE, "Unknown user on %s (via SASL)", ssi->sess->server->name);
+	else
+		mowgli_strlcpy(description, "Unknown user (via SASL)", sizeof description);
+
+	/* we can reasonably assume that si->v is non-null as this is part of the SASL vtable */
+	if (si->sourcedesc)
+		snprintf(result, sizeof result, "<%s:%s>%s", description, si->sourcedesc, si->smu ? entity(si->smu)->name : "");
+	else
+		snprintf(result, sizeof result, "<%s>%s", description, si->smu ? entity(si->smu)->name : "");
+
+	return result;
 }
 
 /* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
