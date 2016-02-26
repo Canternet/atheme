@@ -328,6 +328,12 @@ static void hs_cmd_take(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
+        if (metadata_find(si->smu, "private:verify:register:timestamp"))
+        {
+                command_fail(si, fault_noprivs, _("You must verify your email account before taking an offered vhost"));
+                return;
+        }
+
 	MOWGLI_ITER_FOREACH(n, hs_offeredlist.head)
 	{
 		l = n->data;

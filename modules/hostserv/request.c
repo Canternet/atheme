@@ -239,6 +239,12 @@ static void hs_cmd_request(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
+        if (metadata_find(si->smu, "private:verify:register:timestamp"))
+        {
+                command_fail(si, fault_noprivs, _("You must verify your email account before requesting a vhost"));
+                return;
+        }
+
 	if (request_per_nick)
 	{
 		target = si->su != NULL ? si->su->nick : "?";
