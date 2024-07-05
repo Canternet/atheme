@@ -1,41 +1,21 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * Lists object properties via their metadata table.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/taxonomy", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_taxonomy = { "TAXONOMY", N_("Displays a channel's metadata."),
-                        AC_NONE, 1, cs_cmd_taxonomy, { .path = "cservice/taxonomy" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("chanserv", &cs_taxonomy);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_taxonomy);
-}
-
-void cs_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_taxonomy(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
-	mychan_t *mc;
+	struct mychan *mc;
 	mowgli_patricia_iteration_state_t state;
-	metadata_t *md;
+	struct metadata *md;
 	bool isoper;
 
 	if (!target || *target != '#')
@@ -53,11 +33,16 @@ void cs_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
 
 	isoper = has_priv(si, PRIV_CHAN_AUSPEX);
 
-	if (use_channel_private && mc->flags & MC_PRIVATE &&
-			!chanacs_source_has_flag(mc, si, CA_ACLVIEW) && !isoper)
+	if ((mc->flags & MC_PRIVATE) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW) && !isoper)
 	{
 		command_fail(si, fault_noprivs, _("Channel \2%s\2 is private."),
 				mc->name);
+		return;
+	}
+
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, target);
 		return;
 	}
 
@@ -67,7 +52,7 @@ void cs_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_GET, "TAXONOMY: \2%s\2", mc->name);
 	command_success_nodata(si, _("Taxonomy for \2%s\2:"), target);
 
-	MOWGLI_PATRICIA_FOREACH(md, &state, object(mc)->metadata)
+	MOWGLI_PATRICIA_FOREACH(md, &state, atheme_object(mc)->metadata)
 	{
                 if (!strncmp(md->name, "private:", 8) && !isoper)
                         continue;
@@ -78,8 +63,27 @@ void cs_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("End of \2%s\2 taxonomy."), target);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_taxonomy = {
+	.name           = "TAXONOMY",
+	.desc           = N_("Displays a channel's metadata."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_taxonomy,
+	.help           = { .path = "cservice/taxonomy" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	service_named_bind_command("chanserv", &cs_taxonomy);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_taxonomy);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/taxonomy", MODULE_UNLOAD_CAPABILITY_OK)

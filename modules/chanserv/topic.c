@@ -1,56 +1,21 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService TOPIC functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/topic", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_topic(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_topicappend(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_topicprepend(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_topicswap(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_topic = { "TOPIC", N_("Sets a topic on a channel."),
-                        AC_NONE, 2, cs_cmd_topic, { .path = "cservice/topic" } };
-command_t cs_topicappend = { "TOPICAPPEND", N_("Appends a topic on a channel."),
-                        AC_NONE, 2, cs_cmd_topicappend, { .path = "cservice/topicappend" } };
-command_t cs_topicprepend = { "TOPICPREPEND", N_("Prepends a topic on a channel."),
-                        AC_NONE, 2, cs_cmd_topicprepend, { .path = "cservice/topicprepend" } };
-command_t cs_topicswap = { "TOPICSWAP", N_("Swap part of the topic on a channel."),
-                        AC_NONE, 2, cs_cmd_topicswap, { .path = "cservice/topicswap" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_topic);
-        service_named_bind_command("chanserv", &cs_topicappend);
-        service_named_bind_command("chanserv", &cs_topicprepend);
-        service_named_bind_command("chanserv", &cs_topicswap);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_topic);
-	service_named_unbind_command("chanserv", &cs_topicappend);
-	service_named_unbind_command("chanserv", &cs_topicprepend);
-	service_named_unbind_command("chanserv", &cs_topicswap);
-}
-
-static void cs_cmd_topic(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_topic(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
 	char *topic = parv[1];
-	mychan_t *mc;
-	channel_t *c;
+	struct mychan *mc;
+	struct channel *c;
 	const char *topicsetter;
 	time_t prevtopicts;
 
@@ -64,32 +29,37 @@ static void cs_cmd_topic(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
+		return;
+	}
+
+	if (!chanacs_source_has_flag(mc, si, CA_TOPIC))
+	{
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+		return;
+	}
+
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
 	c = channel_find(chan);
 	if (!c)
 	{
-                command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), chan);
+                command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
                 return;
         }
-
-	if (metadata_find(mc, "private:close:closer"))
-	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
-		return;
-	}
-
-	if (!chanacs_source_has_flag(mc, si, CA_TOPIC))
-	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
-		return;
-	}
 
 	if (!validtopic(topic))
 	{
 		command_fail(si, fault_badparams, _("The new topic is invalid or too long."));
+		return;
+	}
+	if (!validtopic_ctrl_chars(topic))
+	{
+		command_fail(si, fault_badparams, _("The topic may not contain specific control chars, these include color, bold, italic and reverse."));
 		return;
 	}
 
@@ -108,13 +78,14 @@ static void cs_cmd_topic(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("Topic set to \2%s\2 on \2%s\2."), topic, chan);
 }
 
-static void cs_cmd_topicappend(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_topicappend(struct sourceinfo *si, int parc, char *parv[])
 {
         char *chan = parv[0];
         char *topic = parv[1];
-        mychan_t *mc;
+        struct mychan *mc;
 	char topicbuf[BUFSIZE];
-	channel_t *c;
+	struct channel *c;
 	const char *topicsetter;
 	time_t prevtopicts;
 
@@ -128,26 +99,26 @@ static void cs_cmd_topicappend(sourceinfo_t *si, int parc, char *parv[])
         mc = mychan_find(chan);
         if (!mc)
         {
-                command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+                command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
                 return;
         }
 
 	c = channel_find(chan);
 	if (!c)
 	{
-                command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), chan);
+                command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
                 return;
         }
 
         if (!chanacs_source_has_flag(mc, si, CA_TOPIC))
         {
-                command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+                command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
                 return;
         }
 
         if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
@@ -183,13 +154,14 @@ static void cs_cmd_topicappend(sourceinfo_t *si, int parc, char *parv[])
         	command_success_nodata(si, _("Topic set to \2%s\2 on \2%s\2."), c->topic, chan);
 }
 
-static void cs_cmd_topicprepend(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_topicprepend(struct sourceinfo *si, int parc, char *parv[])
 {
         char *chan = parv[0];
         char *topic = parv[1];
-        mychan_t *mc;
+        struct mychan *mc;
 	char topicbuf[BUFSIZE];
-	channel_t *c;
+	struct channel *c;
 	const char *topicsetter;
 	time_t prevtopicts;
 
@@ -203,26 +175,26 @@ static void cs_cmd_topicprepend(sourceinfo_t *si, int parc, char *parv[])
         mc = mychan_find(chan);
         if (!mc)
         {
-                command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+                command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
                 return;
         }
 
 	c = channel_find(chan);
 	if (!c)
 	{
-                command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), chan);
+                command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
                 return;
         }
 
         if (!chanacs_source_has_flag(mc, si, CA_TOPIC))
         {
-                command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+                command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
                 return;
         }
 
         if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
@@ -258,12 +230,13 @@ static void cs_cmd_topicprepend(sourceinfo_t *si, int parc, char *parv[])
         	command_success_nodata(si, _("Topic set to \2%s\2 on \2%s\2."), c->topic, chan);
 }
 
-static void cs_cmd_topicswap(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_topicswap(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
 	char *topic = parv[1];
-	mychan_t *mc;
-	channel_t *c;
+	struct mychan *mc;
+	struct channel *c;
 	const char *topicsetter;
 	time_t prevtopicts;
 
@@ -283,7 +256,7 @@ static void cs_cmd_topicswap(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	mowgli_strlcpy(commbuf, parv[1], BUFSIZE);
+	mowgli_strlcpy(commbuf, topic, BUFSIZE);
 	search = commbuf;
 	pos = strrchr(commbuf, ':');
 
@@ -297,26 +270,26 @@ static void cs_cmd_topicswap(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	c = channel_find(chan);
 	if (!c)
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), chan);
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_TOPIC))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
@@ -366,8 +339,60 @@ invalid_error:
 		command_success_nodata(si, _("Topic set to \2%s\2 on \2%s\2."), c->topic, chan);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_topic = {
+	.name           = "TOPIC",
+	.desc           = N_("Sets a topic on a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_topic,
+	.help           = { .path = "cservice/topic" },
+};
+
+static struct command cs_topicappend = {
+	.name           = "TOPICAPPEND",
+	.desc           = N_("Appends a topic on a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_topicappend,
+	.help           = { .path = "cservice/topicappend" },
+};
+
+static struct command cs_topicprepend = {
+	.name           = "TOPICPREPEND",
+	.desc           = N_("Prepends a topic on a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_topicprepend,
+	.help           = { .path = "cservice/topicprepend" },
+};
+
+static struct command cs_topicswap = {
+	.name           = "TOPICSWAP",
+	.desc           = N_("Swap part of the topic on a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_topicswap,
+	.help           = { .path = "cservice/topicswap" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_topic);
+        service_named_bind_command("chanserv", &cs_topicappend);
+        service_named_bind_command("chanserv", &cs_topicprepend);
+        service_named_bind_command("chanserv", &cs_topicswap);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_topic);
+	service_named_unbind_command("chanserv", &cs_topicappend);
+	service_named_unbind_command("chanserv", &cs_topicprepend);
+	service_named_unbind_command("chanserv", &cs_topicswap);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/topic", MODULE_UNLOAD_CAPABILITY_OK)

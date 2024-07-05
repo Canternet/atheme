@@ -1,78 +1,48 @@
 /*
- * Copyright (c) 2006-2007 Atheme Development Group
- * Rights to this code are documented in doc/LICENCE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006-2007 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality implementing clone detection.
- *
  */
 
-#include "atheme.h"
-
-DECLARE_MODULE_V1
-(
-	"operserv/clones", true, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+#include <atheme.h>
 
 #define CLONESDB_VERSION	3
 #define CLONES_GRACE_TIMEPERIOD	180
 
-static void clones_newuser(hook_user_nick_t *data);
-static void clones_userquit(user_t *u);
-static void clones_configready(void *unused);
-
-static void os_cmd_clones(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_clones_kline(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_clones_list(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_clones_delexempt(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_clones_listexempt(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_clones_duration(sourceinfo_t *si, int parc, char *parv[]);
-
-static void write_exemptdb(database_handle_t *db);
-
-
-static void db_h_ck(database_handle_t *db, const char *type);
-static void db_h_cd(database_handle_t *db, const char *type);
-static void db_h_gr(database_handle_t *db, const char *type);
-static void db_h_ex(database_handle_t *db, const char *type);
-static void db_h_clonesdbv(database_handle_t *db, const char *type);
-
-mowgli_patricia_t *os_clones_cmds;
-
-service_t *serviceinfo;
-
-static mowgli_list_t clone_exempts;
-bool kline_enabled;
-unsigned int grace_count;
-mowgli_patricia_t *hostlist;
-mowgli_heap_t *hostentry_heap;
-static long kline_duration;
-static int clones_allowed, clones_warn;
-static unsigned int clones_dbversion = 1;
-
-typedef struct cexcept_ cexcept_t;
-struct cexcept_
+struct clones_exemption
 {
 	char *ip;
-	int allowed;
-	int warn;
+	unsigned int allowed;
+	unsigned int warn;
 	char *reason;
 	long expires;
 };
 
-typedef struct hostentry_ hostentry_t;
-struct hostentry_
+struct clones_hostentry
 {
-	char ip[HOSTIPLEN];
+	char ip[HOSTIPLEN + 1];
 	mowgli_list_t clients;
 	time_t firstkill;
 	unsigned int gracekills;
 };
 
-static inline bool cexempt_expired(cexcept_t *c)
+static mowgli_patricia_t *os_clones_cmds = NULL;
+static mowgli_patricia_t *hostlist = NULL;
+static mowgli_heap_t *hostentry_heap = NULL;
+static struct service *serviceinfo = NULL;
+
+static mowgli_list_t clone_exempts;
+static bool kline_enabled;
+static unsigned int grace_count;
+static long kline_duration = SECONDS_PER_HOUR;
+static unsigned int clones_allowed, clones_warn;
+static unsigned int clones_dbversion = 1;
+
+static inline bool
+cexempt_expired(struct clones_exemption *c)
 {
 	if (c && c->expires && CURRTIME > c->expires)
 		return true;
@@ -80,134 +50,15 @@ static inline bool cexempt_expired(cexcept_t *c)
 	return false;
 }
 
-command_t os_clones = { "CLONES", N_("Manages network wide clones."), PRIV_AKILL, 5, os_cmd_clones, { .path = "oservice/clones" } };
-
-command_t os_clones_kline = { "KLINE", N_("Enables/disables klines for excessive clones."), AC_NONE, 1, os_cmd_clones_kline, { .path = "" } };
-command_t os_clones_list = { "LIST", N_("Lists clones on the network."), AC_NONE, 0, os_cmd_clones_list, { .path = "" } };
-command_t os_clones_addexempt = { "ADDEXEMPT", N_("Adds a clones exemption."), AC_NONE, 3, os_cmd_clones_addexempt, { .path = "" } };
-command_t os_clones_delexempt = { "DELEXEMPT", N_("Deletes a clones exemption."), AC_NONE, 1, os_cmd_clones_delexempt, { .path = "" } };
-command_t os_clones_setexempt = { "SETEXEMPT", N_("Sets a clone exemption details."), AC_NONE, 1, os_cmd_clones_setexempt, { .path = "" } };
-command_t os_clones_listexempt = { "LISTEXEMPT", N_("Lists clones exemptions."), AC_NONE, 0, os_cmd_clones_listexempt, { .path = "" } };
-command_t os_clones_duration = { "DURATION", N_("Sets a custom duration to ban clones for."), AC_NONE, 1, os_cmd_clones_duration, { .path = "" } };
-
-static void clones_configready(void *unused)
+static void
+clones_configready(void *unused)
 {
 	clones_allowed = config_options.default_clone_allowed;
 	clones_warn = config_options.default_clone_warn;
 }
 
-void _modinit(module_t *m)
-{
-	user_t *u;
-	mowgli_patricia_iteration_state_t state;
-
-	if (!module_find_published("backend/opensex"))
-	{
-		slog(LG_INFO, "Module %s requires use of the OpenSEX database backend, refusing to load.", m->name);
-		m->mflags = MODTYPE_FAIL;
-		return;
-	}
-
-	service_named_bind_command("operserv", &os_clones);
-
-	os_clones_cmds = mowgli_patricia_create(strcasecanon);
-
-	command_add(&os_clones_kline, os_clones_cmds);
-	command_add(&os_clones_list, os_clones_cmds);
-	command_add(&os_clones_addexempt, os_clones_cmds);
-	command_add(&os_clones_delexempt, os_clones_cmds);
-	command_add(&os_clones_setexempt, os_clones_cmds);
-	command_add(&os_clones_listexempt, os_clones_cmds);
-	command_add(&os_clones_duration, os_clones_cmds);
-
-	hook_add_event("config_ready");
-	hook_add_config_ready(clones_configready);
-
-	hook_add_event("user_add");
-	hook_add_user_add(clones_newuser);
-	hook_add_event("user_delete");
-	hook_add_user_delete(clones_userquit);
-	hook_add_db_write(write_exemptdb);
-
-	db_register_type_handler("CLONES-DBV", db_h_clonesdbv);
-	db_register_type_handler("CLONES-CK", db_h_ck);
-	db_register_type_handler("CLONES-CD", db_h_cd);
-	db_register_type_handler("CLONES-GR", db_h_gr);
-	db_register_type_handler("CLONES-EX", db_h_ex);
-
-	hostlist = mowgli_patricia_create(noopcanon);
-	hostentry_heap = mowgli_heap_create(sizeof(hostentry_t), HEAP_USER, BH_NOW);
-
-	kline_duration = 3600; /* set a default */
-
-	serviceinfo = service_find("operserv");
-
-
-	/* add everyone to host hash */
-	MOWGLI_PATRICIA_FOREACH(u, &state, userlist)
-	{
-		clones_newuser(&(hook_user_nick_t){ .u = u });
-	}
-}
-
-static void free_hostentry(const char *key, void *data, void *privdata)
-{
-	mowgli_node_t *n, *tn;
-	hostentry_t *he = data;
-
-	MOWGLI_ITER_FOREACH_SAFE(n, tn, he->clients.head)
-	{
-		mowgli_node_delete(n, &he->clients);
-		mowgli_node_free(n);
-	}
-
-	mowgli_heap_free(hostentry_heap, he);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	mowgli_node_t *n, *tn;
-
-	mowgli_patricia_destroy(hostlist, free_hostentry, NULL);
-	mowgli_heap_destroy(hostentry_heap);
-
-	MOWGLI_ITER_FOREACH_SAFE(n, tn, clone_exempts.head)
-	{
-		cexcept_t *c = n->data;
-
-		free(c->ip);
-		free(c->reason);
-		free(c);
-
-		mowgli_node_delete(n, &clone_exempts);
-		mowgli_node_free(n);
-	}
-
-	service_named_unbind_command("operserv", &os_clones);
-
-	command_delete(&os_clones_kline, os_clones_cmds);
-	command_delete(&os_clones_list, os_clones_cmds);
-	command_delete(&os_clones_addexempt, os_clones_cmds);
-	command_delete(&os_clones_delexempt, os_clones_cmds);
-	command_delete(&os_clones_setexempt, os_clones_cmds);
-	command_delete(&os_clones_listexempt, os_clones_cmds);
-
-	command_delete(&os_clones_duration, os_clones_cmds);
-
-	hook_del_user_add(clones_newuser);
-	hook_del_user_delete(clones_userquit);
-	hook_del_db_write(write_exemptdb);
-	hook_del_config_ready(clones_configready);
-
-	db_unregister_type_handler("CLONES-DBV");
-	db_unregister_type_handler("CLONES-CK");
-	db_unregister_type_handler("CLONES-CD");
-	db_unregister_type_handler("CLONES-EX");
-
-	mowgli_patricia_destroy(os_clones_cmds, NULL, NULL);
-}
-
-static void write_exemptdb(database_handle_t *db)
+static void
+write_exemptdb(struct database_handle *db)
 {
 	mowgli_node_t *n, *tn;
 
@@ -227,12 +78,12 @@ static void write_exemptdb(database_handle_t *db)
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, clone_exempts.head)
 	{
-		cexcept_t *c = n->data;
+		struct clones_exemption *c = n->data;
 		if (cexempt_expired(c))
 		{
-			free(c->ip);
-			free(c->reason);
-			free(c);
+			sfree(c->ip);
+			sfree(c->reason);
+			sfree(c);
 			mowgli_node_delete(n, &clone_exempts);
 			mowgli_node_free(n);
 		}
@@ -249,26 +100,32 @@ static void write_exemptdb(database_handle_t *db)
 	}
 }
 
-static void db_h_clonesdbv(database_handle_t *db, const char *type)
+static void
+db_h_clonesdbv(struct database_handle *db, const char *type)
 {
 	clones_dbversion = db_sread_uint(db);
 }
-static void db_h_ck(database_handle_t *db, const char *type)
+
+static void
+db_h_ck(struct database_handle *db, const char *type)
 {
-	kline_enabled = db_sread_int(db) != 0;
+	kline_enabled = db_sread_uint(db) != 0;
 }
 
-static void db_h_cd(database_handle_t *db, const char *type)
+static void
+db_h_cd(struct database_handle *db, const char *type)
 {
 	kline_duration = db_sread_uint(db);
 }
 
-static void db_h_gr(database_handle_t *db, const char *type)
+static void
+db_h_gr(struct database_handle *db, const char *type)
 {
 	grace_count = db_sread_uint(db);
 }
 
-static void db_h_ex(database_handle_t *db, const char *type)
+static void
+db_h_ex(struct database_handle *db, const char *type)
 {
 	unsigned int allowed, warn;
 
@@ -282,7 +139,7 @@ static void db_h_ex(database_handle_t *db, const char *type)
 	else if (clones_dbversion == 2)
 	{
 		warn = db_sread_uint(db);
-		db_sread_uint(db); /* trash the old KILL value */
+		db_sread_uint(db); // trash the old KILL value
 	}
 	else
 	{
@@ -292,7 +149,7 @@ static void db_h_ex(database_handle_t *db, const char *type)
 	time_t expires = db_sread_time(db);
 	const char *reason = db_sread_str(db);
 
-	cexcept_t *c = (cexcept_t *)smalloc(sizeof(cexcept_t));
+	struct clones_exemption *const c = smalloc(sizeof *c);
 	c->ip = sstrdup(ip);
 	c->allowed = allowed;
 	c->warn = warn;
@@ -301,23 +158,24 @@ static void db_h_ex(database_handle_t *db, const char *type)
 	mowgli_node_add(c, mowgli_node_create(), &clone_exempts);
 }
 
-static cexcept_t * find_exempt(const char *ip)
+static struct clones_exemption *
+find_exempt(const char *ip)
 {
 	mowgli_node_t *n;
 
-	/* first check for an exact match */
+	// first check for an exact match
 	MOWGLI_ITER_FOREACH(n, clone_exempts.head)
 	{
-		cexcept_t *c = n->data;
+		struct clones_exemption *c = n->data;
 
 		if (!strcmp(ip, c->ip))
 			return c;
 	}
 
-	/* then look for cidr */
+	// then look for cidr
 	MOWGLI_ITER_FOREACH(n, clone_exempts.head)
 	{
-		cexcept_t *c = n->data;
+		struct clones_exemption *c = n->data;
 
 		if (!match_ips(c->ip, ip))
 			return c;
@@ -326,30 +184,21 @@ static cexcept_t * find_exempt(const char *ip)
 	return 0;
 }
 
-static void os_cmd_clones(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
 {
-	command_t *c;
-	char *cmd = parv[0];
-
-	/* Bad/missing arg */
-	if (!cmd)
+	if (parc < 1)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "CLONES");
 		command_fail(si, fault_needmoreparams, _("Syntax: CLONES KLINE|LIST|ADDEXEMPT|DELEXEMPT|LISTEXEMPT|SETEXEMPT|DURATION [parameters]"));
 		return;
 	}
 
-	c = command_find(os_clones_cmds, cmd);
-	if (c == NULL)
-	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-		return;
-	}
-
-	command_exec(si->service, si, c, parc + 1, parv + 1);
+	(void) subcommand_dispatch_simple(si->service, si, parc, parv, os_clones_cmds, "CLONES");
 }
 
-static void os_cmd_clones_kline(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones_kline(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *arg = parv[0];
 
@@ -386,20 +235,24 @@ static void os_cmd_clones_kline(sourceinfo_t *si, int parc, char *parv[])
 		unsigned int newgrace = atol(arg);
 		if (kline_enabled && grace_count == newgrace)
 		{
-			command_fail(si, fault_nochange, _("CLONES kline grace is already enabled and set to %d kills."), grace_count);
+			command_fail(si, fault_nochange, _("CLONES kline grace is already enabled and set to \2%u\2 kills."), grace_count);
 		}
 		kline_enabled = true;
 		grace_count = newgrace;
-		command_success_nodata(si, _("Enabled CLONES klines with a grace of %d kills"), grace_count);
-		wallops("\2%s\2 enabled CLONES klines with a grace of %d kills", get_oper_name(si), grace_count);
-		logcommand(si, CMDLOG_ADMIN, "CLONES:KLINE:ON grace %d", grace_count);
+		command_success_nodata(si, ngettext(N_("Enabled CLONES klines with a grace of \2%u\2 kill"),
+		                                    N_("Enabled CLONES klines with a grace of \2%u\2 kills"),
+		                                    grace_count), grace_count);
+		wallops("\2%s\2 enabled CLONES klines with a grace of %u kills", get_oper_name(si), grace_count);
+		logcommand(si, CMDLOG_ADMIN, "CLONES:KLINE:ON grace %u", grace_count);
 	}
 	else
 	{
 		if (kline_enabled)
 		{
 			if (grace_count)
-				command_success_string(si, "ON", _("CLONES klines are currently enabled with a grace of %d kills."), grace_count);
+				command_success_string(si, "ON", ngettext(N_("CLONES klines are currently enabled with a grace of \2%u\2 kill."),
+				                                          N_("CLONES klines are currently enabled with a grace of \2%u\2 kills."),
+				                                          grace_count), grace_count);
 			else
 				command_success_string(si, "ON", _("CLONES klines are currently enabled."));
 		}
@@ -408,10 +261,11 @@ static void os_cmd_clones_kline(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void os_cmd_clones_list(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones_list(struct sourceinfo *si, int parc, char *parv[])
 {
-	hostentry_t *he;
-	int k = 0;
+	struct clones_hostentry *he;
+	unsigned int k = 0;
 	mowgli_patricia_iteration_state_t state;
 
 	MOWGLI_PATRICIA_FOREACH(he, &state, hostlist)
@@ -420,30 +274,31 @@ static void os_cmd_clones_list(sourceinfo_t *si, int parc, char *parv[])
 
 		if (k > 3)
 		{
-			cexcept_t *c = find_exempt(he->ip);
+			struct clones_exemption *c = find_exempt(he->ip);
 			if (c)
-				command_success_nodata(si, _("%d from %s (\2EXEMPT\2; allowed %d)"), k, he->ip, c->allowed);
+				command_success_nodata(si, _("%u from %s (\2EXEMPT\2; allowed %u)"), k, he->ip, c->allowed);
 			else
-				command_success_nodata(si, _("%d from %s"), k, he->ip);
+				command_success_nodata(si, _("%u from %s"), k, he->ip);
 		}
 	}
 	command_success_nodata(si, _("End of CLONES LIST"));
 	logcommand(si, CMDLOG_ADMIN, "CLONES:LIST");
 }
 
-static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones_addexempt(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
 	char *ip = parv[0];
 	char *clonesstr = parv[1];
-	int clones;
+	unsigned int clones;
 	char *expiry = parv[2];
 	char *reason = parv[3];
 	char rreason[BUFSIZE];
-	cexcept_t *c = NULL;
+	struct clones_exemption *c = NULL;
 	long duration;
 
-	if (!ip || !clonesstr || !expiry)
+	if (!ip || !clonesstr || !expiry || ! string_to_uint(clonesstr, &clones) || ! clones)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "CLONES ADDEXEMPT");
 		command_fail(si, fault_needmoreparams, _("Syntax: CLONES ADDEXEMPT <ip> <clones> [!P|!T <minutes>] <reason>"));
@@ -456,8 +311,6 @@ static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[])
 		command_fail(si, fault_badparams, _("Syntax: CLONES ADDEXEMPT <ip> <clones> [!P|!T <minutes>] <reason>"));
 		return;
 	}
-
-	clones = atoi(clonesstr);
 
 	if (expiry && !strcasecmp(expiry, "!P"))
 	{
@@ -485,15 +338,15 @@ static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[])
 			*reason++ = '\0';
 		expiry += 3;
 
-		duration = (atol(expiry) * 60);
+		duration = (atol(expiry) * SECONDS_PER_MINUTE);
 		while (isdigit((unsigned char)*expiry))
 			++expiry;
 		if (*expiry == 'h' || *expiry == 'H')
-			duration *= 60;
+			duration *= MINUTES_PER_HOUR;
 		else if (*expiry == 'd' || *expiry == 'D')
-			duration *= 1440;
+			duration *= MINUTES_PER_DAY;
 		else if (*expiry == 'w' || *expiry == 'W')
-			duration *= 10080;
+			duration *= MINUTES_PER_WEEK;
 		else if (*expiry == '\0')
 			;
 		else
@@ -535,7 +388,7 @@ static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[])
 
 	MOWGLI_ITER_FOREACH(n, clone_exempts.head)
 	{
-		cexcept_t *t = n->data;
+		struct clones_exemption *t = n->data;
 
 		if (!strcmp(ip, t->ip))
 			c = t;
@@ -550,7 +403,7 @@ static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[])
 			return;
 		}
 
-		c = smalloc(sizeof(cexcept_t));
+		c = smalloc(sizeof *c);
 		c->ip = sstrdup(ip);
 		c->reason = sstrdup(rreason);
 		mowgli_node_add(c, mowgli_node_create(), &clone_exempts);
@@ -560,10 +413,10 @@ static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (*rreason)
 		{
-			free(c->reason);
+			sfree(c->reason);
 			c->reason = sstrdup(rreason);
 		}
-		command_success_nodata(si, _("\2Warning\2: the syntax you are using to update this exemption has been deprecated and may be removed in a future version.  Please use SETEXEMPT in the future instead."));
+		command_success_nodata(si, _("\2Warning\2: the syntax you are using to update this exemption has been deprecated and may be removed in a future version. Please use SETEXEMPT in the future instead."));
 		command_success_nodata(si, _("Updated \2%s\2 in clone exempt list."), ip);
 	}
 
@@ -571,10 +424,11 @@ static void os_cmd_clones_addexempt(sourceinfo_t *si, int parc, char *parv[])
 	c->warn = clones;
 	c->expires = duration ? (CURRTIME + duration) : 0;
 
-	logcommand(si, CMDLOG_ADMIN, "CLONES:ADDEXEMPT: \2%s\2 \2%d\2 (reason: \2%s\2) (duration: \2%s\2)", ip, clones, c->reason, timediff(duration));
+	logcommand(si, CMDLOG_ADMIN, "CLONES:ADDEXEMPT: \2%s\2 \2%u\2 (reason: \2%s\2) (duration: \2%s\2)", ip, clones, c->reason, timediff(duration));
 }
 
-static void os_cmd_clones_delexempt(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones_delexempt(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n, *tn;
 	char *arg = parv[0];
@@ -588,21 +442,21 @@ static void os_cmd_clones_delexempt(sourceinfo_t *si, int parc, char *parv[])
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, clone_exempts.head)
 	{
-		cexcept_t *c = n->data;
+		struct clones_exemption *c = n->data;
 
 		if (cexempt_expired(c))
 		{
-			free(c->ip);
-			free(c->reason);
-			free(c);
+			sfree(c->ip);
+			sfree(c->reason);
+			sfree(c);
 			mowgli_node_delete(n, &clone_exempts);
 			mowgli_node_free(n);
 		}
 		else if (!strcmp(c->ip, arg))
 		{
-			free(c->ip);
-			free(c->reason);
-			free(c);
+			sfree(c->ip);
+			sfree(c->reason);
+			sfree(c);
 			mowgli_node_delete(n, &clone_exempts);
 			mowgli_node_free(n);
 			command_success_nodata(si, _("Removed \2%s\2 from clone exempt list."), arg);
@@ -614,8 +468,8 @@ static void os_cmd_clones_delexempt(sourceinfo_t *si, int parc, char *parv[])
 	command_fail(si, fault_nosuch_target, _("\2%s\2 not found in clone exempt list."), arg);
 }
 
-
-static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones_setexempt(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n, *tn;
 	char *ip = parv[0];
@@ -642,7 +496,7 @@ static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
 		if (!strcasecmp(subcmd, "ALLOWED"))
 		{
 			clones_allowed = clones;
-			command_success_nodata(si, _("Default allowed clone limit set to \2%d\2."), clones_allowed);
+			command_success_nodata(si, _("Default allowed clone limit set to \2%u\2."), clones_allowed);
 		}
 		else if (!strcasecmp(subcmd,"WARN"))
 		{
@@ -654,28 +508,28 @@ static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
 			}
 
 			clones_warn = clones;
-			command_success_nodata(si, _("Default warned clone limit set to \2%d\2"), clones_warn);
+			command_success_nodata(si, _("Default warned clone limit set to \2%u\2"), clones_warn);
 		}
 		else
 		{
-			/* Invalid parameters */
+			// Invalid parameters
 			command_fail(si, fault_badparams, _("Invalid syntax given."));
 			command_fail(si, fault_badparams, _("Syntax: CLONES SETEXEMPT DEFAULT <ALLOWED | WARN> <limit>"));
 			return;
 		}
 
-		logcommand(si, CMDLOG_ADMIN, "CLONES:SETEXEMPT:DEFAULT: \2%s\2 \2%d\2 allowed, \2%d\2 warn", ip, clones_allowed, clones_warn);
+		logcommand(si, CMDLOG_ADMIN, "CLONES:SETEXEMPT:DEFAULT: \2%s\2 \2%u\2 allowed, \2%u\2 warn", ip, clones_allowed, clones_warn);
 	}
 	else if (ip) {
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, clone_exempts.head)
 		{
-			cexcept_t *c = n->data;
+			struct clones_exemption *c = n->data;
 
 			if (cexempt_expired(c))
 			{
-				free(c->ip);
-				free(c->reason);
-				free(c);
+				sfree(c->ip);
+				sfree(c->reason);
+				sfree(c);
 				mowgli_node_delete(n, &clone_exempts);
 				mowgli_node_free(n);
 			}
@@ -685,12 +539,12 @@ static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
 				{
 					if (clones < c->warn)
 					{
-						command_fail(si, fault_badparams, _("Allowed clones limit must be greater than or equal to the warned limit of %d"), c->warn);
+						command_fail(si, fault_badparams, _("Allowed clones limit must be greater than or equal to the warned limit of \2%u\2"), c->warn);
 						return;
 					}
 
 					c->allowed = clones;
-					command_success_nodata(si, _("Allowed clones limit for host \2%s\2 set to \2%d\2"), ip, c->allowed);
+					command_success_nodata(si, _("Allowed clones limit for host \2%s\2 set to \2%u\2"), ip, c->allowed);
 				}
 				else if (!strcasecmp(subcmd, "WARN"))
 				{
@@ -702,12 +556,12 @@ static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
 					}
 					else if (clones > c->allowed)
 					{
-						command_fail(si, fault_badparams, _("Warned clones limit must be lower than or equal to the allowed limit of %d"), c->allowed);
+						command_fail(si, fault_badparams, _("Warned clones limit must be lower than or equal to the allowed limit of %u"), c->allowed);
 						return;
 					}
 
 					c->warn = clones;
-					command_success_nodata(si, _("Warned clones limit for host \2%s\2 set to \2%d\2"), ip, c->warn);
+					command_success_nodata(si, _("Warned clones limit for host \2%s\2 set to \2%u\2"), ip, c->warn);
 				}
 				else if (!strcasecmp(subcmd, "DURATION"))
 				{
@@ -719,15 +573,15 @@ static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
 					}
 					else
 					{
-						duration = (atol(expiry) * 60);
+						duration = (atol(expiry) * SECONDS_PER_MINUTE);
 						while (isdigit((unsigned char)*expiry))
 							++expiry;
 						if (*expiry == 'h' || *expiry == 'H')
-							duration *= 60;
+							duration *= MINUTES_PER_HOUR;
 						else if (*expiry == 'd' || *expiry == 'D')
-							duration *= 1440;
+							duration *= MINUTES_PER_DAY;
 						else if (*expiry == 'w' || *expiry == 'W')
-							duration *= 10080;
+							duration *= MINUTES_PER_WEEK;
 						else if (*expiry == '\0')
 							;
 						else
@@ -752,14 +606,14 @@ static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
 						mowgli_strlcat(rreason, " ", BUFSIZE);
 						mowgli_strlcat(rreason, reason, BUFSIZE);
 					}
-					/* mowgli_strlcat(rreason,clonesstr,BUFSIZE); */
-					free(c->reason);
+
+					sfree(c->reason);
 					c->reason = sstrdup(rreason);
 					command_success_nodata(si, _("Clone exemption reason for host \2%s\2 changed to \2%s\2"), ip, c->reason);
 				}
 				else
 				{
-					/* Invalid parameters */
+					// Invalid parameters
 					command_fail(si, fault_badparams, _("Invalid syntax given."));
 					command_fail(si, fault_badparams, _("Syntax: CLONES SETEXEMPT <IP> <ALLOWED | WARN | DURATION | REASON> <value>"));
 					return;
@@ -775,26 +629,27 @@ static void os_cmd_clones_setexempt(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void os_cmd_clones_duration(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones_duration(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *s = parv[0];
 	long duration;
 
 	if (!s)
 	{
-		command_success_nodata(si, _("Clone ban duration set to \2%ld\2 (%ld seconds)"), kline_duration / 60, kline_duration);
+		command_success_nodata(si, _("Clone ban duration set to \2%ld\2 (%ld seconds)"), kline_duration / SECONDS_PER_MINUTE, kline_duration);
 		return;
 	}
 
-	duration = (atol(s) * 60);
+	duration = (atol(s) * SECONDS_PER_MINUTE);
 	while (isdigit((unsigned char)*s))
 		s++;
 	if (*s == 'h' || *s == 'H')
-		duration *= 60;
+		duration *= MINUTES_PER_HOUR;
 	else if (*s == 'd' || *s == 'D')
-		duration *= 1440;
+		duration *= MINUTES_PER_DAY;
 	else if (*s == 'w' || *s == 'W')
-		duration *= 10080;
+		duration *= MINUTES_PER_WEEK;
 	else if (*s == '\0' || *s == 'm' || *s == 'M')
 		;
 	else
@@ -810,46 +665,48 @@ static void os_cmd_clones_duration(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("Clone ban duration set to \2%s\2 (%ld seconds)"), parv[0], kline_duration);
 }
 
-static void os_cmd_clones_listexempt(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_clones_listexempt(struct sourceinfo *si, int parc, char *parv[])
 {
 
-	command_success_nodata(si, _("DEFAULT - allowed limit %d, warn on %d"), clones_allowed, clones_warn);
+	command_success_nodata(si, _("DEFAULT - allowed limit %u, warn on %u"), clones_allowed, clones_warn);
 	mowgli_node_t *n, *tn;
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, clone_exempts.head)
 	{
-		cexcept_t *c = n->data;
+		struct clones_exemption *c = n->data;
 
 		if (cexempt_expired(c))
 		{
-			free(c->ip);
-			free(c->reason);
-			free(c);
+			sfree(c->ip);
+			sfree(c->reason);
+			sfree(c);
 			mowgli_node_delete(n, &clone_exempts);
 			mowgli_node_free(n);
 		}
 		else if (c->expires)
-			command_success_nodata(si, _("%s - allowed limit %d, warn on %d - expires in %s - \2%s\2"), c->ip, c->allowed, c->warn, timediff(c->expires > CURRTIME ? c->expires - CURRTIME : 0), c->reason);
+			command_success_nodata(si, _("%s - allowed limit %u, warn on %u - expires in %s - \2%s\2"), c->ip, c->allowed, c->warn, timediff(c->expires > CURRTIME ? c->expires - CURRTIME : 0), c->reason);
 		else
-			command_success_nodata(si, _("%s - allowed limit %d, warn on %d - \2permanent\2 - \2%s\2"), c->ip, c->allowed, c->warn, c->reason);
+			command_success_nodata(si, _("%s - allowed limit %u, warn on %u - \2permanent\2 - \2%s\2"), c->ip, c->allowed, c->warn, c->reason);
 	}
 	command_success_nodata(si, _("End of CLONES LISTEXEMPT"));
 	logcommand(si, CMDLOG_ADMIN, "CLONES:LISTEXEMPT");
 }
 
-static void clones_newuser(hook_user_nick_t *data)
+static void
+clones_newuser(struct hook_user_nick *data)
 {
-	user_t *u = data->u;
+	struct user *u = data->u;
 	unsigned int i;
-	hostentry_t *he;
+	struct clones_hostentry *he;
 	unsigned int allowed, warn;
 	mowgli_node_t *n;
 
-	/* If the user has been killed, don't do anything. */
+	// If the user has been killed, don't do anything.
 	if (!u)
 		return;
 
-	/* User has no IP, ignore them */
+	// User has no IP, ignore them
 	if (is_internal_client(u) || u->ip == NULL)
 		return;
 
@@ -863,7 +720,7 @@ static void clones_newuser(hook_user_nick_t *data)
 	mowgli_node_add(u, mowgli_node_create(), &he->clients);
 	i = MOWGLI_LIST_LENGTH(&he->clients);
 
-	cexcept_t *c = find_exempt(u->ip);
+	struct clones_exemption *c = find_exempt(u->ip);
 	if (c == 0)
 	{
 		allowed = clones_allowed;
@@ -882,7 +739,7 @@ static void clones_newuser(hook_user_nick_t *data)
 
 		MOWGLI_ITER_FOREACH(n, he->clients.head)
 		{
-			user_t *tu = n->data;
+			struct user *tu = n->data;
 
 			if (tu->myuser == NULL)
 				continue;
@@ -892,7 +749,7 @@ static void clones_newuser(hook_user_nick_t *data)
 				warn++;
 		}
 
-		/* A hard limit of 2x the "real" limit sounds good IMO --jdhore */
+		// A hard limit of 2x the "real" limit sounds good IMO --jdhore
 		if (allowed > (real_allowed * 2))
 			allowed = real_allowed * 2;
 		if (warn > (real_warn * 2))
@@ -901,9 +758,9 @@ static void clones_newuser(hook_user_nick_t *data)
 
 	if (i > allowed && allowed != 0)
 	{
-		/* User has exceeded the maximum number of allowed clones. */
+		// User has exceeded the maximum number of allowed clones.
 		if (is_autokline_exempt(u))
-			slog(LG_INFO, "CLONES: \2%d\2 clones on \2%s\2 (%s!%s@%s) (user is autokline exempt)", i, u->ip, u->nick, u->user, u->host);
+			slog(LG_INFO, "CLONES: \2%u\2 clones on \2%s\2 (%s!%s@%s) (user is autokline exempt)", i, u->ip, u->nick, u->user, u->host);
 		else if (!kline_enabled || he->gracekills < grace_count || (grace_count > 0 && he->firstkill < time(NULL) - CLONES_GRACE_TIMEPERIOD))
 		{
 			if (he->firstkill < time(NULL) - CLONES_GRACE_TIMEPERIOD)
@@ -917,18 +774,18 @@ static void clones_newuser(hook_user_nick_t *data)
 			}
 
 			if (!kline_enabled)
-				slog(LG_INFO, "CLONES: \2%d\2 clones on \2%s\2 (%s!%s@%s) (TKLINE disabled, killing user)", i, u->ip, u->nick, u->user, u->host);
+				slog(LG_INFO, "CLONES: \2%u\2 clones on \2%s\2 (%s!%s@%s) (TKLINE disabled, killing user)", i, u->ip, u->nick, u->user, u->host);
 			else
-				slog(LG_INFO, "CLONES: \2%d\2 clones on \2%s\2 (%s!%s@%s) (grace period, killing user, %d grace kills remaining)", i, u->ip, u->nick,
+				slog(LG_INFO, "CLONES: \2%u\2 clones on \2%s\2 (%s!%s@%s) (grace period, killing user, %u grace kills remaining)", i, u->ip, u->nick,
 					u->user, u->host, grace_count - he->gracekills);
 
 			kill_user(serviceinfo->me, u, "Too many connections from this host.");
-			data->u = NULL; /* Required due to kill_user being called during user_add hook. --mr_flea */
+			data->u = NULL; // Required due to kill_user being called during user_add hook. --mr_flea
 		}
 		else
 		{
 			if (! (u->flags & UF_KLINESENT)) {
-				slog(LG_INFO, "CLONES: \2%d\2 clones on \2%s\2 (%s!%s@%s) (TKLINE due to excess clones)", i, u->ip, u->nick, u->user, u->host);
+				slog(LG_INFO, "CLONES: \2%u\2 clones on \2%s\2 (%s!%s@%s) (TKLINE due to excess clones)", i, u->ip, u->nick, u->user, u->host);
 				kline_sts("*", "*", u->ip, kline_duration, "Excessive clones");
 				u->flags |= UF_KLINESENT;
 			}
@@ -937,17 +794,18 @@ static void clones_newuser(hook_user_nick_t *data)
 	}
 	else if (i >= warn && warn != 0)
 	{
-		slog(LG_INFO, "CLONES: \2%d\2 clones on \2%s\2 (%s!%s@%s) (\2%d\2 allowed)", i, u->ip, u->nick, u->user, u->host, allowed);
-		msg(serviceinfo->nick, u->nick, _("\2WARNING\2: You may not have more than \2%d\2 clients connected to the network at once. Any further connections risks being removed."), allowed);
+		slog(LG_INFO, "CLONES: \2%u\2 clones on \2%s\2 (%s!%s@%s) (\2%u\2 allowed)", i, u->ip, u->nick, u->user, u->host, allowed);
+		msg(serviceinfo->nick, u->nick, _("\2WARNING\2: You may not have more than \2%u\2 clients connected to the network at once. Any further connections risks being removed."), allowed);
 	}
 }
 
-static void clones_userquit(user_t *u)
+static void
+clones_userquit(struct user *u)
 {
 	mowgli_node_t *n;
-	hostentry_t *he;
+	struct clones_hostentry *he;
 
-	/* User has no IP, ignore them */
+	// User has no IP, ignore them
 	if (is_internal_client(u) || u->ip == NULL)
 		return;
 
@@ -964,15 +822,169 @@ static void clones_userquit(user_t *u)
 		mowgli_node_free(n);
 		if (MOWGLI_LIST_LENGTH(&he->clients) == 0)
 		{
-			/* TODO: free later if he->firstkill > time(NULL) - CLONES_GRACE_TIMEPERIOD. */
+			// TODO: free later if he->firstkill > time(NULL) - CLONES_GRACE_TIMEPERIOD.
 			mowgli_patricia_delete(hostlist, he->ip);
 			mowgli_heap_free(hostentry_heap, he);
 		}
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_clones = {
+	.name           = "CLONES",
+	.desc           = N_("Manages network wide clones."),
+	.access         = PRIV_AKILL,
+	.maxparc        = 5,
+	.cmd            = &os_cmd_clones,
+	.help           = { .path = "oservice/clones" },
+};
+
+static struct command os_clones_kline = {
+	.name           = "KLINE",
+	.desc           = N_("Enables/disables klines for excessive clones."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_clones_kline,
+	.help           = { .path = "" },
+};
+
+static struct command os_clones_list = {
+	.name           = "LIST",
+	.desc           = N_("Lists clones on the network."),
+	.access         = AC_NONE,
+	.maxparc        = 0,
+	.cmd            = &os_cmd_clones_list,
+	.help           = { .path = "" },
+};
+
+static struct command os_clones_addexempt = {
+	.name           = "ADDEXEMPT",
+	.desc           = N_("Adds a clones exemption."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &os_cmd_clones_addexempt,
+	.help           = { .path = "" },
+};
+
+static struct command os_clones_delexempt = {
+	.name           = "DELEXEMPT",
+	.desc           = N_("Deletes a clones exemption."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_clones_delexempt,
+	.help           = { .path = "" },
+};
+
+static struct command os_clones_setexempt = {
+	.name           = "SETEXEMPT",
+	.desc           = N_("Sets a clone exemption details."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_clones_setexempt,
+	.help           = { .path = "" },
+};
+
+static struct command os_clones_listexempt = {
+	.name           = "LISTEXEMPT",
+	.desc           = N_("Lists clones exemptions."),
+	.access         = AC_NONE,
+	.maxparc        = 0,
+	.cmd            = &os_cmd_clones_listexempt,
+	.help           = { .path = "" },
+};
+
+static struct command os_clones_duration = {
+	.name           = "DURATION",
+	.desc           = N_("Sets a custom duration to ban clones for."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_clones_duration,
+	.help           = { .path = "" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	if (! module_find_published("backend/opensex"))
+	{
+		(void) slog(LG_ERROR, "Module %s requires use of the OpenSEX database backend, refusing to load.", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	if (! (serviceinfo = service_find("operserv")))
+	{
+		(void) slog(LG_ERROR, "%s: cannot find OperServ (BUG?)", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	if (! (os_clones_cmds = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	if (! (hostlist = mowgli_patricia_create(&noopcanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		(void) mowgli_patricia_destroy(os_clones_cmds, NULL, NULL);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	if (! (hostentry_heap = mowgli_heap_create(sizeof(struct clones_hostentry), HEAP_USER, BH_NOW)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_heap_create() failed", m->name);
+
+		(void) mowgli_patricia_destroy(os_clones_cmds, NULL, NULL);
+		(void) mowgli_patricia_destroy(hostlist, NULL, NULL);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) command_add(&os_clones_kline, os_clones_cmds);
+	(void) command_add(&os_clones_list, os_clones_cmds);
+	(void) command_add(&os_clones_addexempt, os_clones_cmds);
+	(void) command_add(&os_clones_delexempt, os_clones_cmds);
+	(void) command_add(&os_clones_setexempt, os_clones_cmds);
+	(void) command_add(&os_clones_listexempt, os_clones_cmds);
+	(void) command_add(&os_clones_duration, os_clones_cmds);
+
+	(void) service_named_bind_command("operserv", &os_clones);
+
+	(void) hook_add_config_ready(&clones_configready);
+	(void) hook_add_user_add(&clones_newuser);
+	(void) hook_add_user_delete(&clones_userquit);
+	(void) hook_add_db_write(&write_exemptdb);
+
+	(void) db_register_type_handler("CLONES-DBV", &db_h_clonesdbv);
+	(void) db_register_type_handler("CLONES-CK", &db_h_ck);
+	(void) db_register_type_handler("CLONES-CD", &db_h_cd);
+	(void) db_register_type_handler("CLONES-GR", &db_h_gr);
+	(void) db_register_type_handler("CLONES-EX", &db_h_ex);
+
+	// add everyone to host hash
+	struct user *u;
+	mowgli_patricia_iteration_state_t state;
+	MOWGLI_PATRICIA_FOREACH(u, &state, userlist)
+		(void) clones_newuser(&(struct hook_user_nick){ .u = u });
+
+	m->mflags |= MODFLAG_DBHANDLER;
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/clones", MODULE_UNLOAD_CAPABILITY_NEVER)

@@ -1,43 +1,38 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * strshare.c: Shared strings.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2008 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2008-2012 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * strshare.c: Shared strings.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
-mowgli_patricia_t *strshare_dict;
+static mowgli_patricia_t *strshare_dict = NULL;
 
-typedef struct
+struct strshare
 {
 	int refcount;
-} strshare_t;
+};
 
-void strshare_init(void)
+void
+strshare_init(void)
 {
 	strshare_dict = mowgli_patricia_create(noopcanon);
 }
 
-stringref strshare_get(const char *str)
+stringref
+strshare_get(const char *str)
 {
-	strshare_t *ss;
+	struct strshare *ss;
 
 	if (str == NULL)
 		return NULL;
@@ -47,42 +42,45 @@ stringref strshare_get(const char *str)
 		ss->refcount++;
 	else
 	{
-		ss = smalloc(sizeof(strshare_t) + strlen(str) + 1);
+		ss = smalloc((sizeof *ss) + strlen(str) + 1);
 		ss->refcount = 1;
 		strcpy((char *)(ss + 1), str);
 		mowgli_patricia_add(strshare_dict, (char *)(ss + 1), ss);
 	}
+
 	return (char *)(ss + 1);
 }
 
-stringref strshare_ref(stringref str)
+stringref
+strshare_ref(stringref str)
 {
-	strshare_t *ss;
+	struct strshare *ss;
 
 	if (str == NULL)
 		return NULL;
 
 	/* intermediate cast to suppress gcc -Wcast-qual */
-	ss = (strshare_t *)(uintptr_t)str - 1;
+	ss = (struct strshare *)(uintptr_t)str - 1;
 	ss->refcount++;
 
 	return str;
 }
 
-void strshare_unref(stringref str)
+void
+strshare_unref(stringref str)
 {
-	strshare_t *ss;
+	struct strshare *ss;
 
 	if (str == NULL)
 		return;
 
 	/* intermediate cast to suppress gcc -Wcast-qual */
-	ss = (strshare_t *)(uintptr_t)str - 1;
+	ss = (struct strshare *)(uintptr_t)str - 1;
 	ss->refcount--;
 	if (ss->refcount == 0)
 	{
 		mowgli_patricia_delete(strshare_dict, str);
-		free(ss);
+		sfree(ss);
 	}
 }
 

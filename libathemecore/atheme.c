@@ -1,55 +1,52 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * atheme.c: Initialization and startup of the services system
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2017-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * atheme.c: Initialization and startup of the services system
  */
 
-#include "atheme.h"
-#include "conf.h"
-#include "uplink.h"
-#include "pmodule.h" /* pcommand_init */
+#include <atheme.h>
 #include "internal.h"
-#include "datastream.h"
-#include "authcookie.h"
-#include "libathemecore.h"
 
-#include <ext/getopt_long.h> /* XXX */
+#include <ext/getopt_long.h>
 
-#ifdef HAVE_GETRLIMIT
-# include <sys/resource.h>
+#if defined(HAVE_LIBGCRYPT) && !defined(GCRYPT_HEADER_INCL)
+#  define GCRYPT_NO_DEPRECATED 1
+#  define GCRYPT_NO_MPI_MACROS 1
+#  include <gcrypt.h>
 #endif
+
+#ifdef HAVE_LIBSODIUM
+#  include <sodium/core.h>
+#endif /* HAVE_LIBSODIUM */
+
+#if !defined(HAVE_MEMSET_S) && !defined(HAVE_EXPLICIT_BZERO) && !defined(HAVE_LIBSODIUM_MEMZERO)
+void *(* volatile volatile_memset)(void *, int, size_t) = &memset;
+#endif /* !HAVE_MEMSET_S && !HAVE_EXPLICIT_BZERO && !HAVE_LIBSODIUM_MEMZERO */
 
 struct ConfOption config_options;
 
-chansvs_t chansvs;
-nicksvs_t nicksvs;
+struct chansvs chansvs;
+struct nicksvs nicksvs;
 
 mowgli_list_t taint_list = { NULL, NULL, 0 };
 
 mowgli_eventloop_t *base_eventloop = NULL;
+mowgli_eventloop_timer_t *commit_interval_timer = NULL;
 
-me_t me;
+struct me me;
 struct cnt cnt;
 
 /* XXX */
-claro_state_t claro_state;
+struct claro_state claro_state;
 int runflags;
 
 char *config_file;
@@ -60,14 +57,16 @@ bool readonly = false;
 bool strict_mode = true;
 bool offline_mode = false;
 bool permissive_mode = false;
+bool database_create = false;
 
-void (*db_save) (void *arg) = NULL;
+void (*db_save) (void *arg, enum db_save_strategy strategy) = NULL;
 void (*db_load) (const char *name) = NULL;
 
 /* *INDENT-OFF* */
-static void print_help(void)
+static void
+print_help(void)
 {
-	printf("usage: atheme [-dhnvr] [-c conf] [-l logfile] [-p pidfile]\n\n"
+	printf("usage: atheme-services [-dhnvr] [-c conf] [-l logfile] [-p pidfile]\n\n"
 	       "-c <file>    Specify the config file\n"
 	       "-d           Start in debugging mode\n"
 	       "-h           Print this message and exit\n"
@@ -80,22 +79,40 @@ static void print_help(void)
 }
 /* *INDENT-ON* */
 
-static void print_version(void)
+static void
+print_version(void)
 {
 	int i;
 
-	printf("Atheme IRC Services (%s), build-id %s\n", PACKAGE_STRING, revision);
+	printf("%s (%s), build-id %s\n", PACKAGE_NAME, PACKAGE_VERSION, revision);
 
 	for (i = 0; infotext[i] != NULL; i++)
 		printf("%s\n", infotext[i]);
 }
 
-static void process_mowgli_log(const char *line)
+static void
+process_mowgli_log(const char *line)
 {
 	slog(LG_ERROR, "%s", line);
 }
 
-static void daemonize(int *daemonize_pipe)
+static inline bool
+libathemecore_set_mowgli_allocator(void)
+{
+	mowgli_allocation_policy_t *const policy = mowgli_allocation_policy_create("libathemecore", &smalloc, &sfree);
+
+	if (! policy)
+	{
+		(void) fprintf(stderr, "Error: mowgli_allocation_policy_create() failed!\n");
+		return false;
+	}
+
+	(void) mowgli_allocator_set_policy(policy);
+	return true;
+}
+
+static void
+daemonize(int *daemonize_pipe)
 {
 #ifdef HAVE_FORK
 	int i;
@@ -134,7 +151,8 @@ static void daemonize(int *daemonize_pipe)
 #endif
 }
 
-static bool detach_console(int *daemonize_pipe)
+static bool
+detach_console(int *daemonize_pipe)
 {
 #ifdef HAVE_FORK
 	close(0);
@@ -164,7 +182,124 @@ static bool detach_console(int *daemonize_pipe)
 #endif
 }
 
-void atheme_bootstrap(void)
+#ifdef ENABLE_NLS
+static int ATHEME_FATTR_PRINTF(3, 4)
+test_vsnprintf_iso_c99_driver(char *const restrict buf, const size_t len, const char *const restrict fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	const int result = vsnprintf(buf, len, fmt, ap);
+	va_end(ap);
+	return result;
+}
+
+static bool
+test_vsnprintf_iso_c99_positional(void)
+{
+	char buf[BUFSIZE];
+
+	(void) memset(buf, 0xFF, sizeof buf);
+	(void) test_vsnprintf_iso_c99_driver(buf, sizeof buf, "%3$s %1$s %4$u %2$s", "foo", "bar", "baz", 42U);
+
+	return (strcmp(buf, "baz foo 42 bar") == 0);
+}
+
+static bool
+test_snprintf_iso_c99_positional(void)
+{
+	char buf[BUFSIZE];
+
+	(void) memset(buf, 0xFF, sizeof buf);
+	(void) snprintf(buf, sizeof buf, "%3$s %1$s %4$u %2$s", "foo", "bar", "baz", 42U);
+
+	return (strcmp(buf, "baz foo 42 bar") == 0);
+}
+#endif
+
+bool ATHEME_FATTR_WUR
+libathemecore_early_init(void)
+{
+	static bool libathemecore_early_init_done = false;
+
+	if (libathemecore_early_init_done)
+		return true;
+
+#ifdef ENABLE_NLS
+	(void) languages_set_available(false);
+
+	/* For translations to make any sense most of the time, the order of words or values has to be changed.
+	 * Here we verify that does work, so that we can decide whether to enable translations or not.
+	 * If it doesn't work, there's no point enabling translations, because the output will be garbage.
+	 */
+	if (! test_vsnprintf_iso_c99_positional())
+	{
+		(void) fprintf(stderr, "Your vsnprintf(3) does not support positional format tokens!\n");
+		(void) fprintf(stderr, "Not enabling language support. Build with '--disable-nls' to silence.\n");
+	}
+	else if (! test_snprintf_iso_c99_positional())
+	{
+		(void) fprintf(stderr, "Your snprintf(3) does not support positional format tokens!\n");
+		(void) fprintf(stderr, "Not enabling language support. Build with '--disable-nls' to silence.\n");
+	}
+	else if (! setlocale(LC_ALL, ""))
+	{
+		(void) perror("setlocale(3)");
+	}
+	else if (! bindtextdomain(PACKAGE_TARNAME, LOCALEDIR))
+	{
+		(void) perror("bindtextdomain(3)");
+	}
+	else if (! textdomain(PACKAGE_TARNAME))
+	{
+		(void) perror("textdomain(3)");
+	}
+	else
+	{
+		(void) languages_set_available(true);
+	}
+#endif /* ENABLE_NLS */
+
+#ifdef HAVE_LIBGCRYPT
+	if (! gcry_control(GCRYCTL_INITIALIZATION_FINISHED_P, 0))
+	{
+		if (! gcry_check_version(GCRYPT_VERSION))
+		{
+			(void) fprintf(stderr, "libgcrypt: version downgraded, or initialization failed!\n");
+			return false;
+		}
+
+		(void) gcry_control(GCRYCTL_DISABLE_SECMEM_WARN, 0);
+		(void) gcry_control(GCRYCTL_INIT_SECMEM, 1, 0);
+		(void) gcry_control(GCRYCTL_SET_VERBOSITY, 0);
+		(void) gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
+	}
+	if (gcry_control(GCRYCTL_SELFTEST, 0) != 0)
+	{
+		(void) fprintf(stderr, "libgcrypt: self-tests failed!\n");
+		return false;
+	}
+#endif /* HAVE_LIBGCRYPT */
+
+#ifdef HAVE_LIBSODIUM
+	if (sodium_init() == -1)
+	{
+		(void) fprintf(stderr, "libsodium: library initialisation failed!\n");
+		return false;
+	}
+#endif /* HAVE_LIBSODIUM */
+
+	if (! libathemecore_set_mowgli_allocator())
+		return false;
+
+	if (! libathemecore_random_early_init())
+		return false;
+
+	libathemecore_early_init_done = true;
+	return true;
+}
+
+void
+atheme_bootstrap(void)
 {
 #ifdef HAVE_GETRLIMIT
 	struct rlimit rlim;
@@ -172,13 +307,6 @@ void atheme_bootstrap(void)
 
 	/* shutdown mowgli threading support */
 	mowgli_thread_set_policy(MOWGLI_THREAD_POLICY_DISABLED);
-
-	/* Prepare gettext */
-#ifdef ENABLE_NLS
-	setlocale(LC_ALL, "");
-	bindtextdomain(PACKAGE_NAME, LOCALEDIR);
-	textdomain(PACKAGE_NAME);
-#endif
 
 	/* change to our local directory */
 	if (chdir(PREFIX) < 0)
@@ -201,13 +329,14 @@ void atheme_bootstrap(void)
 	curr_uplink = NULL;
 }
 
-void atheme_init(char *execname, char *log_p)
+void
+atheme_init(char *execname, char *log_p)
 {
 	me.execname = execname;
 	me.kline_id = 0;
 	me.start = time(NULL);
 	CURRTIME = me.start;
-	srand(arc4random());
+	srand(atheme_random());
 
 	/* set signal handlers */
 	init_signal_handlers();
@@ -222,18 +351,12 @@ void atheme_init(char *execname, char *log_p)
 	mowgli_log_set_cb(process_mowgli_log);
 }
 
-void atheme_setup(void)
+void
+atheme_setup(void)
 {
-#if HAVE_UMASK
-	/* file creation mask */
-	umask(077);
-#endif
-
 	base_eventloop = mowgli_eventloop_create();
         hooks_init();
 	db_init();
-
-	init_resolver();
 
 	translation_init();
 #ifdef ENABLE_NLS
@@ -253,9 +376,18 @@ void atheme_setup(void)
 	common_ctcp_init();
 }
 
-int atheme_main(int argc, char *argv[])
+void
+db_save_periodic(void *unused)
 {
-	int daemonize_pipe[2];
+	slog(LG_DEBUG, "db_save_periodic(): initiating periodic database write");
+
+	db_save(unused, DB_SAVE_BG_REGULAR);
+}
+
+int
+atheme_main(int argc, char *argv[])
+{
+	int daemonize_pipe[2] = { -1, -1 };
 	bool have_conf = false;
 	bool have_log = false;
 	bool have_datadir = false;
@@ -268,13 +400,22 @@ int atheme_main(int argc, char *argv[])
 		{ NULL, 0, NULL, 0, 0 },
 	};
 
+	if (geteuid() == (uid_t) 0)
+	{
+		(void) fprintf(stderr, "Error: Do not run me as root!\n");
+		exit(EXIT_FAILURE);
+	}
+
 	atheme_bootstrap();
 
 	/* do command-line options */
-	while ((r = mowgli_getopt_long(argc, argv, "c:dhrl:np:D:v", long_opts, NULL)) != -1)
+	while ((r = mowgli_getopt_long(argc, argv, "c:bdhrl:np:D:v", long_opts, NULL)) != -1)
 	{
 		switch (r)
 		{
+		  case 'b':
+			  database_create = true;
+			  break;
 		  case 'c':
 			  config_file = sstrdup(mowgli_optarg);
 			  have_conf = true;
@@ -285,7 +426,6 @@ int atheme_main(int argc, char *argv[])
 		  case 'h':
 			  print_help();
 			  exit(EXIT_SUCCESS);
-			  break;
 		  case 'r':
 			  readonly = true;
 			  break;
@@ -306,11 +446,9 @@ int atheme_main(int argc, char *argv[])
 		  case 'v':
 			  print_version();
 			  exit(EXIT_SUCCESS);
-			  break;
 		  default:
-			  printf("usage: atheme [-dhnvr] [-c conf] [-l logfile] [-p pidfile]\n");
+			  fprintf(stderr, "usage: atheme-services [-bdhnvr] [-c conf] [-l logfile] [-p pidfile]\n");
 			  exit(EXIT_FAILURE);
-			  break;
 		}
 	}
 
@@ -350,6 +488,19 @@ int atheme_main(int argc, char *argv[])
 	}
 #endif
 
+	(void) slog(LG_INFO, "Using Digest API frontend: %s", digest_get_frontend_info());
+	(void) slog(LG_INFO, "Using Random API frontend: %s", random_get_frontend_info());
+
+	(void) slog(LG_INFO, "running digest testsuite...");
+
+	if (! digest_testsuite_run())
+	{
+		(void) slog(LG_ERROR, "digest testsuite failed");
+		exit(EXIT_FAILURE);
+	}
+
+	(void) slog(LG_INFO, "digest testsuite passed");
+
 	if (!(runflags & RF_LIVE))
 		daemonize(daemonize_pipe);
 
@@ -373,7 +524,20 @@ int atheme_main(int argc, char *argv[])
 
 	if (!backend_loaded && authservice_loaded)
 	{
-		slog(LG_ERROR, "atheme: no backend modules loaded, see your configuration file.");
+		slog(LG_ERROR, "atheme: no backend modules loaded; check your configuration file.");
+		exit(EXIT_FAILURE);
+	}
+	if (! me.name)
+	{
+		slog(LG_ERROR, "atheme: we have not been configured with a server name; check your "
+		               "configuration file.");
+		exit(EXIT_FAILURE);
+	}
+	if (uplink_find(me.name))
+	{
+		// Necessary if serverinfo{} comes after uplink{} in the config file
+		slog(LG_ERROR, "atheme: you have duplicated an uplink server name and our server name; "
+		               "check your configuration file.");
 		exit(EXIT_FAILURE);
 	}
 
@@ -389,6 +553,16 @@ int atheme_main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 	db_check();
+
+	if (db_save && database_create)
+	{
+		db_save(NULL, DB_SAVE_BLOCKING);
+		slog(LG_INFO, "atheme: a new database was created; please restart services without the -b option.");
+		return 0;
+	}
+
+	if (conf_need_rehash)
+		conf_rehash();
 
 #ifdef HAVE_GETPID
 	/* write pid */
@@ -416,23 +590,16 @@ int atheme_main(int argc, char *argv[])
 	/* no longer starting */
 	runflags &= ~RF_STARTING;
 
-	/* we probably have a few open already... */
-	me.maxfd = 3;
-
-	/* DB commit interval is configurable */
-	if (db_save && !readonly)
-		mowgli_timer_add(base_eventloop, "db_save", db_save, NULL, config_options.commit_interval);
-
 	/* check expires every hour */
-	mowgli_timer_add(base_eventloop, "expire_check", expire_check, NULL, 3600);
+	mowgli_timer_add(base_eventloop, "expire_check", expire_check, NULL, SECONDS_PER_HOUR);
 
 	/* check k/x/q line expires every minute */
-	mowgli_timer_add(base_eventloop, "kline_expire", kline_expire, NULL, 60);
-	mowgli_timer_add(base_eventloop, "xline_expire", xline_expire, NULL, 60);
-	mowgli_timer_add(base_eventloop, "qline_expire", qline_expire, NULL, 60);
+	mowgli_timer_add(base_eventloop, "kline_expire", kline_expire, NULL, SECONDS_PER_MINUTE);
+	mowgli_timer_add(base_eventloop, "xline_expire", xline_expire, NULL, SECONDS_PER_MINUTE);
+	mowgli_timer_add(base_eventloop, "qline_expire", qline_expire, NULL, SECONDS_PER_MINUTE);
 
 	/* check authcookie expires every ten minutes */
-	mowgli_timer_add(base_eventloop, "authcookie_expire", authcookie_expire, NULL, 600);
+	mowgli_timer_add(base_eventloop, "authcookie_expire", authcookie_expire, NULL, 10 * SECONDS_PER_MINUTE);
 
 	me.connected = false;
 	uplink_connect();
@@ -444,7 +611,7 @@ int atheme_main(int argc, char *argv[])
 	hook_call_shutdown();
 
 	if (db_save && !readonly)
-		db_save(NULL);
+		db_save(NULL, DB_SAVE_BLOCKING);
 
 	remove(pidfilename);
 	errno = 0;

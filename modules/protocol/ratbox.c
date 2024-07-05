@@ -1,22 +1,16 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005-2007 Atheme Project (http://atheme.org/)
  *
  * This file contains protocol support for ratbox-based ircd.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
-#include "protocol/ratbox.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1("protocol/ratbox", true, _modinit, NULL, PACKAGE_STRING, "Atheme Development Group <http://www.atheme.org>");
-
-/* *INDENT-OFF* */
-
-ircd_t Ratbox = {
+static struct ircd Ratbox = {
 	.ircdname = "Ratbox (1.0 or later)",
 	.tldprefix = "$$",
 	.uses_uid = true,
@@ -42,7 +36,7 @@ ircd_t Ratbox = {
 	.flags = IRCD_CIDR_BANS,
 };
 
-struct cmode_ ratbox_mode_list[] = {
+static const struct cmode ratbox_mode_list[] = {
   { 'i', CMODE_INVITE },
   { 'm', CMODE_MOD    },
   { 'n', CMODE_NOEXT  },
@@ -52,23 +46,23 @@ struct cmode_ ratbox_mode_list[] = {
   { '\0', 0 }
 };
 
-struct extmode ratbox_ignore_mode_list[] = {
+static struct extmode ratbox_ignore_mode_list[] = {
   { '\0', 0 }
 };
 
-struct cmode_ ratbox_status_mode_list[] = {
+static const struct cmode ratbox_status_mode_list[] = {
   { 'o', CSTATUS_OP    },
   { 'v', CSTATUS_VOICE },
   { '\0', 0 }
 };
 
-struct cmode_ ratbox_prefix_mode_list[] = {
+static const struct cmode ratbox_prefix_mode_list[] = {
   { '@', CSTATUS_OP    },
   { '+', CSTATUS_VOICE },
   { '\0', 0 }
 };
 
-struct cmode_ ratbox_user_mode_list[] = {
+static const struct cmode ratbox_user_mode_list[] = {
   { 'a', UF_ADMIN    },
   { 'i', UF_INVIS    },
   { 'o', UF_IRCOP    },
@@ -77,11 +71,10 @@ struct cmode_ ratbox_user_mode_list[] = {
   { '\0', 0 }
 };
 
-/* *INDENT-ON* */
-
-void _modinit(module_t * m)
+static void
+mod_init(struct module *const restrict m)
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/ts6-generic");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/ts6-generic")
 
 	mode_list = ratbox_mode_list;
 	ignore_mode_list = ratbox_ignore_mode_list;
@@ -91,14 +84,12 @@ void _modinit(module_t * m)
 	ignore_mode_list_size = ARRAY_SIZE(ratbox_ignore_mode_list);
 
 	ircd = &Ratbox;
-
-	m->mflags = MODTYPE_CORE;
-
-	pmodule_loaded = true;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("protocol/ratbox", MODULE_UNLOAD_CAPABILITY_NEVER)

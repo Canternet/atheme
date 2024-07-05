@@ -1,7 +1,16 @@
-#ifndef INLINE_CHANSERV_H
-#define INLINE_CHANSERV_H
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2013 Atheme Project (http://atheme.org/)
+ */
 
-typedef void (*cs_cmd_proto)(sourceinfo_t*, int, char**);
+#ifndef ATHEME_MOD_CHANSERV_CHANSERV_H
+#define ATHEME_MOD_CHANSERV_CHANSERV_H 1
+
+#include <atheme.h>
+
+typedef void (*cs_cmd_proto)(struct sourceinfo *, int, char**);
 
 static inline unsigned int custom_founder_check(void)
 {
@@ -75,10 +84,10 @@ static inline void prefix_action_clear(mowgli_list_t *actions)
 
 	MOWGLI_LIST_FOREACH_SAFE(n, tn, actions->head)
 	{
-		free(n->data);
+		sfree(n->data);
 		mowgli_node_delete(n, actions);
 		mowgli_node_free(n);
 	}
 }
 
-#endif
+#endif /* !ATHEME_MOD_CHANSERV_CHANSERV_H */

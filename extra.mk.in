@@ -1,132 +1,142 @@
-LIB_CFLAGS ?= @LIB_CFLAGS@
-LOCALEDIR ?= @LOCALEDIR@
-XGETTEXT ?= @XGETTEXT@
-pdfdir ?= @pdfdir@
-ECHO_N ?= @ECHO_N@
-sharedstatedir ?= @sharedstatedir@
-PKG_CONFIG ?= @PKG_CONFIG@
-OBJEXT ?= @OBJEXT@
-LIBMOWGLI ?= @LIBMOWGLI@
-PLUGIN_SUFFIX ?= @PLUGIN_SUFFIX@
-DATADIR ?= @DATADIR@
-sysconfdir ?= @sysconfdir@
-mkdir_p ?= @mkdir_p@
-CLEAN_LIB ?= @CLEAN_LIB@
-htmldir ?= @htmldir@
-bindir ?= @bindir@
-MOWGLI_LIBS ?= @MOWGLI_LIBS@
-PACKAGE_URL ?= @PACKAGE_URL@
-BUILDROOT ?= @BUILDROOT@
-LDAP_AUTHC ?= @LDAP_AUTHC@
-PACKAGE_STRING ?= @PACKAGE_STRING@
-dvidir ?= @dvidir@
-sbindir ?= @sbindir@
-CP ?= @CP@
-SET_MAKE ?= @SET_MAKE@
-PACKAGE_BUGREPORT ?= @PACKAGE_BUGREPORT@
-PLUGIN_CFLAGS ?= @PLUGIN_CFLAGS@
-ECHO_C ?= @ECHO_C@
-subdirs ?= @subdirs@
-psdir ?= @psdir@
-PCRE_CFLAGS ?= @PCRE_CFLAGS@
-POSUB ?= @POSUB@
-MSGFMT ?= @MSGFMT@
-CPP ?= @CPP@
-oldincludedir ?= @oldincludedir@
-MKINSTALLDIRS ?= @MKINSTALLDIRS@
-UNINSTALL_LIB ?= @UNINSTALL_LIB@
-datadir ?= @datadir@
-build ?= @build@
-PODIR ?= @PODIR@
-LTLIBICONV ?= @LTLIBICONV@
-CPPFLAGS ?= @CPPFLAGS@
-SHELL ?= @SHELL@
-LIB_PREFIX ?= @LIB_PREFIX@
-build_vendor ?= @build_vendor@
-LDAP_CFLAGS ?= @LDAP_CFLAGS@
-program_transform_name ?= @program_transform_name@
-host_cpu ?= @host_cpu@
-CC ?= @CC@
-mandir ?= @mandir@
-PACKAGE ?= @PACKAGE@
-MKDEP ?= @MKDEP@
-DEFS ?= @DEFS@
-LIBS ?= @LIBS@
-target_alias ?= @target_alias@
-build_cpu ?= @build_cpu@
-TAR ?= @TAR@
-BUILDDIR ?= @BUILDDIR@
-infodir ?= @infodir@
-SHAREDIR ?= @SHAREDIR@
-LTLIBINTL ?= @LTLIBINTL@
-PICFLAGS ?= @PICFLAGS@
-PLUGIN_CPPFLAGS ?= @PLUGIN_CPPFLAGS@
-PACKAGE_NAME ?= @PACKAGE_NAME@
-libexecdir ?= @libexecdir@
-localedir ?= @localedir@
-ECHO_T ?= @ECHO_T@
-MODDIR ?= @MODDIR@
-LIB_SUFFIX ?= @LIB_SUFFIX@
-LTLIBOBJS ?= @LTLIBOBJS@
-LIBOBJS ?= @LIBOBJS@
-SRCDIR ?= @SRCDIR@
-LIBICONV ?= @LIBICONV@
-includedir ?= @includedir@
-LDFLAGS ?= @LDFLAGS@
-ac_ct_CC ?= @ac_ct_CC@
-build_alias ?= @build_alias@
-PACKAGE_VERSION ?= @PACKAGE_VERSION@
-USE_NLS ?= @USE_NLS@
-LDFLAGS_RPATH ?= @LDFLAGS_RPATH@
-libdir ?= @libdir@
-CFLAGS ?= @CFLAGS@
-INSTALL_LIB ?= @INSTALL_LIB@
-RUNDIR ?= @RUNDIR@
-DOCDIR ?= @DOCDIR@
-localstatedir ?= @localstatedir@
-docdir ?= @docdir@
-GREP ?= @GREP@
-LIB_LDFLAGS ?= @LIB_LDFLAGS@
-host_vendor ?= @host_vendor@
-build_os ?= @build_os@
-SSL_LIBS ?= @SSL_LIBS@
-host_alias ?= @host_alias@
-INSTALL_SCRIPT ?= @INSTALL_SCRIPT@
-PACKAGE_TARNAME ?= @PACKAGE_TARNAME@
-INSTALL_DATA ?= @INSTALL_DATA@
-LOGDIR ?= @LOGDIR@
-RANLIB ?= @RANLIB@
-datarootdir ?= @datarootdir@
-MOWGLI_CFLAGS ?= @MOWGLI_CFLAGS@
-LN ?= @LN@
-LDAP_LIBS ?= @LDAP_LIBS@
-PCRE_LIBS ?= @PCRE_LIBS@
-ABSPATHS ?= @ABSPATHS@
-RM ?= @RM@
-INSTALL_PROGRAM ?= @INSTALL_PROGRAM@
-PLUGIN_LDFLAGS ?= @PLUGIN_LDFLAGS@
-PATH_SEPARATOR ?= @PATH_SEPARATOR@
-EXEEXT ?= @EXEEXT@
-MV ?= @MV@
-INTLLIBS ?= @INTLLIBS@
-MSGMERGE ?= @MSGMERGE@
-LIB_CPPFLAGS ?= @LIB_CPPFLAGS@
-GMSGFMT ?= @GMSGFMT@
-host_os ?= @host_os@
-exec_prefix ?= @exec_prefix@
-AR ?= @AR@
-host ?= @host@
-LIBINTL ?= @LIBINTL@
-EGREP ?= @EGREP@
-VERSION ?= @VERSION@
-prefix ?= @prefix@
-CRACKLIB_C ?= @CRACKLIB_C@
-CRACKLIB_LIBS ?= @CRACKLIB_LIBS@
-CONTRIB_ENABLE ?= @CONTRIB_ENABLE@
-PERL_ENABLE ?= @PERL_ENABLE@
-PERL_CFLAGS ?= @PERL_CFLAGS@
-PERL_LIBS ?= @PERL_LIBS@
-JANSSON_CFLAGS ?= @JANSSON_CFLAGS@
-JANSSON_LIBS ?= @JANSSON_LIBS@
-LIBQRENCODE_CFLAGS ?= @LIBQRENCODE_CFLAGS@
-LIBQRENCODE_LIBS ?= @LIBQRENCODE_LIBS@
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
+#
+# Copyright (C) 2010-2014 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2010 Stephen Bennett <spb@exherbo.org>
+# Copyright (C) 2012 Nathan Phillip Brink <binki@gentoo.org>
+# Copyright (C) 2017 Wade Cline <wadecline@hotmail.com>
+# Copyright (C) 2017-2021 Aaron M. D. Jones <me@aaronmdjones.net>
+#
+# This file should only contain variables that are *not* in buildsys.mk.in,
+# *and* that are needed by one (or more) of the codebase Makefiles, *OR*
+# variables that are needed at the *top level* of one (or more) of the
+# codebase Makefiles, regardless of whether they're also in buildsys.mk.in.
+#
+#   -- amdj
+
+# Programs used by the build system
+#
+SED                             ?= @SED@
+
+# Misc
+#
+LIB_PREFIX                      ?= @LIB_PREFIX@
+LIB_SUFFIX                      ?= @LIB_SUFFIX@
+PACKAGE_BUGREPORT               ?= @PACKAGE_BUGREPORT@
+PACKAGE_BUGREPORT_I18N          ?= @PACKAGE_BUGREPORT_I18N@
+PACKAGE_NAME                    ?= @PACKAGE_NAME@
+PACKAGE_STRING                  ?= @PACKAGE_STRING@
+PACKAGE_TARNAME                 ?= @PACKAGE_TARNAME@
+PACKAGE_URL                     ?= @PACKAGE_URL@
+PACKAGE_VERSION                 ?= @PACKAGE_VERSION@
+PROG_SUFFIX                     ?= @EXEEXT@
+USE_NLS                         ?= @USE_NLS@
+VENDOR_STRING                   ?= @VENDOR_STRING@
+
+# Autoconf Directories
+#
+prefix                          ?= @prefix@
+exec_prefix                     ?= @exec_prefix@
+datarootdir                     ?= @datarootdir@
+datadir                         ?= @datadir@
+bindir                          ?= @bindir@
+docdir                          ?= @docdir@
+dvidir                          ?= @dvidir@
+htmldir                         ?= @htmldir@
+includedir                      ?= @includedir@
+infodir                         ?= @infodir@
+libdir                          ?= @libdir@
+libexecdir                      ?= @libexecdir@
+localedir                       ?= @localedir@
+localstatedir                   ?= @localstatedir@
+mandir                          ?= @mandir@
+pdfdir                          ?= @pdfdir@
+psdir                           ?= @psdir@
+sbindir                         ?= @sbindir@
+sharedstatedir                  ?= @sharedstatedir@
+sysconfdir                      ?= @sysconfdir@
+
+# Our Directories
+#
+DATADIR                         ?= @DATADIR@
+DOCDIR                          ?= @docdir@
+LOCALEDIR                       ?= @LOCALEDIR@
+LOGDIR                          ?= @LOGDIR@
+MODDIR                          ?= @MODDIR@
+RUNDIR                          ?= @RUNDIR@
+SHAREDIR                        ?= @SHAREDIR@
+
+# Special Libraries
+#
+# These are the ones required by various parts of the core codebase. Their
+# detection is not optional; there is no --without-libfoo option provided.
+#
+CLOCK_GETTIME_LIBS              ?= @CLOCK_GETTIME_LIBS@
+LIBDL_LIBS                      ?= @LIBDL_LIBS@
+LIBMATH_LIBS                    ?= @LIBMATH_LIBS@
+LIBSOCKET_LIBS                  ?= @LIBSOCKET_LIBS@
+
+# Detected Libraries
+#
+# Some of these variables, in particular the _CFLAGS variables, will always
+# be empty, for one or more of the following reasons:
+#
+# 1) The library tests use pkg-config, but the upstream pkg-config files
+#    distributed by those libraries never export a value for CFLAGS.
+#
+# 2) The library tests don't use pkg-config, usually because the libraries
+#    don't distribute a pkg-config file, but we've replicated the names of
+#    the variables in case they start doing so in the future, so that it is
+#    easier to switch to using pkg-config for detection when they do.
+#
+# 3) The library is not available for your machine architecture, and so can
+#    never be detected by the configure script.
+#
+LIBARGON2_CFLAGS                ?= @LIBARGON2_CFLAGS@
+LIBARGON2_LIBS                  ?= @LIBARGON2_LIBS@
+LIBCRACK_CFLAGS                 ?= @LIBCRACK_CFLAGS@
+LIBCRACK_LIBS                   ?= @LIBCRACK_LIBS@
+LIBCRYPT_CFLAGS                 ?= @LIBCRYPT_CFLAGS@
+LIBCRYPT_LIBS                   ?= @LIBCRYPT_LIBS@
+LIBCRYPTO_CFLAGS                ?= @LIBCRYPTO_CFLAGS@
+LIBCRYPTO_LIBS                  ?= @LIBCRYPTO_LIBS@
+LIBGCRYPT_CFLAGS                ?= @LIBGCRYPT_CFLAGS@
+LIBGCRYPT_LIBS                  ?= @LIBGCRYPT_LIBS@
+LIBIDN_CFLAGS                   ?= @LIBIDN_CFLAGS@
+LIBIDN_LIBS                     ?= @LIBIDN_LIBS@
+LIBLDAP_CFLAGS                  ?= @LIBLDAP_CFLAGS@
+LIBLDAP_LIBS                    ?= @LIBLDAP_LIBS@
+LIBMBEDCRYPTO_CFLAGS            ?= @LIBMBEDCRYPTO_CFLAGS@
+LIBMBEDCRYPTO_LIBS              ?= @LIBMBEDCRYPTO_LIBS@
+LIBMOWGLI_CFLAGS                ?= @LIBMOWGLI_CFLAGS@
+LIBMOWGLI_LIBS                  ?= @LIBMOWGLI_LIBS@
+LIBNETTLE_CFLAGS                ?= @LIBNETTLE_CFLAGS@
+LIBNETTLE_LIBS                  ?= @LIBNETTLE_LIBS@
+LIBPASSWDQC_CFLAGS              ?= @LIBPASSWDQC_CFLAGS@
+LIBPASSWDQC_LIBS                ?= @LIBPASSWDQC_LIBS@
+LIBPCRE_CFLAGS                  ?= @LIBPCRE_CFLAGS@
+LIBPCRE_LIBS                    ?= @LIBPCRE_LIBS@
+LIBPERL_CFLAGS                  ?= @LIBPERL_CFLAGS@
+LIBPERL_LIBS                    ?= @LIBPERL_LIBS@
+LIBQRENCODE_CFLAGS              ?= @LIBQRENCODE_CFLAGS@
+LIBQRENCODE_LIBS                ?= @LIBQRENCODE_LIBS@
+LIBSODIUM_CFLAGS                ?= @LIBSODIUM_CFLAGS@
+LIBSODIUM_LIBS                  ?= @LIBSODIUM_LIBS@
+
+# Conditionally-Compiled Files
+#
+QRCODE_COND_C                   ?= @QRCODE_COND_C@
+
+# Conditionally-Compiled Directories
+#
+CRYPTO_BENCHMARK_COND_D         ?= @CRYPTO_BENCHMARK_COND_D@
+ECDH_X25519_TOOL_COND_D         ?= @ECDH_X25519_TOOL_COND_D@
+ECDSA_NIST256P_TOOLS_COND_D     ?= @ECDSA_NIST256P_TOOLS_COND_D@
+LEGACY_PWCRYPTO_COND_D          ?= @LEGACY_PWCRYPTO_COND_D@
+PERL_COND_D                     ?= @PERL_COND_D@
+PODIR_COND_D                    ?= @PODIR_COND_D@
+
+# Conditionally-Compiled Submodules
+#
+SUBMODULE_CONTRIB               ?= @SUBMODULE_CONTRIB@
+SUBMODULE_LIBMOWGLI             ?= @SUBMODULE_LIBMOWGLI@

@@ -1,12 +1,15 @@
 /*
- * Copyright (c) 2011 William Pitcock <nenolod@dereferenced.org>
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Rights to this code are as documented in doc/LICENSE.
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
  */
 
-#ifndef __EXTTARGET_H__
-#define __EXTTARGET_H__
+#ifndef ATHEME_MOD_EXTTARGET_EXTTARGET_H
+#define ATHEME_MOD_EXTTARGET_EXTTARGET_H 1
 
-typedef myentity_t *(*entity_validate_f)(const char *name);
+#include <atheme.h>
 
-#endif
+typedef struct myentity *(*entity_validate_f)(const char *name);
+
+#endif /* !ATHEME_MOD_EXTTARGET_EXTTARGET_H */

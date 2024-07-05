@@ -1,37 +1,37 @@
 /*
- * Copyright (c) 2009 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2009 Atheme Project (http://atheme.org/)
  *
  * LDAP authentication.
  */
 
-/*
- Supports the following options:
+/* Supports the following options:
+ *
+ * url -- required ldap URL (e.g. ldap://host.domain.com/)
+ *
+ * then either:
+ *
+ *   dnformat  -- basedn to authenticate against.
+ *                Use %s to specify where to insert the nick
+ *
+ * or:
+ *
+ *   base      -- basedn to begin the search for the matching dn of the user
+ *   attribute -- the attribute to search against to find the nick
+ *   binddn    -- distinguished name to bind to for searching (optional)
+ *   bindauth  -- password for the distinguished name
+ *                (optional, must specify if binddn given)
+ */
 
- url -- required ldap URL (e.g. ldap://host.domain.com/)
+#include <atheme.h>
 
- then either:
-
-   dnformat -- basedn to authenticate against.  Use %s to specify where
-        to insert the nick
-
- or
-
-   base -- basedn to begin the search for the matching dn of the user
-   attribute -- the attribute to search against to find the nick
-   binddn -- distinguished name to bind to for searching (optional)
-   bindauth -- password for the distinguished name (optional, must specify if binddn given)
-
-*/
-
-#include "atheme.h"
+#ifdef HAVE_LIBLDAP
 
 #include <ldap.h>
 
-DECLARE_MODULE_V1("auth/ldap", false, _modinit, _moddeinit, PACKAGE_STRING, "Atheme Development Group <http://www.atheme.org>");
-
-mowgli_list_t conf_ldap_table;
-struct
+static struct
 {
 	char *url;
 	char *dnformat;
@@ -41,9 +41,13 @@ struct
 	char *bindauth;
 	bool useDN;
 } ldap_config;
-LDAP *ldap_conn;
 
-static void ldap_config_ready(void *unused)
+static LDAP *ldap_conn;
+
+static mowgli_list_t conf_ldap_table;
+
+static void
+ldap_config_ready(void *unused)
 {
 	int res;
 	char *p;
@@ -97,14 +101,15 @@ static void ldap_config_ready(void *unused)
 		return;
 	}
 
-	/* short timeouts, because this blocks atheme as a whole */
+	// short timeouts, because this blocks atheme as a whole
 	ldap_set_option(ldap_conn, LDAP_OPT_TIMEOUT, &(const struct timeval){1, 0});
 	ldap_set_option(ldap_conn, LDAP_OPT_NETWORK_TIMEOUT, &(const struct timeval){1, 0});
 	ldap_set_option(ldap_conn, LDAP_OPT_DEREF, &(const int){false});
 	ldap_set_option(ldap_conn, LDAP_OPT_REFERRALS, &(const int){false});
 }
 
-static bool ldap_auth_user(myuser_t *mu, const char *password)
+static bool
+ldap_auth_user(struct myuser *mu, const char *password)
 {
 	int res;
 	struct berval cred;
@@ -136,12 +141,13 @@ static bool ldap_auth_user(myuser_t *mu, const char *password)
 		return false;
 	}
 
-/* Use DN to find exact match */
 	if (ldap_config.useDN)
 	{
+		// Use DN to find exact match
 		char dn[512];
 		cred.bv_len = strlen(password);
-		/* sstrdup it to remove the const */
+
+		// sstrdup it to remove the const
 		cred.bv_val = sstrdup(password);
 
 		snprintf(dn, sizeof dn, ldap_config.dnformat, entity(mu)->name);
@@ -160,12 +166,10 @@ static bool ldap_auth_user(myuser_t *mu, const char *password)
 		}
 		slog(LG_INFO, "ldap_auth_user(): ldap_bind_s failed: %s", ldap_err2string(res));
 		return false;
-
-
-/* Use base + attribute search for Auth */
 	}
 	else
 	{
+		// Use base + attribute search for Auth
 		char what[512];
 		char *binddn = NULL;
 
@@ -198,7 +202,8 @@ static bool ldap_auth_user(myuser_t *mu, const char *password)
 		}
 
 		cred.bv_len = strlen(password);
-		/* sstrdup it to remove the const */
+
+		// sstrdup it to remove the const
 		cred.bv_val = sstrdup(password);
 
 		for (entry = ldap_first_message(ldap_conn, message); entry && ldap_msgtype(entry) == LDAP_RES_SEARCH_ENTRY; entry = ldap_next_message(ldap_conn, entry))
@@ -219,9 +224,9 @@ static bool ldap_auth_user(myuser_t *mu, const char *password)
 	return false;
 }
 
-void _modinit(module_t * m)
+static void
+mod_init(struct module ATHEME_VATTR_UNUSED *const restrict m)
 {
-	hook_add_event("config_ready");
 	hook_add_config_ready(ldap_config_ready);
 
 	add_subblock_top_conf("LDAP", &conf_ldap_table);
@@ -237,7 +242,8 @@ void _modinit(module_t * m)
 	auth_module_loaded = true;
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	auth_user_custom = NULL;
 
@@ -256,8 +262,22 @@ void _moddeinit(module_unload_intent_t intent)
 	del_top_conf("LDAP");
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+#else /* HAVE_LIBLDAP */
+
+static void
+mod_init(struct module *const restrict m)
+{
+	(void) slog(LG_ERROR, "Module %s requires LDAP support, refusing to load.", m->name);
+
+	m->mflags |= MODFLAG_FAIL;
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	// Nothing To Do
+}
+
+#endif /* !HAVE_LIBLDAP */
+
+SIMPLE_DECLARE_MODULE_V1("auth/ldap", MODULE_UNLOAD_CAPABILITY_OK)

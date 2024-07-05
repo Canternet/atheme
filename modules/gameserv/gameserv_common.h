@@ -1,19 +1,23 @@
 /*
- * Copyright (c) 2005-2010 William Pitcock <nenolod@atheme.org>.
- * Copyright (c) 2006-2007 Jilles Tjoelker <jilles@stack.nl>.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Rights to this code are documented in doc/LICENSE.
+ * Copyright (C) 2005-2010 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2006-2007 Jilles Tjoelker <jilles@stack.nl>
  */
 
-#ifndef __GAMESERV_COMMON_H__
-#define __GAMESERV_COMMON_H__
+#ifndef ATHEME_MOD_GAMESERV_GAMESERV_COMMON_H
+#define ATHEME_MOD_GAMESERV_GAMESERV_COMMON_H 1
+
+#include <atheme.h>
 
 /*
  * Handle reporting for both fantasy commands and normal commands in GameServ
  * quickly and easily. Of course, sourceinfo has a vtable that can be manipulated,
  * but this is quicker and easier...                                  -- nenolod
  */
-static inline void gs_command_report(sourceinfo_t *si, const char *fmt, ...)
+static inline void ATHEME_FATTR_PRINTF(2, 3)
+gs_command_report(struct sourceinfo *si, const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
@@ -24,7 +28,7 @@ static inline void gs_command_report(sourceinfo_t *si, const char *fmt, ...)
 
 	if (si->c != NULL)
 	{
-		service_t *svs = service_find("gameserv");
+		struct service *svs = service_find("gameserv");
 
 		msg(svs->me->nick, si->c->name, "%s", buf);
 	}
@@ -32,11 +36,11 @@ static inline void gs_command_report(sourceinfo_t *si, const char *fmt, ...)
 		command_success_nodata(si, "%s", buf);
 }
 
-static inline bool gs_do_parameters(sourceinfo_t *si, int *parc, char ***parv, mychan_t **pmc)
+static inline bool gs_do_parameters(struct sourceinfo *si, int *parc, char ***parv, struct mychan **pmc)
 {
-	mychan_t *mc;
-	chanuser_t *cu;
-	metadata_t *md;
+	struct mychan *mc;
+	struct chanuser *cu;
+	struct metadata *md;
 	const char *who;
 	bool allow;
 
@@ -47,12 +51,12 @@ static inline bool gs_do_parameters(sourceinfo_t *si, int *parc, char ***parv, m
 		mc = mychan_find((*parv)[0]);
 		if (mc == NULL)
 		{
-			command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), (*parv)[0]);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, (*parv)[0]);
 			return false;
 		}
 		if (mc->chan == NULL)
 		{
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), mc->name);
+			command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, mc->name);
 			return false;
 		}
 		if (module_find_published("chanserv/set_gameserv"))
@@ -88,7 +92,7 @@ static inline bool gs_do_parameters(sourceinfo_t *si, int *parc, char ***parv, m
 			}
 			if (!allow)
 			{
-				command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+				command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 				return false;
 			}
 		}
@@ -101,9 +105,10 @@ static inline bool gs_do_parameters(sourceinfo_t *si, int *parc, char ***parv, m
 	return true;
 }
 
-static inline void gs_interactive_notification(myuser_t *mu, const char *notification, ...)
+static inline void ATHEME_FATTR_PRINTF(2, 3)
+gs_interactive_notification(struct myuser *mu, const char *notification, ...)
 {
-	service_t *gameserv;
+	struct service *gameserv;
 	char buf[BUFSIZE];
 	va_list va;
 
@@ -118,21 +123,15 @@ static inline void gs_interactive_notification(myuser_t *mu, const char *notific
 		myuser_notice(gameserv->nick, mu, "%s", buf);
 	else
 	{
-		service_t *svs;
+		struct service *svs;
 
 		if ((svs = service_find("memoserv")) != NULL)
 		{
-			sourceinfo_t nullinfo = { .su = gameserv->me };
+			struct sourceinfo nullinfo = { .su = gameserv->me };
 
 			command_exec_split(svs, &nullinfo, "SEND", buf, svs->commands);
 		}
 	}
 }
 
-#endif
-
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+#endif /* !ATHEME_MOD_GAMESERV_GAMESERV_H */

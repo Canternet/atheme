@@ -1,32 +1,23 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the GroupServ HELP command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/list", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_list(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_list = { "LIST", N_("List registered groups."), PRIV_GROUP_AUSPEX, 1, gs_cmd_list, { .path = "groupserv/list" } };
-
-/* Perhaps add criteria to groupser/list like there is now in chanserv/list and nickserv/list in the future */
-static void gs_cmd_list(sourceinfo_t *si, int parc, char *parv[])
+// Perhaps add criteria to groupser/list like there is now in chanserv/list and nickserv/list in the future
+static void
+gs_cmd_list(struct sourceinfo *si, int parc, char *parv[])
 {
-	myentity_t *mt;
+	struct myentity *mt;
 	char *pattern = parv[0];
 	unsigned int matches = 0;
-	myentity_iteration_state_t state;
+	struct myentity_iteration_state state;
 
 	if (!pattern)
 	{
@@ -35,18 +26,18 @@ static void gs_cmd_list(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* No need to say "Groups currently registered". You can't have a unregistered group. */
+	// No need to say "Groups currently registered". You can't have a unregistered group.
 	command_success_nodata(si, _("Groups matching pattern \2%s\2:"), pattern);
 
 	MYENTITY_FOREACH_T(mt, &state, ENT_GROUP)
 	{
-		mygroup_t *mg = group(mt);
+		struct mygroup *mg = group(mt);
 		continue_if_fail(mt != NULL);
 		continue_if_fail(mg != NULL);
 
 		if (!match(pattern, entity(mg)->name))
 		{
-			command_success_nodata(si, _("- %s (%s)"), entity(mg)->name, mygroup_founder_names(mg));
+			command_success_nodata(si, "- %s (%s)", entity(mg)->name, mygroup_founder_names(mg));
 			matches++;
 		}
 	}
@@ -54,20 +45,32 @@ static void gs_cmd_list(sourceinfo_t *si, int parc, char *parv[])
 	if (matches == 0)
 		command_success_nodata(si, _("No groups matched pattern \2%s\2"), pattern);
 	else
-		command_success_nodata(si, ngettext(N_("\2%d\2 match for pattern \2%s\2"), N_("\2%d\2 matches for pattern \2%s\2"), matches), matches, pattern);
+		command_success_nodata(si, ngettext(N_("\2%u\2 match for pattern \2%s\2"), N_("\2%u\2 matches for pattern \2%s\2"), matches), matches, pattern);
 
-	logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 (\2%d\2 matches)", pattern, matches);
+	logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 (\2%u\2 matches)", pattern, matches);
 }
 
-void _modinit(module_t *m)
+static struct command gs_list = {
+	.name           = "LIST",
+	.desc           = N_("List registered groups."),
+	.access         = PRIV_GROUP_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &gs_cmd_list,
+	.help           = { .path = "groupserv/list" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
 	use_groupserv_main_symbols(m);
 
 	service_named_bind_command("groupserv", &gs_list);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("groupserv", &gs_list);
 }
 
+SIMPLE_DECLARE_MODULE_V1("groupserv/list", MODULE_UNLOAD_CAPABILITY_OK)

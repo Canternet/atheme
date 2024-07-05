@@ -1,26 +1,21 @@
-/* main.c - rpgserv main() routine.
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+ *
+ * main.c - rpgserv main() routine.
  * based on elly's rpgserv for atheme-6.x --nenolod
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "prettyprint.h"
 
-DECLARE_MODULE_V1
-(
-	"rpgserv/info", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void rs_cmd_info(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t rs_info = { "INFO", N_("Displays info for a particular game."),
-                      AC_NONE, 1, rs_cmd_info, { .path = "rpgserv/info" } };
-
-static void rs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
+static void
+rs_cmd_info(struct sourceinfo *si, int parc, char *parv[])
 {
-	mychan_t *mc;
-	metadata_t *md;
+	struct mychan *mc;
+	struct metadata *md;
 
 	if (parc < 1)
 	{
@@ -32,7 +27,7 @@ static void rs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(parv[0]);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), parv[0]);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, parv[0]);
 		return;
 	}
 
@@ -64,12 +59,27 @@ static void rs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_GET, "RPGSERV:INFO: \2%s\2", mc->name);
 }
 
-void _modinit(module_t *m)
+static struct command rs_info = {
+	.name           = "INFO",
+	.desc           = N_("Displays info for a particular game."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &rs_cmd_info,
+	.help           = { .path = "rpgserv/info" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "rpgserv/main")
+
 	service_named_bind_command("rpgserv", &rs_info);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("rpgserv", &rs_info);
 }
+
+SIMPLE_DECLARE_MODULE_V1("rpgserv/info", MODULE_UNLOAD_CAPABILITY_OK)

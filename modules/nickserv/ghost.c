@@ -1,41 +1,22 @@
 /*
- * Copyright (c) 2005-2007 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 William Pitcock, et al.
  *
  * This file contains code for the NickServ GHOST function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/ghost", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_ghost(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_ghost = { "GHOST", N_("Reclaims use of a nickname."), AC_NONE, 2, ns_cmd_ghost, { .path = "nickserv/ghost" } };
-
-void _modinit(module_t *m)
+static void
+ns_cmd_ghost(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("nickserv", &ns_ghost);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_ghost);
-}
-
-void ns_cmd_ghost(sourceinfo_t *si, int parc, char *parv[])
-{
-	myuser_t *mu;
+	struct myuser *mu;
 	char *target = parv[0];
 	char *password = parv[1];
-	user_t *target_u;
-	mynick_t *mn;
+	struct user *target_u;
+	struct mynick *mn;
 
 	if (!target)
 	{
@@ -45,7 +26,10 @@ void ns_cmd_ghost(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	if (nicksvs.no_nick_ownership)
-		mn = NULL, mu = myuser_find(target);
+	{
+		mn = NULL;
+		mu = myuser_find(target);
+	}
 	else
 	{
 		mn = mynick_find(target);
@@ -56,6 +40,11 @@ void ns_cmd_ghost(sourceinfo_t *si, int parc, char *parv[])
 	if (!target_u)
 	{
 		command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), target);
+		return;
+	}
+	else if (is_service(target_u))
+	{
+		command_fail(si, fault_badparams, _("You cannot ghost a network service."));
 		return;
 	}
 	else if (!mu && !target_u->myuser)
@@ -76,7 +65,7 @@ void ns_cmd_ghost(sourceinfo_t *si, int parc, char *parv[])
 
 	if (password && metadata_find(mu, "private:freeze:freezer"))
 	{
-		command_fail(si, fault_authfail, "You cannot ghost users as \2%s\2 because the account has been frozen.", entity(mu)->name);
+		command_fail(si, fault_authfail, _("You cannot ghost users as \2%s\2 because the account has been frozen."), entity(mu)->name);
 		logcommand(si, CMDLOG_DO, "failed GHOST \2%s\2 (frozen)", target);
 		return;
 	}
@@ -88,9 +77,9 @@ void ns_cmd_ghost(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if ((target_u->myuser && target_u->myuser == si->smu) || /* they're identified under our account */
-			(!nicksvs.no_nick_ownership && mn && mu == si->smu) || /* we're identified under their nick's account */
-			(!nicksvs.no_nick_ownership && password && verify_password(mu, password))) /* we have the correct password */
+	if ((target_u->myuser && target_u->myuser == si->smu) || // they're identified under our account
+			(!nicksvs.no_nick_ownership && mn && mu == si->smu) || // we're identified under their nick's account
+			(!nicksvs.no_nick_ownership && password && verify_password(mu, password))) // we have the correct password
 	{
 		logcommand(si, CMDLOG_DO, "GHOST: \2%s!%s@%s\2", target_u->nick, target_u->user, target_u->vhost);
 
@@ -123,8 +112,27 @@ void ns_cmd_ghost(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_ghost = {
+	.name           = "GHOST",
+	.desc           = N_("Reclaims use of a nickname."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_ghost,
+	.help           = { .path = "nickserv/ghost" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	service_named_bind_command("nickserv", &ns_ghost);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_ghost);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/ghost", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,56 +1,47 @@
 /*
- * Copyright (c) 2005 Robin Burchell, et al.
- * Copyright (c) 2010 William Pitcock <nenolod@atheme.org>.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 Robin Burchell, et al.
+ * Copyright (C) 2010 William Pitcock <nenolod@dereferenced.org>
  *
  * List chanserv-controlled channels.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/list", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_list(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_list = { "LIST", N_("Lists channels registered matching a given pattern."), PRIV_CHAN_AUSPEX, 10, cs_cmd_list, { .path = "cservice/list" } };
-
-void _modinit(module_t *m)
+enum list_opttype
 {
-	service_named_bind_command("chanserv", &cs_list);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_list);
-}
-
-typedef enum {
 	OPT_BOOL,
 	OPT_INT,
 	OPT_STRING,
 	OPT_FLAG,
 	OPT_AGE,
-} list_opttype_t;
+};
 
-typedef struct {
-	char *option;
-	list_opttype_t opttype;
+enum list_opterr
+{
+	OPTERR_NONE,
+	OPTERR_UNKNOWN_OPT,
+	OPTERR_BAD_ARG,
+};
+
+struct list_option
+{
+	const char *option;
+	enum list_opttype opttype;
 	union {
 		bool *boolval;
 		int *intval;
-		char **strval;
+		const char **strval;
 		unsigned int *flagval;
 		time_t *ageval;
 	} optval;
 	unsigned int flag;
-} list_option_t;
+};
 
-static time_t parse_age(char *s)
+static time_t
+parse_age(const char *s)
 {
 	time_t duration;
 
@@ -72,17 +63,22 @@ static time_t parse_age(char *s)
 	return duration;
 }
 
-static void process_parvarray(list_option_t *opts, size_t optsize, int parc, char *parv[])
+static enum list_opterr
+process_parvarray(const struct list_option *opts, size_t optsize, int parc, char *parv[], char **opt_last)
 {
 	int i;
 	size_t j;
+	bool found;
 
 	for (i = 0; i < parc; i++)
 	{
+		found = false;
+		*opt_last = parv[i];
 		for (j = 0; j < optsize; j++)
 		{
 			if (!strcasecmp(opts[j].option, parv[i]))
 			{
+				found = true;
 				switch(opts[j].opttype)
 				{
 				case OPT_BOOL:
@@ -94,6 +90,8 @@ static void process_parvarray(list_option_t *opts, size_t optsize, int parc, cha
 						*opts[j].optval.intval = atoi(parv[i + 1]);
 						i++;
 					}
+					else
+						return OPTERR_BAD_ARG;
 					break;
 				case OPT_STRING:
 					if (i + 1 < parc)
@@ -101,6 +99,8 @@ static void process_parvarray(list_option_t *opts, size_t optsize, int parc, cha
 						*opts[j].optval.strval = parv[i + 1];
 						i++;
 					}
+					else
+						return OPTERR_BAD_ARG;
 					break;
 				case OPT_FLAG:
 					*opts[j].optval.flagval |= opts[j].flag;
@@ -111,16 +111,20 @@ static void process_parvarray(list_option_t *opts, size_t optsize, int parc, cha
 						*opts[j].optval.ageval = parse_age(parv[i + 1]);
 						i++;
 					}
-					break;
-				default:
+					else
+						return OPTERR_BAD_ARG;
 					break;
 				}
 			}
 		}
+		if (!found)
+			return OPTERR_UNKNOWN_OPT;
 	}
+	return OPTERR_NONE;
 }
 
-static void build_criteriastr(char *buf, int parc, char *parv[])
+static void
+build_criteriastr(char *buf, int parc, char *parv[])
 {
 	int i;
 
@@ -134,48 +138,167 @@ static void build_criteriastr(char *buf, int parc, char *parv[])
 	}
 }
 
-static void cs_cmd_list(sourceinfo_t *si, int parc, char *parv[])
+static bool
+check_extmlock(const struct metadata *md, const bool *modes, bool on)
 {
-	mychan_t *mc;
-	metadata_t *md, *mdclosed;
-	char *chanpattern = NULL, *markpattern = NULL, *closedpattern = NULL;
-	char buf[BUFSIZE];
-	char criteriastr[BUFSIZE];
-	unsigned int matches = 0;
+	for (size_t i = 0; i < ignore_mode_list_size; i++)
+	{
+		if (!modes[i])
+			continue;
+
+		if (!md)
+			return false;
+
+		const char *p = md->value;
+		while (*p != '\0')
+		{
+			if (*p == ignore_mode_list[i].mode)
+			{
+				if (on && (p[1] == ' ' || p[1] == '\0'))
+					return false;
+				else if (!on && (p[1] != ' ' && p[1] != '\0'))
+					return false;
+			}
+
+			while (*p != ' ' && *p != '\0')
+				p++;
+			while (*p == ' ')
+				p++;
+		}
+	}
+	return true;
+}
+
+static void
+cs_cmd_list(struct sourceinfo *si, int parc, char *parv[])
+{
+	const char *chanpattern = NULL, *markpattern = NULL, *closedpattern = NULL, *mlock = NULL;
 	unsigned int flagset = 0;
 	int aclsize = 0;
 	time_t age = 0, lastused = 0;
-	bool closed = false, marked = false, markmatch, closedmatch;
-	mowgli_patricia_iteration_state_t state;
-	list_option_t optstable[] = {
-		{"pattern",	OPT_STRING,	{.strval = &chanpattern}, 0},
-		{"mark-reason", OPT_STRING,	{.strval = &markpattern}, 0},
+	bool closed = false, marked = false;
+	struct list_option optstable[] = {
+		{"pattern",      OPT_STRING,    {.strval = &chanpattern}, 0},
+		{"mark-reason",  OPT_STRING,    {.strval = &markpattern}, 0},
 		{"close-reason", OPT_STRING,    {.strval = &closedpattern}, 0},
-		{"noexpire",	OPT_FLAG,	{.flagval = &flagset}, MC_HOLD},
-		{"held",	OPT_FLAG,	{.flagval = &flagset}, MC_HOLD},
-		{"hold",	OPT_FLAG,	{.flagval = &flagset}, MC_HOLD},
-		{"noop",	OPT_FLAG,	{.flagval = &flagset}, MC_NOOP},
-		{"limitflags",	OPT_FLAG,	{.flagval = &flagset}, MC_LIMITFLAGS},
-		{"secure",	OPT_FLAG,	{.flagval = &flagset}, MC_SECURE},
-		{"nosync",	OPT_FLAG,	{.flagval = &flagset}, MC_NOSYNC},
-		{"verbose",	OPT_FLAG,	{.flagval = &flagset}, MC_VERBOSE},
-		{"restricted",	OPT_FLAG,	{.flagval = &flagset}, MC_RESTRICTED},
-		{"keeptopic",	OPT_FLAG,	{.flagval = &flagset}, MC_KEEPTOPIC},
-		{"verbose-ops",	OPT_FLAG,	{.flagval = &flagset}, MC_VERBOSE_OPS},
-		{"topiclock",	OPT_FLAG,	{.flagval = &flagset}, MC_TOPICLOCK},
-		{"guard",	OPT_FLAG,	{.flagval = &flagset}, MC_GUARD},
-		{"private",	OPT_FLAG,	{.flagval = &flagset}, MC_PRIVATE},
-		{"closed",	OPT_BOOL,	{.boolval = &closed}, 0},
-		{"marked",	OPT_BOOL,	{.boolval = &marked}, 0},
-		{"aclsize",	OPT_INT,	{.intval = &aclsize}, 0},
-		{"registered",	OPT_AGE,	{.ageval = &age}, 0},
-		{"lastused",	OPT_AGE,	{.ageval = &lastused}, 0},
+		{"noexpire",     OPT_FLAG,      {.flagval = &flagset}, MC_HOLD},
+		{"held",         OPT_FLAG,      {.flagval = &flagset}, MC_HOLD},
+		{"hold",         OPT_FLAG,      {.flagval = &flagset}, MC_HOLD},
+		{"noop",         OPT_FLAG,      {.flagval = &flagset}, MC_NOOP},
+		{"limitflags",   OPT_FLAG,      {.flagval = &flagset}, MC_LIMITFLAGS},
+		{"secure",       OPT_FLAG,      {.flagval = &flagset}, MC_SECURE},
+		{"nosync",       OPT_FLAG,      {.flagval = &flagset}, MC_NOSYNC},
+		{"verbose",      OPT_FLAG,      {.flagval = &flagset}, MC_VERBOSE},
+		{"restricted",   OPT_FLAG,      {.flagval = &flagset}, MC_RESTRICTED},
+		{"keeptopic",    OPT_FLAG,      {.flagval = &flagset}, MC_KEEPTOPIC},
+		{"verbose-ops",  OPT_FLAG,      {.flagval = &flagset}, MC_VERBOSE_OPS},
+		{"topiclock",    OPT_FLAG,      {.flagval = &flagset}, MC_TOPICLOCK},
+		{"guard",        OPT_FLAG,      {.flagval = &flagset}, MC_GUARD},
+		{"private",      OPT_FLAG,      {.flagval = &flagset}, MC_PRIVATE},
+		{"pubacl",       OPT_FLAG,      {.flagval = &flagset}, MC_PUBACL},
+		{"mlock",        OPT_STRING,    {.strval = &mlock}, 0},
+		{"closed",       OPT_BOOL,      {.boolval = &closed}, 0},
+		{"marked",       OPT_BOOL,      {.boolval = &marked}, 0},
+		{"aclsize",      OPT_INT,       {.intval = &aclsize}, 0},
+		{"registered",   OPT_AGE,       {.ageval = &age}, 0},
+		{"lastused",     OPT_AGE,       {.ageval = &lastused}, 0},
 	};
 
-	process_parvarray(optstable, ARRAY_SIZE(optstable), parc, parv);
+	// This isn't a channel-specific command. Exclude it from fantasy;
+	// this also allows bots to react to it without us interfering,
+	// cf chanserv/register for precedent
+	if (si->c != NULL)
+		return;
+
+	char *opt_last;
+	enum list_opterr parv_err = process_parvarray(optstable, ARRAY_SIZE(optstable), parc, parv, &opt_last);
+	if (parv_err == OPTERR_UNKNOWN_OPT) {
+		command_fail(si, fault_badparams, _("Error: \2%s\2 is not a valid LIST option"), opt_last);
+		return;
+	}
+	else if (parv_err == OPTERR_BAD_ARG) {
+		command_fail(si, fault_badparams, _("Error: Invalid argument for option \2%s\2"), opt_last);
+		return;
+	}
+
+	char criteriastr[BUFSIZE];
 	build_criteriastr(criteriastr, parc, parv);
 
+	unsigned int mlock_on = 0, mlock_off = 0;
+	bool mlock_key = false, mlock_limit = false;
+	bool extmlock_on[ignore_mode_list_size];
+	bool extmlock_off[ignore_mode_list_size];
+	memset(extmlock_on, 0, sizeof extmlock_on);
+	memset(extmlock_off, 0, sizeof extmlock_off);
+
+	if (mlock)
+	{
+		int dir = MTYPE_NUL;
+
+		for (const char *c = mlock; *c; c++)
+		{
+			int flag;
+			switch (*c)
+			{
+				case '+':
+					dir = MTYPE_ADD;
+					break;
+
+				case '-':
+					dir = MTYPE_DEL;
+					break;
+
+				case 'l':
+					if (dir == MTYPE_DEL)
+						mlock_off |= CMODE_LIMIT;
+					else
+						mlock_limit = true;
+					break;
+
+				case 'k':
+					if (dir == MTYPE_DEL)
+						mlock_off |= CMODE_KEY;
+					else
+						mlock_key = true;
+					break;
+
+				default:
+					flag = mode_to_flag(*c);
+					if (flag)
+					{
+						if (dir == MTYPE_DEL)
+							mlock_off |= flag;
+						else
+							mlock_on |= flag;
+					}
+					else
+					{
+						size_t i;
+						for (i = 0; ignore_mode_list[i].mode != '\0'; i++)
+						{
+							if (*c == ignore_mode_list[i].mode)
+								break;
+						}
+
+						if (ignore_mode_list[i].mode == '\0')
+							continue;
+
+						if (dir == MTYPE_DEL)
+							extmlock_off[i] = true;
+						else
+							extmlock_on[i] = true;
+					}
+					break;
+			}
+		}
+	}
+
 	command_success_nodata(si, _("Channels matching \2%s\2:"), criteriastr);
+
+	unsigned int matches = 0;
+
+	struct mychan *mc;
+	mowgli_patricia_iteration_state_t state;
 
 	MOWGLI_PATRICIA_FOREACH(mc, &state, mclist)
 	{
@@ -184,23 +307,15 @@ static void cs_cmd_list(sourceinfo_t *si, int parc, char *parv[])
 
 		if (markpattern)
 		{
-			markmatch = false;
-			md = metadata_find(mc, "private:mark:reason");
-			if (md != NULL && !match(markpattern, md->value))
-				markmatch = true;
-
-			if (!markmatch)
+			const struct metadata *md = metadata_find(mc, "private:mark:reason");
+			if (md == NULL || match(markpattern, md->value) != 0)
 				continue;
 		}
 
 		if (closedpattern)
 		{
-			closedmatch = false;
-			mdclosed = metadata_find(mc, "private:close:reason");
-			if (mdclosed != NULL && !match(closedpattern, mdclosed->value))
-				closedmatch = true;
-
-			if (!closedmatch)
+			const struct metadata *md = metadata_find(mc, "private:close:reason");
+			if (md == NULL || match(closedpattern, md->value) != 0)
 				continue;
 		}
 
@@ -222,8 +337,28 @@ static void cs_cmd_list(sourceinfo_t *si, int parc, char *parv[])
 		if (lastused && (CURRTIME - mc->used) < lastused)
 			continue;
 
-		/* in the future we could add a LIMIT parameter */
-		*buf = '\0';
+		if ((mlock_on & mc->mlock_on) != mlock_on)
+			continue;
+
+		if ((mlock_off & mc->mlock_off) != mlock_off)
+			continue;
+
+		if (mlock_key && !mc->mlock_key)
+			continue;
+
+		if (mlock_limit && !mc->mlock_limit)
+			continue;
+
+		const struct metadata *extmlock_md = metadata_find(mc, "private:mlockext");
+
+		if (!check_extmlock(extmlock_md, extmlock_on, true))
+			continue;
+
+		if (!check_extmlock(extmlock_md, extmlock_off, false))
+			continue;
+
+		// in the future we could add a LIMIT parameter
+		char buf[BUFSIZE] = { 0 };
 
 		if (metadata_find(mc, "private:mark:setter")) {
 			mowgli_strlcat(buf, "\2[marked]\2", BUFSIZE);
@@ -245,15 +380,36 @@ static void cs_cmd_list(sourceinfo_t *si, int parc, char *parv[])
 		matches++;
 	}
 
-	logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 (\2%d\2 matches)", criteriastr, matches);
+	logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 (\2%u\2 matches)", criteriastr, matches);
 	if (matches == 0)
 		command_success_nodata(si, _("No channel matched criteria \2%s\2"), criteriastr);
 	else
-		command_success_nodata(si, ngettext(N_("\2%d\2 match for criteria \2%s\2"), N_("\2%d\2 matches for criteria \2%s\2"), matches), matches, criteriastr);
+		command_success_nodata(si, ngettext(N_("\2%u\2 match for criteria \2%s\2."),
+		                                    N_("\2%u\2 matches for criteria \2%s\2."),
+		                                    matches), matches, criteriastr);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_list = {
+	.name           = "LIST",
+	.desc           = N_("Lists channels registered matching a given pattern."),
+	.access         = PRIV_CHAN_AUSPEX,
+	.maxparc        = 10,
+	.cmd            = &cs_cmd_list,
+	.help           = { .path = "cservice/list" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	service_named_bind_command("chanserv", &cs_list);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_list);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/list", MODULE_UNLOAD_CAPABILITY_OK)

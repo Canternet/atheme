@@ -1,68 +1,45 @@
 /*
- * Copyright (c) 2009 Celestin, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * This file contains a BService SET which can change
- * botserv settings on channel or bot.
+ * Copyright (C) 2009-2010 Celestin, et al.
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
+ * This file contains a BotServ SET command which can change
+ * the BotServ settings on a channel or a bot.
  */
 
-#include "atheme.h"
-#include "botserv.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"botserv/set_core", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Rizon Development Group <http://dev.rizon.net>"
-);
+// Imported by other modules/botserv/set_*.so
+extern mowgli_patricia_t *bs_set_cmdtree;
+mowgli_patricia_t *bs_set_cmdtree = NULL;
 
-static void bs_help_set(sourceinfo_t *si, const char *subcmd);
-static void bs_cmd_set(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t bs_set = { "SET", N_("Configures bot options."), AC_NONE, 3, bs_cmd_set, { .func =  bs_help_set } };
-
-mowgli_patricia_t *bs_set_cmdtree;
-
-void _modinit(module_t *m)
+static void
+bs_help_set(struct sourceinfo *const restrict si, const char *const restrict subcmd)
 {
-	service_named_bind_command("botserv", &bs_set);
-
-	bs_set_cmdtree = mowgli_patricia_create(strcasecanon);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("botserv", &bs_set);
-
-	mowgli_patricia_destroy(bs_set_cmdtree, NULL, NULL);
-}
-
-/* ******************************************************************** */
-
-static void bs_help_set(sourceinfo_t *si, const char *subcmd)
-{
-	if (!subcmd)
+	if (subcmd)
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), si->service->disp);
-		command_success_nodata(si, _("Help for \2SET\2:"));
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("Configures different botserv bot options."));
-		command_success_nodata(si, " ");
-		command_help(si, bs_set_cmdtree);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more specific help use \2/msg %s HELP SET \37command\37\2."), si->service->disp);
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
+		(void) help_display_as_subcmd(si, si->service, "SET", subcmd, bs_set_cmdtree);
+		return;
 	}
-	else
-		help_display_as_subcmd(si, si->service, "SET", subcmd, bs_set_cmdtree);
+
+	(void) help_display_prefix(si, si->service);
+	(void) command_success_nodata(si, _("Help for \2SET\2:"));
+	(void) help_display_newline(si);
+	(void) command_success_nodata(si, _("Configures different botserv bot options."));
+	(void) help_display_newline(si);
+	(void) command_help(si, bs_set_cmdtree);
+	(void) help_display_moreinfo(si, si->service, "SET");
+	(void) help_display_suffix(si);
 }
 
-static void bs_cmd_set(sourceinfo_t *si, int parc, char *parv[])
+static void
+bs_cmd_set(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *dest;
 	char *cmd;
-	command_t *c;
+	struct command *c;
 
 	if (parc < 3)
 	{
@@ -76,7 +53,7 @@ static void bs_cmd_set(sourceinfo_t *si, int parc, char *parv[])
 	c = command_find(bs_set_cmdtree, cmd);
 	if (c == NULL)
 	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
+		(void) help_display_invalid(si, si->service, "SET");
 		return;
 	}
 
@@ -84,8 +61,37 @@ static void bs_cmd_set(sourceinfo_t *si, int parc, char *parv[])
 	command_exec(si->service, si, c, parc - 1, parv + 1);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command bs_set = {
+	.name           = "SET",
+	.desc           = N_("Configures bot options."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &bs_cmd_set,
+	.help           = { .func = &bs_help_set },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "botserv/main")
+
+	if (! (bs_set_cmdtree = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) service_named_bind_command("botserv", &bs_set);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_named_unbind_command("botserv", &bs_set);
+
+	(void) mowgli_patricia_destroy(bs_set_cmdtree, &command_delete_trie_cb, bs_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("botserv/set_core", MODULE_UNLOAD_CAPABILITY_OK)

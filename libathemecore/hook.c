@@ -1,42 +1,35 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * hook.c: Hook system.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
- * Copyright (c) 2013 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2005-2007 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2013 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * hook.c: Hook system.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "internal.h"
 
-mowgli_patricia_t *hooks;
-static mowgli_heap_t *hook_heap, *hook_privfn_heap;
+static mowgli_patricia_t *hooks = NULL;
+static mowgli_heap_t *hook_heap = NULL;
+static mowgli_heap_t *hook_privfn_heap = NULL;
 
 typedef struct {
-	hook_t *hook;
+	struct hook *hook;
 	void *dptr;
 	mowgli_node_t node;
 	unsigned int flags;
 } hook_run_ctx_t;
 
 typedef struct {
-	hookfn_t hookfn;
+	hook_fn hookfn;
 	mowgli_node_t node;
 } hook_privfn_ctx_t;
 
@@ -45,10 +38,11 @@ typedef struct {
 
 static mowgli_list_t hook_run_stack = { NULL, NULL, 0 };
 
-void hooks_init(void)
+void
+hooks_init(void)
 {
 	hooks = mowgli_patricia_create(strcasecanon);
-	hook_heap = sharedheap_get(sizeof(hook_t));
+	hook_heap = sharedheap_get(sizeof(struct hook));
 	hook_privfn_heap = sharedheap_get(sizeof(hook_privfn_ctx_t));
 
 	if (hook_heap == NULL || hook_privfn_heap == NULL || hooks == NULL)
@@ -58,14 +52,16 @@ void hooks_init(void)
 	}
 }
 
-static inline hook_t *hook_find(const char *name)
+static inline struct hook *
+hook_find(const char *name)
 {
 	return mowgli_patricia_retrieve(hooks, name);
 }
 
-hook_t *hook_add_event(const char *name)
+static struct hook *
+hook_add_event(const char *name)
 {
-	hook_t *nh;
+	struct hook *nh;
 
 	if((nh = hook_find(name)) != NULL)
 		return nh;
@@ -78,33 +74,18 @@ hook_t *hook_add_event(const char *name)
 	return nh;
 }
 
-static inline void hook_destroy(hook_t *hook, hook_privfn_ctx_t *priv)
+static inline void
+hook_destroy(struct hook *hook, hook_privfn_ctx_t *priv)
 {
 	mowgli_node_delete(&priv->node, &hook->hooks);
 	mowgli_heap_free(hook_privfn_heap, priv);
 }
 
-void hook_del_event(const char *name)
-{
-	hook_t *h;
-	mowgli_node_t *n, *tn;
-
-	if ((h = hook_find(name)) == NULL)
-		return;
-
-	MOWGLI_ITER_FOREACH_SAFE(n, tn, h->hooks.head)
-		hook_destroy(h, n->data);
-
-	mowgli_patricia_delete(hooks, h->name);
-	strshare_unref(h->name);
-
-	mowgli_heap_free(hook_heap, h);
-}
-
-void hook_del_hook(const char *event, hookfn_t handler)
+void
+hook_del_hook(const char *event, hook_fn handler)
 {
 	mowgli_node_t *n, *n2;
-	hook_t *h;
+	struct hook *h;
 
 	return_if_fail(event != NULL);
 	return_if_fail(handler != NULL);
@@ -122,7 +103,8 @@ void hook_del_hook(const char *event, hookfn_t handler)
 	}
 }
 
-static inline hook_privfn_ctx_t *hook_create_and_add(hook_t *hook, hookfn_t handler,
+static inline hook_privfn_ctx_t *
+hook_create_and_add(struct hook *hook, hook_fn handler,
 	void (*addfn)(void *data, mowgli_node_t *node, mowgli_list_t *list))
 {
 	hook_privfn_ctx_t *priv;
@@ -139,9 +121,10 @@ static inline hook_privfn_ctx_t *hook_create_and_add(hook_t *hook, hookfn_t hand
 	return priv;
 }
 
-void hook_add_hook(const char *event, hookfn_t handler)
+void
+hook_add_hook(const char *event, hook_fn handler)
 {
-	hook_t *h;
+	struct hook *h;
 	hook_privfn_ctx_t *priv;
 
 	return_if_fail(event != NULL);
@@ -154,9 +137,10 @@ void hook_add_hook(const char *event, hookfn_t handler)
 	hook_create_and_add(h, handler, mowgli_node_add);
 }
 
-void hook_add_hook_first(const char *event, hookfn_t handler)
+void
+hook_add_hook_first(const char *event, hook_fn handler)
 {
-	hook_t *h;
+	struct hook *h;
 
 	return_if_fail(event != NULL);
 	return_if_fail(handler != NULL);
@@ -168,7 +152,8 @@ void hook_add_hook_first(const char *event, hookfn_t handler)
 	hook_create_and_add(h, handler, mowgli_node_add_head);
 }
 
-void hook_call_event(const char *event, void *dptr)
+void
+hook_call_event(const char *event, void *dptr)
 {
 	hook_run_ctx_t ctx;
 	mowgli_node_t *n, *tn;
@@ -198,7 +183,8 @@ out:
 	mowgli_node_delete(&ctx.node, &hook_run_stack);
 }
 
-static inline hook_run_ctx_t *hook_run_stack_highest(void)
+static inline hook_run_ctx_t *
+hook_run_stack_highest(void)
 {
 	if (hook_run_stack.head == NULL)
 		return NULL;
@@ -206,7 +192,8 @@ static inline hook_run_ctx_t *hook_run_stack_highest(void)
 	return hook_run_stack.head->data;
 }
 
-void hook_stop(void)
+void
+hook_stop(void)
 {
 	hook_run_ctx_t *ctx;
 
@@ -217,7 +204,8 @@ void hook_stop(void)
 	ctx->flags |= HF_STOP;
 }
 
-void hook_continue(void *newptr)
+void
+hook_continue(void *newptr)
 {
 	hook_run_ctx_t *ctx;
 

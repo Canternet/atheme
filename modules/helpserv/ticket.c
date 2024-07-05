@@ -1,93 +1,35 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 William Pitcock <nenolod -at- nenolod.net>
  *
  * Allows requesting help for a account
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"helpserv/ticket", true, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.net>"
-);
-
-unsigned int ratelimit_count = 0;
-time_t ratelimit_firsttime = 0;
-
-static void account_drop_request(myuser_t *mu);
-static void account_delete_request(myuser_t *mu);
-static void helpserv_cmd_request(sourceinfo_t *si, int parc, char *parv[]);
-static void helpserv_cmd_list(sourceinfo_t *si, int parc, char *parv[]);
-static void helpserv_cmd_close(sourceinfo_t *si, int parc, char *parv[]);
-static void helpserv_cmd_cancel(sourceinfo_t *si, int parc, char *parv[]);
-
-static void write_ticket_db(database_handle_t *db);
-static void db_h_he(database_handle_t *db, const char *type);
-
-command_t helpserv_request = { "REQUEST", N_("Request help from network staff."), AC_AUTHENTICATED, 1, helpserv_cmd_request, { .path = "helpserv/request" } };
-command_t helpserv_list = { "LIST", N_("Lists users waiting for help."), PRIV_HELPER, 1, helpserv_cmd_list, { .path = "helpserv/list" } };
-command_t helpserv_close = { "CLOSE", N_("Close a users' help request."), PRIV_HELPER, 2, helpserv_cmd_close, { .path = "helpserv/close" } };
-command_t helpserv_cancel = { "CANCEL", N_("Cancel your own pending help request."), AC_AUTHENTICATED, 1, helpserv_cmd_cancel, { .path = "helpserv/cancel" } };
-
-struct ticket_ {
+struct help_ticket
+{
 	stringref nick;
 	time_t ticket_ts;
 	char *creator;
 	char *topic;
 };
 
-typedef struct ticket_ ticket_t;
+static unsigned int ratelimit_count = 0;
+static time_t ratelimit_firsttime = 0;
 
-mowgli_list_t helpserv_reqlist;
+static mowgli_list_t helpserv_reqlist;
 
-void _modinit(module_t *m)
-{
-	if (!module_find_published("backend/opensex"))
-	{
-		slog(LG_INFO, "Module %s requires use of the OpenSEX database backend, refusing to load.", m->name);
-		m->mflags = MODTYPE_FAIL;
-		return;
-	}
-
-	hook_add_event("user_drop");
-	hook_add_user_drop(account_drop_request);
-	hook_add_event("myuser_delete");
-	hook_add_myuser_delete(account_delete_request);
-	hook_add_db_write(write_ticket_db);
-
-	db_register_type_handler("HE", db_h_he);
-
- 	service_named_bind_command("helpserv", &helpserv_request);
-	service_named_bind_command("helpserv", &helpserv_list);
-	service_named_bind_command("helpserv", &helpserv_close);
-	service_named_bind_command("helpserv", &helpserv_cancel);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	hook_del_user_drop(account_drop_request);
-	hook_del_myuser_delete(account_delete_request);
-	hook_del_db_write(write_ticket_db);
-
-	db_unregister_type_handler("HE");
-
-	service_named_unbind_command("helpserv", &helpserv_request);
-	service_named_unbind_command("helpserv", &helpserv_list);
-	service_named_unbind_command("helpserv", &helpserv_close);
-	service_named_unbind_command("helpserv", &helpserv_cancel);
-}
-
-static void write_ticket_db(database_handle_t *db)
+static void
+write_ticket_db(struct database_handle *db)
 {
 	mowgli_node_t *n;
 
 	MOWGLI_ITER_FOREACH(n, helpserv_reqlist.head)
 	{
-		ticket_t *l = n->data;
+		struct help_ticket *l = n->data;
 
 		db_start_row(db, "HE");
 		db_write_word(db, l->nick);
@@ -98,14 +40,15 @@ static void write_ticket_db(database_handle_t *db)
 	}
 }
 
-static void db_h_he(database_handle_t *db, const char *type)
+static void
+db_h_he(struct database_handle *db, const char *type)
 {
 	const char *nick = db_sread_word(db);
 	time_t ticket_ts = db_sread_time(db);
 	const char *creator = db_sread_word(db);
 	const char *topic = db_sread_str(db);
 
-	ticket_t *l = smalloc(sizeof(ticket_t));
+	struct help_ticket *const l = smalloc(sizeof *l);
 	l->nick = strshare_get(nick);
 	l->ticket_ts = ticket_ts;
 	l->creator = sstrdup(creator);
@@ -113,10 +56,11 @@ static void db_h_he(database_handle_t *db, const char *type)
 	mowgli_node_add(l, mowgli_node_create(), &helpserv_reqlist);
 }
 
-static void account_drop_request(myuser_t *mu)
+static void
+account_drop_request(struct myuser *mu)
 {
         mowgli_node_t *n;
-        ticket_t *l;
+        struct help_ticket *l;
 
         MOWGLI_ITER_FOREACH(n, helpserv_reqlist.head)
         {
@@ -128,19 +72,20 @@ static void account_drop_request(myuser_t *mu)
                         mowgli_node_delete(n, &helpserv_reqlist);
 
                         strshare_unref(l->nick);
-                        free(l->creator);
-                        free(l->topic);
-                        free(l);
+                        sfree(l->creator);
+                        sfree(l->topic);
+                        sfree(l);
 
                         return;
                 }
         }
 }
 
-static void account_delete_request(myuser_t *mu)
+static void
+account_delete_request(struct myuser *mu)
 {
         mowgli_node_t *n;
-        ticket_t *l;
+        struct help_ticket *l;
 
         MOWGLI_ITER_FOREACH(n, helpserv_reqlist.head)
         {
@@ -152,21 +97,22 @@ static void account_delete_request(myuser_t *mu)
                         mowgli_node_delete(n, &helpserv_reqlist);
 
                         strshare_unref(l->nick);
-                        free(l->creator);
-                        free(l->topic);
-                        free(l);
+                        sfree(l->creator);
+                        sfree(l->topic);
+                        sfree(l);
 
                         return;
                 }
         }
 }
 
-/* REQUEST <topic> */
-static void helpserv_cmd_request(sourceinfo_t *si, int parc, char *parv[])
+// REQUEST <topic>
+static void
+helpserv_cmd_request(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *topic = parv[0];
 	mowgli_node_t *n;
-	ticket_t *l;
+	struct help_ticket *l;
 
 	if (!topic)
 	{
@@ -182,9 +128,12 @@ static void helpserv_cmd_request(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	if ((unsigned int)(CURRTIME - ratelimit_firsttime) > config_options.ratelimit_period)
-		ratelimit_count = 0, ratelimit_firsttime = CURRTIME;
+	{
+		ratelimit_count = 0;
+		ratelimit_firsttime = CURRTIME;
+	}
 
-	/* search for it */
+	// search for it
 	MOWGLI_ITER_FOREACH(n, helpserv_reqlist.head)
 	{
 		l = n->data;
@@ -202,7 +151,7 @@ static void helpserv_cmd_request(sourceinfo_t *si, int parc, char *parv[])
 				slog(LG_INFO, "HELP:REQUEST:THROTTLED: %s", si->su->nick);
 				return;
 			}
-			free(l->topic);
+			sfree(l->topic);
 			l->topic = sstrdup(topic);
 			l->ticket_ts = CURRTIME;;
 
@@ -220,7 +169,7 @@ static void helpserv_cmd_request(sourceinfo_t *si, int parc, char *parv[])
 		slog(LG_INFO, "HELP:REQUEST:THROTTLED: %s", si->su->nick);
 		return;
 	}
-	l = smalloc(sizeof(ticket_t));
+	l = smalloc(sizeof *l);
 	l->nick = strshare_ref(entity(si->smu)->name);
 	l->ticket_ts = CURRTIME;;
 	l->creator = sstrdup(get_source_name(si));
@@ -236,12 +185,13 @@ static void helpserv_cmd_request(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-/* CLOSE <nick> [reason] */
-static void helpserv_cmd_close(sourceinfo_t *si, int parc, char *parv[])
+// CLOSE <nick> [reason]
+static void
+helpserv_cmd_close(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *nick = parv[0];
-	user_t *u;
-	ticket_t *l;
+	struct user *u;
+	struct help_ticket *l;
 	mowgli_node_t *n;
 
 	if (!nick)
@@ -265,7 +215,7 @@ static void helpserv_cmd_close(sourceinfo_t *si, int parc, char *parv[])
 			}
 			else
 			{
-				service_t *svs;
+				struct service *svs;
 				char buf[BUFSIZE];
 
 				if ((svs = service_find("memoserv")) != NULL && myuser_find(parv[0]) != NULL)
@@ -279,14 +229,17 @@ static void helpserv_cmd_close(sourceinfo_t *si, int parc, char *parv[])
 				}
 			}
 
-			logcommand(si, CMDLOG_REQUEST, "CLOSE: Help for \2%s\2 about \2%s\2", nick, l->topic);
+			if (parv[1] != NULL)
+				logcommand(si, CMDLOG_REQUEST, "CLOSE: Help for \2%s\2 about \2%s\2 (\2%s\2)", nick, l->topic, parv[1]);
+			else
+				logcommand(si, CMDLOG_REQUEST, "CLOSE: Help for \2%s\2 about \2%s\2", nick, l->topic);
 
 			mowgli_node_delete(n, &helpserv_reqlist);
 
 			strshare_unref(l->nick);
-			free(l->creator);
-			free(l->topic);
-			free(l);
+			sfree(l->creator);
+			sfree(l->topic);
+			sfree(l);
 
 			return;
 		}
@@ -295,33 +248,35 @@ static void helpserv_cmd_close(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("Nick \2%s\2 not found in help request database."), nick);
 }
 
-/* LIST */
-static void helpserv_cmd_list(sourceinfo_t *si, int parc, char *parv[])
+// LIST
+static void
+helpserv_cmd_list(struct sourceinfo *si, int parc, char *parv[])
 {
-	ticket_t *l;
+	struct help_ticket *l;
 	mowgli_node_t *n;
-	int x = 0;
+	unsigned int x = 0;
 	char buf[BUFSIZE];
-	struct tm tm;
+	struct tm *tm;
 
 	MOWGLI_ITER_FOREACH(n, helpserv_reqlist.head)
 	{
 		l = n->data;
 		x++;
 
-		tm = *localtime(&l->ticket_ts);
-		strftime(buf, BUFSIZE, TIME_FORMAT, &tm);
-		command_success_nodata(si, "#%d Nick:\2%s\2, topic:\2%s\2 (%s - %s)",
+		tm = localtime(&l->ticket_ts);
+		strftime(buf, BUFSIZE, TIME_FORMAT, tm);
+		command_success_nodata(si, _("#%u Nick: \2%s\2, Topic: \2%s\2 (%s - %s)"),
 			x, l->nick, l->topic, l->creator, buf);
 	}
-	command_success_nodata(si, "End of list.");
+	command_success_nodata(si, _("End of list."));
 	logcommand(si, CMDLOG_GET, "LIST");
 }
 
-/* CANCEL */
-static void helpserv_cmd_cancel(sourceinfo_t *si, int parc, char *parv[])
+// CANCEL
+static void
+helpserv_cmd_cancel(struct sourceinfo *si, int parc, char *parv[])
 {
-        ticket_t *l;
+        struct help_ticket *l;
         mowgli_node_t *n;
 
         MOWGLI_ITER_FOREACH(n, helpserv_reqlist.head)
@@ -333,11 +288,11 @@ static void helpserv_cmd_cancel(sourceinfo_t *si, int parc, char *parv[])
                         mowgli_node_delete(n, &helpserv_reqlist);
 
                         strshare_unref(l->nick);
-                        free(l->creator);
-                        free(l->topic);
-                        free(l);
+                        sfree(l->creator);
+                        sfree(l->topic);
+                        sfree(l);
 
-                        command_success_nodata(si, "Your help request has been cancelled.");
+                        command_success_nodata(si, _("Your help request has been cancelled."));
 
                         logcommand(si, CMDLOG_REQUEST, "CANCEL");
                         return;
@@ -346,8 +301,72 @@ static void helpserv_cmd_cancel(sourceinfo_t *si, int parc, char *parv[])
         command_fail(si, fault_badparams, _("You do not have a help request to cancel."));
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command helpserv_request = {
+	.name           = "REQUEST",
+	.desc           = N_("Request help from network staff."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &helpserv_cmd_request,
+	.help           = { .path = "helpserv/request" },
+};
+
+static struct command helpserv_list = {
+	.name           = "LIST",
+	.desc           = N_("Lists users waiting for help."),
+	.access         = PRIV_HELPER,
+	.maxparc        = 1,
+	.cmd            = &helpserv_cmd_list,
+	.help           = { .path = "helpserv/list" },
+};
+
+static struct command helpserv_close = {
+	.name           = "CLOSE",
+	.desc           = N_("Close a users' help request."),
+	.access         = PRIV_HELPER,
+	.maxparc        = 2,
+	.cmd            = &helpserv_cmd_close,
+	.help           = { .path = "helpserv/close" },
+};
+
+static struct command helpserv_cancel = {
+	.name           = "CANCEL",
+	.desc           = N_("Cancel your own pending help request."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &helpserv_cmd_cancel,
+	.help           = { .path = "helpserv/cancel" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	if (!module_find_published("backend/opensex"))
+	{
+		slog(LG_INFO, "Module %s requires use of the OpenSEX database backend, refusing to load.", m->name);
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "helpserv/main")
+
+	hook_add_user_drop(account_drop_request);
+	hook_add_myuser_delete(account_delete_request);
+	hook_add_db_write(write_ticket_db);
+
+	db_register_type_handler("HE", db_h_he);
+
+ 	service_named_bind_command("helpserv", &helpserv_request);
+	service_named_bind_command("helpserv", &helpserv_list);
+	service_named_bind_command("helpserv", &helpserv_close);
+	service_named_bind_command("helpserv", &helpserv_cancel);
+
+	m->mflags |= MODFLAG_DBHANDLER;
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("helpserv/ticket", MODULE_UNLOAD_CAPABILITY_NEVER)

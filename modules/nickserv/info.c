@@ -1,47 +1,42 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 William Pitcock, et al.
  *
  * This file contains code for the NickServ INFO functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/info", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static bool show_custom_metadata = true;
 
-static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_info = { "INFO", N_("Displays information on registrations."), AC_NONE, 2, ns_cmd_info, { .path = "nickserv/info" } };
-
-void _modinit(module_t *m)
+static const char *
+ns_obfuscate_time_ago(time_t time)
 {
-	service_named_bind_command("nickserv", &ns_info);
+	time_t diff = CURRTIME / SECONDS_PER_WEEK - time / SECONDS_PER_WEEK;
+	static char buf[BUFSIZE];
+
+	if (diff <= 1)
+		return _("(less than two weeks ago)");
+	snprintf(buf, ARRAY_SIZE(buf), _("(about %lu weeks ago)"), (unsigned long)diff);
+	return buf;
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+ns_cmd_info(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_unbind_command("nickserv", &ns_info);
-}
-
-static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
-{
-	myuser_t *mu;
-	mynick_t *mn = NULL;
-	myuser_name_t *mun;
-	user_t *u = NULL;
+	struct myuser *mu;
+	struct mynick *mn = NULL;
+	struct myuser_name *mun;
+	struct user *u = NULL;
 	bool recognized = false;
 	const char *name = parv[0];
 	char buf[BUFSIZE], strfbuf[BUFSIZE], lastlogin[BUFSIZE], *p;
 	size_t buflen;
 	time_t registered;
-	struct tm tm, tm2;
-	metadata_t *md;
+	struct tm *tm, *tm2;
+	struct metadata *md;
 	mowgli_node_t *n;
 	mowgli_patricia_iteration_state_t state;
 	const char *vhost;
@@ -50,12 +45,10 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	time_t vhost_time;
 	bool has_user_auspex;
 	bool hide_info;
-	hook_user_req_t req;
-	hook_info_noexist_req_t noexist_req;
+	struct hook_user_req req;
+	struct hook_info_noexist_req noexist_req;
 
-	/* On IRC, default the name to something.
-	 * Not currently documented.
-	 */
+	// On IRC, default the name to something. Not currently documented.
 	if (!name && si->su)
 	{
 		if (!nicksvs.no_nick_ownership)
@@ -91,21 +84,20 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			md = metadata_find(mun, "private:mark:timestamp");
 			ts = md != NULL ? atoi(md->value) : 0;
 
-			tm = *localtime(&ts);
-			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+			tm = localtime(&ts);
+			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered anymore, but was marked by %s on %s (%s)."), mun->name, setter, strfbuf, reason);
 			hook_call_user_info_noexist(&noexist_req);
 		}
 		else {
 			hook_call_user_info_noexist(&noexist_req);
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), name);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, name);
 		}
 		return;
 	}
 
-	hide_info = use_account_private && mu->flags & MU_PRIVATE &&
-		mu != si->smu && !has_user_auspex;
+	hide_info = (mu->flags & MU_PRIVATE) && (mu != si->smu);
 
 	if (!nicksvs.no_nick_ownership)
 	{
@@ -129,14 +121,15 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("Information on \2%s\2:"), entity(mu)->name);
 
 	registered = mn != NULL ? mn->registered : mu->registered;
-	tm = *localtime(&registered);
-	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+	tm = localtime(&registered);
+	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 	command_success_nodata(si, _("Registered : %s (%s ago)"), strfbuf, time_ago(registered));
-	/* show account's time if it's different from nick's time */
+
+	// show account's time if it's different from nick's time
 	if (mu->registered != registered)
 	{
-		tm = *localtime(&mu->registered);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&mu->registered);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 		command_success_nodata(si, _("User reg.  : %s (%s ago)"), strfbuf, time_ago(mu->registered));
 	}
 
@@ -152,7 +145,7 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	md = metadata_find(mu, "private:usercloak-assigner");
 	vhost_assigner = md ? md->value : NULL;
 
-	if (!hide_info && (md = metadata_find(mu, "private:host:vhost")))
+	if ((!hide_info || has_user_auspex) && (md = metadata_find(mu, "private:host:vhost")))
 	{
 		mowgli_strlcpy(buf, md->value, sizeof buf);
 		if (vhost != NULL)
@@ -175,8 +168,8 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		if (vhost_timestring && (vhost || has_user_auspex))
 		{
 			vhost_time = atoi(vhost_timestring);
-			tm2 = *localtime(&vhost_time);
-			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm2);
+			tm2 = localtime(&vhost_time);
+			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm2);
 			buflen += snprintf(buf + buflen, BUFSIZE - buflen, _(" on %s (%s ago)"), strfbuf, time_ago(vhost_time));
 		}
 
@@ -191,53 +184,90 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			command_success_nodata(si, _("vHost      : unassigned%s"), buf);
 	}
 
+  if (!nicksvs.no_nick_ownership)
+  {
+    if (si->smu == mu || has_user_auspex)
+    {
+      MOWGLI_ITER_FOREACH(n, mu->nicks.head)
+      {
+        snprintf(buf, BUFSIZE, "private:usercloak:%s", ((struct mynick *)(n->data))->nick);
+        md = metadata_find(mu, buf);
+        vhost = md ? md->value : NULL;
+
+        if (vhost)
+        {
+          command_success_nodata(si, _("vHostNick  : %s (on %s)"), vhost, ((struct mynick *)(n->data))->nick);
+          vhost = NULL;
+          md = NULL;
+        }
+      }
+    }
+  }
+
 	if (has_user_auspex)
 	{
 		if ((md = metadata_find(mu, "private:host:actual")))
 			command_success_nodata(si, _("Real addr  : %s"), md->value);
 	}
 
-	if (recognized)
+	if ((!hide_info || has_user_auspex) && recognized)
 		command_success_nodata(si, _("Recognized : now (matches access list)"));
-	/* show nick's lastseen/online, if we have a nick */
-	if (u != NULL)
-		command_success_nodata(si, _("Last seen  : now"));
-	else if (mn != NULL)
+
+
+	// we have a registered nickname
+	if (mn != NULL)
 	{
-		tm2 = *localtime(&mn->lastseen);
-		strftime(lastlogin, sizeof lastlogin, TIME_FORMAT, &tm2);
 		if (hide_info)
-			command_success_nodata(si, _("Last seen  : (about %d weeks ago)"), (int)((CURRTIME - mn->lastseen) / 604800));
+			command_success_nodata(si, _("Last seen  : %s"), ns_obfuscate_time_ago(mn->lastseen));
+
+		// registered nickname is online
+		if (u != NULL)
+		{
+			// it's our nickname or the account isn't Private
+			if (!hide_info)
+				command_success_nodata(si, _("Last seen  : now"));
+			// it's not our nickname and the account is private but we're a soper
+			else if (has_user_auspex)
+				command_success_nodata(si, _("Last seen  : (hidden) now"));
+		}
+		// registered nickname is offline
 		else
-			command_success_nodata(si, _("Last seen  : %s (%s ago)"), lastlogin, time_ago(mn->lastseen));
+		{
+			strftime(lastlogin, sizeof lastlogin, TIME_FORMAT, localtime(&mn->lastseen));
+			// it's our nickname or the account isn't private
+			if (!hide_info)
+				command_success_nodata(si, _("Last seen  : %s (%s ago)"), lastlogin, time_ago(mn->lastseen));
+			// it's not our nickname and the account is private but we're a soper
+			else if (has_user_auspex)
+				command_success_nodata(si, _("Last seen  : (hidden) %s (%s ago)"), lastlogin, time_ago(mn->lastseen));
+		}
 	}
 
-	/* if noone is logged in to this account, show account's lastseen,
-	 * unless we have a nick and it quit at the same time as the account
-	 */
-	if (MOWGLI_LIST_LENGTH(&mu->logins) == 0)
+	if (hide_info)
+		command_success_nodata(si, _("User seen  : %s"), ns_obfuscate_time_ago(mu->lastlogin));
+	// account is logged in
+	if (MOWGLI_LIST_LENGTH(&mu->logins) > 0)
 	{
-		tm2 = *localtime(&mu->lastlogin);
-		strftime(lastlogin, sizeof lastlogin, TIME_FORMAT, &tm2);
-		if (mn == NULL)
-		{
-			if (hide_info)
-				command_success_nodata(si, _("Last seen  : (about %d weeks ago)"), (int)((CURRTIME - mu->lastlogin) / 604800));
-			else
-				command_success_nodata(si, _("Last seen  : %s (%s ago)"), lastlogin, time_ago(mu->lastlogin));
-		}
-		else if (mn->lastseen != mu->lastlogin)
-		{
-			if (hide_info)
-				command_success_nodata(si, _("User seen  : (about %d weeks ago)"), (int)((CURRTIME - mu->lastlogin) / 604800));
-			else
-				command_success_nodata(si, _("User seen  : %s (%s ago)"), lastlogin, time_ago(mu->lastlogin));
-		}
+		// it's our account or the account isn't private
+		if (!hide_info)
+			command_success_nodata(si, _("User seen  : now"));
+		// it's not our account and the account is private but we're a soper
+		else if (has_user_auspex)
+			command_success_nodata(si, _("User seen  : (hidden) now"));
 	}
-	/* someone is logged in to this account
-	 * if they're privileged, show them the sessions
-	 */
-	else if (mu == si->smu || has_user_auspex)
+	else
+	{
+		strftime(lastlogin, sizeof lastlogin, TIME_FORMAT, localtime(&mu->lastlogin));
+		// it's our account or the account isn't private
+		if (!hide_info)
+			command_success_nodata(si, _("User seen  : %s (%s ago)"), lastlogin, time_ago(mu->lastlogin));
+		// it's not our account and the account is private but we're a soper
+		else if (has_user_auspex)
+			command_success_nodata(si, _("User seen  : (hidden) %s (%s ago)"), lastlogin, time_ago(mu->lastlogin));
+	}
+
+	// if this is our account or we're a soper, show sessions
+	if (mu == si->smu || has_user_auspex)
 	{
 		buf[0] = '\0';
 		MOWGLI_ITER_FOREACH(n, mu->logins.head)
@@ -249,25 +279,15 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			}
 			if (buf[0])
 				mowgli_strlcat(buf, " ", sizeof buf);
-			mowgli_strlcat(buf, ((user_t *)(n->data))->nick, sizeof buf);
+			mowgli_strlcat(buf, ((struct user *)(n->data))->nick, sizeof buf);
 		}
 		if (buf[0])
 			command_success_nodata(si, _("Logins from: %s"), buf);
 	}
-	/* tell them this account is online, but not which nick
-	 * unless we have already told them above
-	 */
-	else if (u == NULL)
-	{
-		if (mn != NULL)
-			command_success_nodata(si, _("User seen  : now"));
-		else
-			command_success_nodata(si, _("Last seen  : now"));
-	}
 
 	if (!nicksvs.no_nick_ownership)
 	{
-		/* list registered nicks if privileged */
+		// if this is our account or we're a soper, list registered nicks
 		if (mu == si->smu || has_user_auspex)
 		{
 			buf[0] = '\0';
@@ -280,7 +300,7 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 				}
 				if (buf[0])
 					mowgli_strlcat(buf, " ", sizeof buf);
-				mowgli_strlcat(buf, ((mynick_t *)(n->data))->nick, sizeof buf);
+				mowgli_strlcat(buf, ((struct mynick *)(n->data))->nick, sizeof buf);
 			}
 			if (buf[0])
 				command_success_nodata(si, _("Nicks      : %s"), buf);
@@ -292,12 +312,24 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("Email      : %s%s"), mu->email,
 					(mu->flags & MU_HIDEMAIL) ? " (hidden)": "");
 
-	MOWGLI_PATRICIA_FOREACH(md, &state, object(mu)->metadata)
+	unsigned int mdcount = 0;
+	MOWGLI_PATRICIA_FOREACH(md, &state, atheme_object(mu)->metadata)
 	{
 		if (!strncmp(md->name, "private:", 8))
 			continue;
-		command_success_nodata(si, _("Metadata   : %s = %s"),
-				md->name, md->value);
+		if (show_custom_metadata)
+			command_success_nodata(si, _("Metadata   : %s = %s"),
+					md->name, md->value);
+		else
+			mdcount++;
+	}
+
+	if (mdcount && !show_custom_metadata)
+	{
+		if (module_find_published("nickserv/taxonomy"))
+			command_success_nodata(si, ngettext(N_("%u custom metadata entry not shown; use \2/msg %s TAXONOMY %s\2 to view it."), N_("%u custom metadata entries not shown; use \2/msg %s TAXONOMY %s\2 to view them."), mdcount), mdcount, si->service->disp, name);
+		else
+			command_success_nodata(si, ngettext(N_("%u custom metadata entry not shown."), N_("%u custom metadata entries not shown."), mdcount), mdcount);
 	}
 
 	*buf = '\0';
@@ -347,7 +379,7 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 
 		strcat(buf, "NeverGroup");
 	}
-	if (use_account_private && MU_PRIVATE & mu->flags)
+	if (MU_PRIVATE & mu->flags)
 	{
 		if (*buf)
 			strcat(buf, ", ");
@@ -375,6 +407,14 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 
 		strcat(buf, "NoPassword");
 	}
+	if (MU_LOGINNOLIMIT & mu->flags)
+	{
+		if (*buf)
+			strcat(buf, ", ");
+
+		strcat(buf, "LoginNoLimit");
+	}
+
 
 	if (*buf)
 		command_success_nodata(si, _("Flags      : %s"), buf);
@@ -390,10 +430,10 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("Oper class : %s"), mu->soper->operclass ? mu->soper->operclass->name : mu->soper->classname);
 	}
 
-	if (has_user_auspex || has_priv(si, PRIV_CHAN_AUSPEX))
+	if (mu == si->smu || has_user_auspex || has_priv(si, PRIV_CHAN_AUSPEX))
 	{
-		chanacs_t *ca;
-		int founder = 0, other = 0;
+		struct chanacs *ca;
+		unsigned int founder = 0, other = 0;
 
 		MOWGLI_ITER_FOREACH(n, entity(mu)->chanacs.head)
 		{
@@ -403,7 +443,7 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			else if (ca->level != CA_AKICK)
 				other++;
 		}
-		command_success_nodata(si, _("Channels   : %d founder, %d other"), founder, other);
+		command_success_nodata(si, _("Channels   : %u founder, %u other"), founder, other);
 	}
 
 	if (has_user_auspex && (md = metadata_find(mu, "private:freeze:freezer")))
@@ -418,10 +458,10 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		md = metadata_find(mu, "private:freeze:timestamp");
 		ts = md != NULL ? atoi(md->value) : 0;
 
-		tm = *localtime(&ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
-		command_success_nodata(si, _("%s was \2FROZEN\2 by %s on %s (%s)"), entity(mu)->name, setter, strfbuf, reason);
+		command_success_nodata(si, _("%s was \2FROZEN\2 by \2%s\2 on \2%s\2 (%s)."), entity(mu)->name, setter, strfbuf, reason);
 	}
 	else if (metadata_find(mu, "private:freeze:freezer"))
 		command_success_nodata(si, _("%s has been frozen by the %s administration."), entity(mu)->name, me.netname);
@@ -438,14 +478,14 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		md = metadata_find(mu, "private:mark:timestamp");
 		ts = md != NULL ? atoi(md->value) : 0;
 
-		tm = *localtime(&ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
-		command_success_nodata(si, _("%s was \2MARKED\2 by %s on %s (%s)"), entity(mu)->name, setter, strfbuf, reason);
+		command_success_nodata(si, _("%s was \2MARKED\2 by \2%s\2 on \2%s\2 (%s)."), entity(mu)->name, setter, strfbuf, reason);
 	}
 
 	if (MU_WAITAUTH & mu->flags)
-		command_success_nodata(si, _("%s has \2NOT COMPLETED\2 registration verification"), entity(mu)->name);
+		command_success_nodata(si, _("%s has \2NOT COMPLETED\2 registration verification."), entity(mu)->name);
 
 	if ((mu == si->smu || has_user_auspex) &&
 			(md = metadata_find(mu, "private:verify:emailchg:newemail")))
@@ -455,10 +495,10 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 
 		md = metadata_find(mu, "private:verify:emailchg:timestamp");
 		ts = md != NULL ? atoi(md->value) : 0;
-		tm = *localtime(&ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
-		command_success_nodata(si, _("%s has requested an email address change to %s on %s"), entity(mu)->name, newemail, strfbuf);
+		command_success_nodata(si, _("%s has requested an email address change to \2%s\2 on \2%s\2."), entity(mu)->name, newemail, strfbuf);
 	}
 
 	req.si = si;
@@ -471,8 +511,28 @@ static void ns_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_GET, "INFO: \2%s\2", mn != NULL ? mn->nick : entity(mu)->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_info = {
+	.name           = "INFO",
+	.desc           = N_("Displays information on registrations."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_info,
+	.help           = { .path = "nickserv/info" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	service_named_bind_command("nickserv", &ns_info);
+	add_bool_conf_item("SHOW_CUSTOM_METADATA", &nicksvs.me->conf_table, 0, &show_custom_metadata, true);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_info);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/info", MODULE_UNLOAD_CAPABILITY_OK)

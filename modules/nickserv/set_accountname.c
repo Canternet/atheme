@@ -1,56 +1,35 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Changes the account name to another registered nick
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_accountname", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
-
-static void ns_cmd_set_accountname(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_accountname = { "ACCOUNTNAME", N_("Changes your account name."), AC_NONE, 1, ns_cmd_set_accountname, { .path = "nickserv/set_accountname" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_accountname, *ns_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_accountname, *ns_set_cmdtree);
-}
-
-/* SET ACCOUNTNAME <nick> */
-static void ns_cmd_set_accountname(sourceinfo_t *si, int parc, char *parv[])
+// SET ACCOUNTNAME <nick>
+static void
+ns_cmd_set_accountname(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *newname = parv[0];
-	mynick_t *mn;
+	struct mynick *mn;
+	struct hook_user_rename_check req;
 
 	if (!newname)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "ACCOUNTNAME");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET ACCOUNTNAME");
 		command_fail(si, fault_needmoreparams, _("Syntax: SET ACCOUNTNAME <nick>"));
 		return;
 	}
 
-	if (is_conf_soper(si->smu))
+	if (is_conf_named_soper(si->smu))
 	{
-		command_fail(si, fault_noprivs, _("You may not modify your account name because your operclass is defined in the configuration file."));
+		command_fail(si, fault_noprivs, _("You may not modify your account name because your operclass is defined by name in the configuration file."));
 		return;
 	}
 
@@ -63,7 +42,7 @@ static void ns_cmd_set_accountname(sourceinfo_t *si, int parc, char *parv[])
 	mn = mynick_find(newname);
 	if (mn == NULL)
 	{
-		command_fail(si, fault_nosuch_target, _("Nick \2%s\2 is not registered."), newname);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, newname);
 		return;
 	}
 	if (mn->owner != si->smu)
@@ -78,14 +57,45 @@ static void ns_cmd_set_accountname(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
+	req.si = si;
+	req.mu = si->smu;
+	req.mn = mn;
+	req.allowed = true;
+	hook_call_user_can_rename(&req);
+	if (!req.allowed)
+	{
+		logcommand(si, CMDLOG_REGISTER, "failed SET:ACCOUNTNAME \2%s\2 -> \2%s\2 (denied by hook)", entity(si->smu)->name, newname);
+		command_fail(si, fault_authfail, _("You cannot change account name because the server configuration disallows it."));
+		return;
+	}
+
 	logcommand(si, CMDLOG_REGISTER, "SET:ACCOUNTNAME: \2%s\2", newname);
 	command_success_nodata(si, _("Your account name is now set to \2%s\2."), newname);
 	myuser_rename(si->smu, newname);
 	return;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_set_accountname = {
+	.name           = "ACCOUNTNAME",
+	.desc           = N_("Changes your account name."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_accountname,
+	.help           = { .path = "nickserv/set_accountname" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	command_add(&ns_set_accountname, *ns_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_accountname, *ns_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_accountname", MODULE_UNLOAD_CAPABILITY_OK)

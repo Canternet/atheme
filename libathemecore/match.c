@@ -1,31 +1,23 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * match.c: Casemapping and matching functions.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2016-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * match.c: Casemapping and matching functions.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
-#include <regex.h>
-#ifdef HAVE_PCRE
-#include <pcre.h>
+#ifdef HAVE_LIBPCRE
+#  include <pcre.h>
 #endif
 
 #define BadPtr(x) (!(x) || (*(x) == '\0'))
@@ -102,7 +94,8 @@ const unsigned char ToUpperTab[] = {
 	0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff
 };
 
-int ToLower(int c)
+int
+ToLower(int c)
 {
 	if (match_mapping == MATCH_ASCII)
 		return tolower((unsigned char)c);
@@ -110,7 +103,8 @@ int ToLower(int c)
 	return (ToLowerTab[(unsigned char)(c)]);
 }
 
-int ToUpper(int c)
+int
+ToUpper(int c)
 {
 	if (match_mapping == MATCH_ASCII)
 		return toupper((unsigned char)c);
@@ -118,7 +112,8 @@ int ToUpper(int c)
 	return (ToUpperTab[(unsigned char)(c)]);
 }
 
-void set_match_mapping(int type)
+void
+set_match_mapping(int type)
 {
 	match_mapping = type;
 }
@@ -139,9 +134,10 @@ void set_match_mapping(int type)
 ** Written by Douglas A Lewis (dalewis@acsu.buffalo.edu)
 */
 
-int match(const char *mask, const char *name)
+int
+match(const char *mask, const char *name)
 {
-	const u_char *m = (const u_char *)mask, *n = (const u_char *)name;
+	const unsigned char *m = (const unsigned char *)mask, *n = (const unsigned char *)name;
 	const char *ma = mask, *na = name;
 	int wild = 0, q = 0, calls = 0;
 
@@ -172,14 +168,14 @@ int match(const char *mask, const char *name)
 		{
 			if (!*n)
 				return 0;
-			for (m--; (m > (const u_char *) mask) && (*m == '?' || *m == '&' || *m == '#'); m--)
+			for (m--; (m > (const unsigned char *) mask) && (*m == '?' || *m == '&' || *m == '#'); m--)
 				;
-			if ((m > (const u_char *) mask) && (*m == '*') && (m[-1] != '\\'))
+			if ((m > (const unsigned char *) mask) && (*m == '*') && (m[-1] != '\\'))
 				return 0;
 			if (!wild)
 				return 1;
-			m = (const u_char *) ma;
-			n = (const u_char *)++ na;
+			m = (const unsigned char *) ma;
+			n = (const unsigned char *)++ na;
 		}
 		else if (!*n)
 			return 1;
@@ -195,8 +191,8 @@ int match(const char *mask, const char *name)
 		{
 			if (!wild)
 				return 1;
-			m = (const u_char *) ma;
-			n = (const u_char *)++ na;
+			m = (const unsigned char *) ma;
+			n = (const unsigned char *)++ na;
 		}
 		else
 		{
@@ -216,7 +212,8 @@ int match(const char *mask, const char *name)
 ** This particular version is "in place", so that it changes the pattern
 ** which is to be reduced to a "minimal" size.
 */
-char *collapse(char *pattern)
+char *
+collapse(char *pattern)
 {
 	char *s = pattern, *s1, *t;
 
@@ -253,7 +250,8 @@ char *collapse(char *pattern)
 **              <0, if s1 lexicographically less than s2
 **              >0, if s1 lexicographically greater than s2
 */
-int irccasecmp(const char *s1, const char *s2)
+int
+irccasecmp(const char *s1, const char *s2)
 {
 	const unsigned char *str1 = (const unsigned char *)s1;
 	const unsigned char *str2 = (const unsigned char *)s2;
@@ -275,7 +273,8 @@ int irccasecmp(const char *s1, const char *s2)
 	return (res);
 }
 
-int ircncasecmp(const char *str1, const char *str2, size_t n)
+int
+ircncasecmp(const char *str1, const char *str2, size_t n)
 {
 	const unsigned char *s1 = (const unsigned char *)str1;
 	const unsigned char *s2 = (const unsigned char *)str2;
@@ -295,7 +294,8 @@ int ircncasecmp(const char *str1, const char *str2, size_t n)
 	return (res);
 }
 
-void irccasecanon(char *str)
+void
+irccasecanon(char *str)
 {
 	while (*str)
 	{
@@ -305,7 +305,8 @@ void irccasecanon(char *str)
 	return;
 }
 
-void strcasecanon(char *str)
+void
+strcasecanon(char *str)
 {
 	while (*str)
 	{
@@ -315,7 +316,8 @@ void strcasecanon(char *str)
 	return;
 }
 
-void noopcanon(char *str)
+void
+noopcanon(char *str)
 {
 	return;
 }
@@ -579,43 +581,26 @@ const unsigned int charattrs[] = {
 	/* 0xFF */ 0,
 };
 
-enum atheme_regex_type
-{
-	at_posix = 1,
-	at_pcre = 2
-};
-
-struct atheme_regex_
-{
-	enum atheme_regex_type type;
-	union
-	{
-		regex_t posix;
-#ifdef HAVE_PCRE
-		pcre *pcre;
-#endif
-	} un;
-};
-
 /*
  * regex_compile()
  *  Compile a regex of `pattern' and return it.
  */
-atheme_regex_t *regex_create(char *pattern, int flags)
+struct atheme_regex * ATHEME_FATTR_MALLOC
+regex_create(char *pattern, int flags)
 {
 	static char errmsg[BUFSIZE];
 	int errnum;
-	atheme_regex_t *preg;
 
 	if (pattern == NULL)
 	{
 		return NULL;
 	}
 
-	preg = smalloc(sizeof(atheme_regex_t));
+	struct atheme_regex *const preg = smalloc(sizeof *preg);
+
 	if (flags & AREGEX_PCRE)
 	{
-#ifdef HAVE_PCRE
+#ifdef HAVE_LIBPCRE
 		const char *errptr;
 		int erroffset;
 
@@ -624,13 +609,13 @@ atheme_regex_t *regex_create(char *pattern, int flags)
 		{
 			slog(LG_ERROR, "regex_match(): %s at offset %d in %s",
 					errptr, erroffset, pattern);
-			free(preg);
+			sfree(preg);
 			return NULL;
 		}
 		preg->type = at_pcre;
 #else
 		slog(LG_ERROR, "regex_match(): PCRE support is not compiled in");
-		free(preg);
+		sfree(preg);
 		return NULL;
 #endif
 	}
@@ -644,7 +629,7 @@ atheme_regex_t *regex_create(char *pattern, int flags)
 			slog(LG_ERROR, "regex_match(): %s in %s",
 					errmsg, pattern);
 			regfree(&preg->un.posix);
-			free(preg);
+			sfree(preg);
 			return NULL;
 		}
 		preg->type = at_posix;
@@ -653,7 +638,8 @@ atheme_regex_t *regex_create(char *pattern, int flags)
 	return preg;
 }
 
-char *regex_extract(char *pattern, char **pend, int *pflags)
+char *
+regex_extract(char *pattern, char **pend, int *pflags)
 {
 	char c, *p, *p2;
 	bool backslash = false;
@@ -696,7 +682,8 @@ char *regex_extract(char *pattern, char **pend, int *pflags)
  *  `preg' is the regex to check with, `string' needs to be checked against.
  *  Returns `true' on match, `false' else.
  */
-bool regex_match(atheme_regex_t *preg, char *string)
+bool
+regex_match(struct atheme_regex *preg, char *string)
 {
 	if (preg == NULL || string == NULL)
 	{
@@ -708,13 +695,13 @@ bool regex_match(atheme_regex_t *preg, char *string)
 	{
 		case at_posix:
 			return regexec(&preg->un.posix, string, 0, NULL, 0) == 0;
-#ifdef HAVE_PCRE
 		case at_pcre:
+#ifdef HAVE_LIBPCRE
 			return pcre_exec(preg->un.pcre, NULL, string, strlen(string), 0, 0, NULL, 0) >= 0;
-#endif
-		default:
-			slog(LG_ERROR, "regex_match(): we were given a pattern of unknown type %d, bad!", preg->type);
+#else
+			slog(LG_ERROR, "regex_match(): we were given a PCRE pattern without PCRE support!");
 			return false;
+#endif
 	}
 }
 
@@ -722,23 +709,24 @@ bool regex_match(atheme_regex_t *preg, char *string)
  * regex_destroy()
  *  Perform cleanup with regex `preg', free associated memory.
  */
-bool regex_destroy(atheme_regex_t *preg)
+bool
+regex_destroy(struct atheme_regex *preg)
 {
 	switch (preg->type)
 	{
 		case at_posix:
 			regfree(&preg->un.posix);
 			break;
-#ifdef HAVE_PCRE
 		case at_pcre:
+#ifdef HAVE_LIBPCRE
 			pcre_free(preg->un.pcre);
 			break;
+#else
+			slog(LG_ERROR, "regex_destroy(): we were given a PCRE pattern without PCRE support!");
+			return false;
 #endif
-		default:
-			slog(LG_ERROR, "regex_destroy(): we were given a pattern of unknown type %d, bad!", preg->type);
-			break;
 	}
-	free(preg);
+	sfree(preg);
 	return true;
 }
 

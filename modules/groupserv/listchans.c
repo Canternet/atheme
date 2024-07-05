@@ -1,45 +1,25 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2011 Atheme Project (http://atheme.org/)
  *
  * This file contains code for the GroupServ LISTCHANS function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/listchans", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_listchans(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_listchans = { "LISTCHANS", N_("Lists channels that a group has access to."), AC_NONE, 1, gs_cmd_listchans, { .path = "groupserv/listchans" } };
-
-void _modinit(module_t *m)
+static void
+gs_cmd_listchans(struct sourceinfo *si, int parc, char *parv[])
 {
-	use_groupserv_main_symbols(m);
-	service_named_bind_command("groupserv", &gs_listchans);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("groupserv", &gs_listchans);
-}
-
-static void gs_cmd_listchans(sourceinfo_t *si, int parc, char *parv[])
-{
-	mygroup_t *mg;
+	struct mygroup *mg;
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 	bool operoverride = false;
 	unsigned int akicks = 0, i;
 
-	/* target */
+	// target
 	char *target = parv[0];
 
 	if (!target)
@@ -61,7 +41,7 @@ static void gs_cmd_listchans(sourceinfo_t *si, int parc, char *parv[])
 			operoverride = true;
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
@@ -79,11 +59,11 @@ static void gs_cmd_listchans(sourceinfo_t *si, int parc, char *parv[])
 
 	MOWGLI_ITER_FOREACH(n, entity(mg)->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
-		/* don't tell users they're akicked (flag +b) */
+		// don't tell users they're akicked (flag +b)
 		if (ca->level != CA_AKICK)
-			command_success_nodata(si, _("Access flag(s) %s in %s"), bitmask_to_flags(ca->level), ca->mychan->name);
+			command_success_nodata(si, _("Access flag(s) \2%s\2 in \2%s\2"), bitmask_to_flags(ca->level), ca->mychan->name);
 		else
 			akicks++;
 	}
@@ -93,13 +73,31 @@ static void gs_cmd_listchans(sourceinfo_t *si, int parc, char *parv[])
 	if (i == 0)
 		command_success_nodata(si, _("No channel access was found for the group \2%s\2."), entity(mg)->name);
 	else
-		command_success_nodata(si, ngettext(N_("\2%d\2 channel access match for the group \2%s\2"),
-						    N_("\2%d\2 channel access matches for the group \2%s\2"), i),
+		command_success_nodata(si, ngettext(N_("\2%u\2 channel access match for the group \2%s\2"),
+						    N_("\2%u\2 channel access matches for the group \2%s\2"), i),
 						    i, entity(mg)->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command gs_listchans = {
+	.name           = "LISTCHANS",
+	.desc           = N_("Lists channels that a group has access to."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &gs_cmd_listchans,
+	.help           = { .path = "groupserv/listchans" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	use_groupserv_main_symbols(m);
+	service_named_bind_command("groupserv", &gs_listchans);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("groupserv", &gs_listchans);
+}
+
+SIMPLE_DECLARE_MODULE_V1("groupserv/listchans", MODULE_UNLOAD_CAPABILITY_OK)

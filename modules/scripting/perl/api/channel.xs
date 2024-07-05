@@ -32,8 +32,8 @@ Atheme_ChannelRegistration
 register (Atheme_Channel self, Atheme_Sourceinfo si, Atheme_Account user)
 CODE:
     char *name = self->name;
-    mychan_t *mc = mychan_add(name);
-    hook_channel_req_t hdata;
+    struct mychan *mc = mychan_add(name);
+    struct hook_channel_req hdata;
 
     if (mc == NULL) {
         Perl_croak (aTHX_ "Failed to create channel registration for %s", name);
@@ -49,7 +49,7 @@ CODE:
     mc->flags |= config_options.defcflags;
 
     if ( chanacs_add(mc, entity(user), custom_founder_check(), CURRTIME, entity(si->smu)) == NULL) {
-        object_unref (mc);
+        atheme_object_unref (mc);
         mc = NULL;
         Perl_croak (aTHX_ "Failed to create channel access for %s", name);
     }

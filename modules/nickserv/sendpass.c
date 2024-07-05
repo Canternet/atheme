@@ -1,34 +1,13 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService SENDPASS function.
- *
  */
 
-#include "atheme.h"
-
-DECLARE_MODULE_V1
-(
-	"nickserv/sendpass", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_sendpass(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_sendpass = { "SENDPASS", N_("Email registration passwords."), PRIV_USER_SENDPASS, 2, ns_cmd_sendpass, { .path = "nickserv/sendpass" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_CONFLICT(m, "nickserv/sendpass_user")
-	service_named_bind_command("nickserv", &ns_sendpass);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_sendpass);
-}
+#include <atheme.h>
 
 enum specialoperation
 {
@@ -37,17 +16,18 @@ enum specialoperation
 	op_clear
 };
 
-static void ns_cmd_sendpass(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_sendpass(struct sourceinfo *si, int parc, char *parv[])
 {
-	myuser_t *mu;
+	struct myuser *mu;
 	char *name = parv[0];
 	char *newpass = NULL;
 	char *key;
-	metadata_t *md;
+	struct metadata *md;
 	enum specialoperation op = op_none;
 	bool ismarked = false;
 	char cmdtext[NICKLEN + 20];
-	hook_user_needforce_t needforce_hdata;
+	struct hook_user_needforce needforce_hdata;
 
 	if (!name)
 	{
@@ -72,7 +52,7 @@ static void ns_cmd_sendpass(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!(mu = myuser_find_by_nick(name)))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), name);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, name);
 		return;
 	}
 
@@ -177,7 +157,7 @@ static void ns_cmd_sendpass(sourceinfo_t *si, int parc, char *parv[])
 
 		if (ismarked)
 		{
-			wallops("%s sent the password for the \2MARKED\2 account %s.", get_oper_name(si), entity(mu)->name);
+			wallops("\2%s\2 sent the password for the \2MARKED\2 account %s.", get_oper_name(si), entity(mu)->name);
 			if (md)
 				command_success_nodata(si, _("Overriding MARK placed by %s on the account %s."), md->value, entity(mu)->name);
 			else
@@ -185,26 +165,34 @@ static void ns_cmd_sendpass(sourceinfo_t *si, int parc, char *parv[])
 		}
 		logcommand(si, CMDLOG_ADMIN, "SENDPASS: \2%s\2 (change key)", name);
 
-		key = random_string(12);
-		metadata_add(mu, "private:sendpass:sender", get_oper_name(si));
-		metadata_add(mu, "private:sendpass:timestamp", number_to_string(time(NULL)));
+		key = random_string(config_options.default_pass_length);
 
-		if (sendemail(si->su != NULL ? si->su : si->service->me, mu, EMAIL_SETPASS, mu->email, key))
+		const char *const hash = crypt_password(key);
+
+		if (!hash)
+		{
+			command_fail(si, fault_internalerror, _("Hash generation for password change key failed."));
+			sfree(key);
+			return;
+		}
+		if (!sendemail(si->su != NULL ? si->su : si->service->me, mu, EMAIL_SETPASS, mu->email, key))
 		{
 			command_fail(si, fault_emailfail, _("Email send failed."));
-			free(key);
+			sfree(key);
 			return;
 		}
 
-		metadata_add(mu, "private:setpass:key", crypt_string(key, gen_salt()));
-		free(key);
+		metadata_add(mu, "private:sendpass:sender", get_oper_name(si));
+		metadata_add(mu, "private:sendpass:timestamp", number_to_string(time(NULL)));
+		metadata_add(mu, "private:setpass:key", hash);
+		sfree(key);
 
 		command_success_nodata(si, _("The password change key for \2%s\2 has been sent to \2%s\2."), entity(mu)->name, mu->email);
 	}
 	else {
 		if (ismarked)
 		{
-			wallops("%s sent the password for the \2MARKED\2 account %s.", get_oper_name(si), entity(mu)->name);
+			wallops("\2%s\2 sent the password for the \2MARKED\2 account %s.", get_oper_name(si), entity(mu)->name);
 			if (md)
 				command_success_nodata(si, _("Overriding MARK placed by %s on the account %s."), md->value, entity(mu)->name);
 			else
@@ -212,19 +200,19 @@ static void ns_cmd_sendpass(sourceinfo_t *si, int parc, char *parv[])
 		}
 		logcommand(si, CMDLOG_ADMIN, "SENDPASS: \2%s\2", name);
 
-		newpass = random_string(12);
+		newpass = random_string(16);
 		metadata_add(mu, "private:sendpass:sender", get_oper_name(si));
 		metadata_add(mu, "private:sendpass:timestamp", number_to_string(time(NULL)));
 
 		if (!sendemail(si->su != NULL ? si->su : si->service->me, mu, EMAIL_SENDPASS, mu->email, newpass))
 		{
 			command_fail(si, fault_emailfail, _("Email send failed."));
-			free(newpass);
+			sfree(newpass);
 			return;
 		}
 
 		set_password(mu, newpass);
-		free(newpass);
+		sfree(newpass);
 
 		command_success_nodata(si, _("The password for \2%s\2 has been sent to \2%s\2."), entity(mu)->name, mu->email);
 
@@ -236,8 +224,28 @@ static void ns_cmd_sendpass(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_sendpass = {
+	.name           = "SENDPASS",
+	.desc           = N_("Email registration passwords."),
+	.access         = PRIV_USER_SENDPASS,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_sendpass,
+	.help           = { .path = "nickserv/sendpass" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_CONFLICT(m, "nickserv/sendpass_user")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	service_named_bind_command("nickserv", &ns_sendpass);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_sendpass);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/sendpass", MODULE_UNLOAD_CAPABILITY_OK)

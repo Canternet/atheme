@@ -1,61 +1,24 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Enable fantasy commands.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"botserv/set_fantasy", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **bs_set_cmdtree = NULL;
 
-mowgli_patricia_t **bs_set_cmdtree;
-
-static void bs_set_fantasy_config_ready(void *unused);
-
-static void bs_cmd_set_fantasy(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t bs_set_fantasy = { "FANTASY", N_("Enable fantasy commands."), AC_AUTHENTICATED, 2, bs_cmd_set_fantasy, { .path = "botserv/set_fantasy" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, bs_set_cmdtree, "botserv/set_core", "bs_set_cmdtree");
-
-	command_add(&bs_set_fantasy, *bs_set_cmdtree);
-
-	hook_add_event("config_ready");
-	hook_add_config_ready(bs_set_fantasy_config_ready);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&bs_set_fantasy, *bs_set_cmdtree);
-
-	hook_del_config_ready(bs_set_fantasy_config_ready);
-}
-
-static void bs_set_fantasy_config_ready(void *unused)
-{
-	if (chansvs.fantasy)
-		bs_set_fantasy.access = NULL;
-	else
-		bs_set_fantasy.access = AC_DISABLED;
-}
-
-static void bs_cmd_set_fantasy(sourceinfo_t *si, int parc, char *parv[])
+static void
+bs_cmd_set_fantasy(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *channel = parv[0];
 	char *option = parv[1];
-	mychan_t *mc;
-	metadata_t *md;
+	struct mychan *mc;
+	struct metadata *md;
 
 	if (parc < 2 || !channel || !option)
 	{
@@ -67,13 +30,13 @@ static void bs_cmd_set_fantasy(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_SET))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -99,8 +62,40 @@ static void bs_cmd_set_fantasy(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command bs_set_fantasy = {
+	.name           = "FANTASY",
+	.desc           = N_("Enable fantasy commands."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &bs_cmd_set_fantasy,
+	.help           = { .path = "botserv/set_fantasy" },
+};
+
+static void
+bs_set_fantasy_config_ready(void *unused)
+{
+	if (chansvs.fantasy)
+		bs_set_fantasy.access = AC_NONE;
+	else
+		bs_set_fantasy.access = AC_DISABLED;
+}
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, bs_set_cmdtree, "botserv/set_core", "bs_set_cmdtree")
+
+	command_add(&bs_set_fantasy, *bs_set_cmdtree);
+
+	hook_add_config_ready(bs_set_fantasy_config_ready);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&bs_set_fantasy, *bs_set_cmdtree);
+
+	hook_del_config_ready(bs_set_fantasy_config_ready);
+}
+
+SIMPLE_DECLARE_MODULE_V1("botserv/set_fantasy", MODULE_UNLOAD_CAPABILITY_OK)

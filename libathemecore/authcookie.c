@@ -1,35 +1,28 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * authcookie.c: Remote authentication ticket management
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2011 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2017-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * authcookie.c: Remote authentication ticket management
  */
 
-#include "atheme.h"
-#include "authcookie.h"
+#include <atheme.h>
+#include "internal.h"
 
-mowgli_list_t authcookie_list;
-mowgli_heap_t *authcookie_heap;
+static mowgli_list_t authcookie_list;
+static mowgli_heap_t *authcookie_heap = NULL;
 
-void authcookie_init(void)
+void
+authcookie_init(void)
 {
-	authcookie_heap = sharedheap_get(sizeof(authcookie_t));
+	authcookie_heap = sharedheap_get(sizeof(struct authcookie));
 
 	if (!authcookie_heap)
 	{
@@ -50,13 +43,13 @@ void authcookie_init(void)
  * Side Effects:
  *       an authcookie ticket is created, and validated.
  */
-authcookie_t *authcookie_create(myuser_t *mu)
+struct authcookie *
+authcookie_create(struct myuser *mu)
 {
-	authcookie_t *au = mowgli_heap_alloc(authcookie_heap);
-
-	au->ticket = random_string(20);
+	struct authcookie *const au = mowgli_heap_alloc(authcookie_heap);
+	au->ticket = random_string(AUTHCOOKIE_LENGTH);
 	au->myuser = mu;
-	au->expire = CURRTIME + 3600;
+	au->expire = CURRTIME + SECONDS_PER_HOUR;
 
 	mowgli_node_add(au, &au->node, &authcookie_list);
 
@@ -67,7 +60,7 @@ authcookie_t *authcookie_create(myuser_t *mu)
  * authcookie_find()
  *
  * Inputs:
- *       either the ticket string, the myuser_t it is associated with, or both
+ *       either the ticket string, the struct myuser it is associated with, or both
  *
  * Outputs:
  *       the authcookie ticket for this object, if any
@@ -75,10 +68,11 @@ authcookie_t *authcookie_create(myuser_t *mu)
  * Side Effects:
  *       none
  */
-authcookie_t *authcookie_find(char *ticket, myuser_t *myuser)
+struct authcookie *
+authcookie_find(const char *ticket, struct myuser *myuser)
 {
 	mowgli_node_t *n;
-	authcookie_t *ac;
+	struct authcookie *ac;
 
 	/* at least one must be specified */
 	return_val_if_fail(ticket != NULL || myuser != NULL, NULL);
@@ -130,12 +124,13 @@ authcookie_t *authcookie_find(char *ticket, myuser_t *myuser)
  * Side Effects:
  *       an authcookie is destroyed
  */
-void authcookie_destroy(authcookie_t * ac)
+void
+authcookie_destroy(struct authcookie * ac)
 {
 	return_if_fail(ac != NULL);
 
 	mowgli_node_delete(&ac->node, &authcookie_list);
-	free(ac->ticket);
+	sfree(ac->ticket);
 	mowgli_heap_free(authcookie_heap, ac);
 }
 
@@ -143,7 +138,7 @@ void authcookie_destroy(authcookie_t * ac)
  * authcookie_destroy_all()
  *
  * Inputs:
- *       a myuser_t pointer
+ *       a struct myuser pointer
  *
  * Outputs:
  *       none
@@ -151,10 +146,11 @@ void authcookie_destroy(authcookie_t * ac)
  * Side Effects:
  *       all authcookies for the user are destroyed
  */
-void authcookie_destroy_all(myuser_t *mu)
+void
+authcookie_destroy_all(struct myuser *mu)
 {
 	mowgli_node_t *n, *tn;
-	authcookie_t *ac;
+	struct authcookie *ac;
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, authcookie_list.head)
 	{
@@ -177,9 +173,10 @@ void authcookie_destroy_all(myuser_t *mu)
  * Side Effects:
  *       expired authcookies are destroyed
  */
-void authcookie_expire(void *arg)
+void
+authcookie_expire(void *arg)
 {
-	authcookie_t *ac;
+	struct authcookie *ac;
 	mowgli_node_t *n, *tn;
 
 	(void)arg;
@@ -205,9 +202,10 @@ void authcookie_expire(void *arg)
  * Side Effects:
  *       expired authcookies are destroyed here
  */
-bool authcookie_validate(char *ticket, myuser_t *myuser)
+bool ATHEME_FATTR_WUR
+authcookie_validate(const char *ticket, struct myuser *myuser)
 {
-	authcookie_t *ac = authcookie_find(ticket, myuser);
+	struct authcookie *ac = authcookie_find(ticket, myuser);
 
 	if (ac == NULL)
 		return false;

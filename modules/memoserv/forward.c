@@ -1,113 +1,87 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 Atheme Project (http://atheme.org/)
  *
  * This file contains code for the Memoserv FORWARD function
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"memoserv/forward", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ms_forward = { "FORWARD", N_(N_("Forwards a memo.")),
-                        AC_AUTHENTICATED, 2, ms_cmd_forward, { .path = "memoserv/forward" } };
-
-void _modinit(module_t *m)
+static void
+ms_cmd_forward(struct sourceinfo *si, int parc, char *parv[])
 {
-        service_named_bind_command("memoserv", &ms_forward);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("memoserv", &ms_forward);
-}
-
-static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[])
-{
-	/* Misc structs etc */
-	user_t *tu;
-	myuser_t *tmu;
-	mymemo_t *memo, *newmemo;
+	// Misc structs etc
+	struct user *tu;
+	struct myuser *tmu;
+	struct mymemo *memo, *newmemo;
 	mowgli_node_t *n, *temp;
 	unsigned int i = 1, memonum = 0;
+	struct service *const memoserv = service_find("memoserv");
 
-	/* Grab args */
+	// Grab args
 	char *target = parv[0];
 	char *arg = parv[1];
 
-	/* Arg validator */
-	if (!target || !arg)
+	// Arg validator
+	if (! target || ! arg || ! string_to_uint(arg, &memonum))
 	{
-		command_fail(si, fault_needmoreparams,
-			STR_INSUFFICIENT_PARAMS, "FORWARD");
-
-		command_fail(si, fault_needmoreparams,
-			"Syntax: FORWARD <account> <memo number>");
-
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "FORWARD");
+		command_fail(si, fault_needmoreparams, _("Syntax: FORWARD <account> <memo number>"));
 		return;
 	}
-	else
-		memonum = atoi(arg);
 
 	if (si->smu->flags & MU_WAITAUTH)
 	{
-		command_fail(si, fault_notverified, _("You need to verify your email address before you may send memos."));
+		command_fail(si, fault_notverified, STR_EMAIL_NOT_VERIFIED);
 		return;
 	}
 
-	/* Check to see if any memos */
+	// Check to see if any memos
 	if (!si->smu->memos.count)
 	{
 		command_fail(si, fault_nosuch_key, _("You have no memos to forward."));
 		return;
 	}
 
-	/* Check to see if target user exists */
+	// Check to see if target user exists
 	if (!(tmu = myuser_find_ext(target)))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
 
-	/* Make sure target isn't sender */
+	// Make sure target isn't sender
 	if (si->smu == tmu)
 	{
 		command_fail(si, fault_noprivs, _("You cannot send yourself a memo."));
 		return;
 	}
 
-	/* Make sure arg is an int */
+	// Make sure arg is an int
 	if (!memonum)
 	{
 		command_fail(si, fault_badparams, _("Invalid message index."));
 		return;
 	}
 
-	/* check if targetuser has nomemo set */
+	// check if targetuser has nomemo set
 	if (tmu->flags & MU_NOMEMO)
 	{
-		command_fail(si, fault_noprivs,
-			"\2%s\2 does not wish to receive memos.", target);
+		command_fail(si, fault_noprivs, _("\2%s\2 does not wish to receive memos."), target);
 
 		return;
 	}
 
-	/* Check to see if memo n exists */
+	// Check to see if memo n exists
 	if (memonum > si->smu->memos.count)
 	{
 		command_fail(si, fault_nosuch_key, _("Invalid memo number."));
 		return;
 	}
 
-	/* Check to make sure target inbox not full */
+	// Check to make sure target inbox not full
 	if (tmu->memos.count >= me.mdlimit)
 	{
 		command_fail(si, fault_toomany, _("Target inbox is full."));
@@ -115,7 +89,7 @@ static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* rate limit it -- jilles */
+	// rate limit it -- jilles
 	if (CURRTIME - si->smu->memo_ratelimit_time > MEMO_MAX_TIME)
 		si->smu->memo_ratelimit_num = 0;
 	if (si->smu->memo_ratelimit_num > MEMO_MAX_NUM && !has_priv(si, PRIV_FLOOD))
@@ -126,11 +100,11 @@ static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[])
 	si->smu->memo_ratelimit_num++;
 	si->smu->memo_ratelimit_time = CURRTIME;
 
-	/* Make sure we're not on ignore */
+	// Make sure we're not on ignore
 	MOWGLI_ITER_FOREACH(n, tmu->memo_ignores.head)
 	{
-		mynick_t *mn;
-		myuser_t *mu;
+		struct mynick *mn;
+		struct myuser *mu;
 
 		if (nicksvs.no_nick_ownership)
 			mu = myuser_find((const char *)n->data);
@@ -141,7 +115,7 @@ static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[])
 		}
 		if (mu == si->smu)
 		{
-			/* Lie... change this if you want it to fail silent */
+			// Lie... change this if you want it to fail silent
 			logcommand(si, CMDLOG_SET, "failed FORWARD to \2%s\2 (on ignore list)", entity(tmu)->name);
 			command_success_nodata(si, _("The memo has been successfully forwarded to \2%s\2."), target);
 			return;
@@ -149,27 +123,26 @@ static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[])
 	}
 	logcommand(si, CMDLOG_SET, "FORWARD: to \2%s\2", entity(tmu)->name);
 
-	/* Go to forwarding memos */
+	// Go to forwarding memos
 	MOWGLI_ITER_FOREACH(n, si->smu->memos.head)
 	{
 		if (i == memonum)
 		{
-			/* should have some function for send here...  ask nenolod*/
-			memo = (mymemo_t *)n->data;
-			newmemo = smalloc(sizeof(mymemo_t));
+			// should have some function for send here...  ask nenolod
+			memo = (struct mymemo *)n->data;
+			newmemo = smalloc(sizeof *newmemo);
 
-			/* Create memo */
+			// Create memo
 			newmemo->sent = CURRTIME;
-			newmemo->status = 0;
-			mowgli_strlcpy(newmemo->sender,entity(si->smu)->name,NICKLEN);
-			mowgli_strlcpy(newmemo->text,memo->text,MEMOLEN);
+			mowgli_strlcpy(newmemo->sender, entity(si->smu)->name, sizeof newmemo->sender);
+			mowgli_strlcpy(newmemo->text, memo->text, sizeof newmemo->text);
 
-			/* Create node, add to their linked list of memos */
+			// Create node, add to their linked list of memos
 			temp = mowgli_node_create();
 			mowgli_node_add(newmemo, temp, &tmu->memos);
 			tmu->memoct_new++;
 
-			/* Should we email this? */
+			// Should we email this?
 			if (tmu->flags & MU_EMAILMEMOS)
 			{
 				sendemail(si->su, tmu, EMAIL_MEMO, tmu->email, memo->text);
@@ -178,8 +151,7 @@ static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[])
 		i++;
 	}
 
-	/* Note: do not disclose other nicks they're logged in with
-	 * -- jilles */
+	// Note: do not disclose other nicks they're logged in with  -- jilles
 	tu = user_find_named(target);
 	if (tu != NULL && tu->myuser == tmu)
 	{
@@ -189,15 +161,35 @@ static void ms_cmd_forward(sourceinfo_t *si, int parc, char *parv[])
 		myuser_notice(si->service->nick, tmu, "You have a new forwarded memo from %s (%zu).", entity(si->smu)->name, MOWGLI_LIST_LENGTH(&tmu->memos));
 	else
 		myuser_notice(si->service->nick, tmu, "You have a new forwarded memo from %s (nick: %s) (%zu).", entity(si->smu)->name, si->su->nick, MOWGLI_LIST_LENGTH(&tmu->memos));
-	myuser_notice(si->service->nick, tmu, _("To read it, type /%s%s READ %zu"),
-				ircd->uses_rcommand ? "" : "msg ", si->service->disp, MOWGLI_LIST_LENGTH(&tmu->memos));
+
+	myuser_notice(si->service->nick, tmu, "To read it, type \2/msg %s READ %zu\2",
+	              memoserv->disp, MOWGLI_LIST_LENGTH(&tmu->memos));
 
 	command_success_nodata(si, _("The memo has been successfully forwarded to \2%s\2."), target);
 	return;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ms_forward = {
+	.name           = "FORWARD",
+	.desc           = N_("Forwards a memo."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &ms_cmd_forward,
+	.help           = { .path = "memoserv/forward" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "memoserv/main")
+
+        service_named_bind_command("memoserv", &ms_forward);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("memoserv", &ms_forward);
+}
+
+SIMPLE_DECLARE_MODULE_V1("memoserv/forward", MODULE_UNLOAD_CAPABILITY_OK)

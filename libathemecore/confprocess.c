@@ -1,33 +1,26 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * confprocess.c: Generic configuration processing.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2008 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * confprocess.c: Generic configuration processing.
  */
 
-#include "atheme.h"
-#include <limits.h>
+#include <atheme.h>
+#include "internal.h"
 
 enum conftype
 {
 	CONF_HANDLER,
 	CONF_UINT,
+	CONF_DOUBLE,
 	CONF_DURATION,
 	CONF_DUPSTR,
 	CONF_BOOL,
@@ -52,6 +45,13 @@ struct ConfTable
 		} uint_val;
 		struct
 		{
+			double *var;
+			double min;
+			double max;
+			double def;
+		} double_val;
+		struct
+		{
 			unsigned int *var;
 			const char *defunit;
 			unsigned int def;
@@ -72,14 +72,15 @@ struct ConfTable
 	mowgli_node_t node;
 };
 
-mowgli_heap_t *conftable_heap;
+static mowgli_list_t confblocks;
+static mowgli_heap_t *conftable_heap = NULL;
 
-mowgli_list_t confblocks;
 bool conf_need_rehash;
 
 /* *INDENT-ON* */
 
-void conf_report_warning(mowgli_config_file_entry_t *ce, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(2, 3)
+conf_report_warning(mowgli_config_file_entry_t *ce, const char *fmt, ...)
 {
 	va_list va;
 	char buf[BUFSIZE];
@@ -108,7 +109,8 @@ void conf_report_warning(mowgli_config_file_entry_t *ce, const char *fmt, ...)
 	slog(LG_ERROR, "%s:%d: [%s] warning: %s", ce->fileptr->filename, ce->varlinenum, name, buf);
 }
 
-bool process_uint_configentry(mowgli_config_file_entry_t *ce, unsigned int *var,
+bool
+process_uint_configentry(mowgli_config_file_entry_t *ce, unsigned int *var,
 		unsigned int min, unsigned int max)
 {
 	unsigned long v;
@@ -139,6 +141,38 @@ bool process_uint_configentry(mowgli_config_file_entry_t *ce, unsigned int *var,
 	return true;
 }
 
+bool
+process_double_configentry(mowgli_config_file_entry_t *ce, double *var, double min, double max)
+{
+	double v;
+	char *end;
+
+	if (ce->vardata == NULL)
+	{
+		conf_report_warning(ce, "no parameter for configuration option");
+		return false;
+	}
+	errno = 0;
+	v = strtod(ce->vardata, &end);
+	if (errno != 0 || *end != '\0' || end == ce->vardata)
+	{
+		conf_report_warning(ce, "invalid double \"%s\"",
+				ce->vardata);
+		return false;
+	}
+	if (v > max || v < min)
+	{
+		conf_report_warning(ce, "value %f is out of range [%f,%f]",
+				v,
+				min,
+				max);
+		return false;
+	}
+	*var = v;
+	return true;
+}
+
+
 static struct
 {
 	const char *name;
@@ -146,14 +180,15 @@ static struct
 } duration_units[] =
 {
 	{ "s", 1 }, /* must be first */
-	{ "m", 60 },
-	{ "h", 60 * 60 },
-	{ "d", 24 * 60 * 60 },
-	{ "w", 7 * 24 * 60 * 60 },
+	{ "m", SECONDS_PER_MINUTE },
+	{ "h", SECONDS_PER_HOUR },
+	{ "d", SECONDS_PER_DAY },
+	{ "w", SECONDS_PER_WEEK },
 	{ NULL, 0 }
 };
 
-bool process_duration_configentry(mowgli_config_file_entry_t *ce, unsigned int *var,
+bool
+process_duration_configentry(mowgli_config_file_entry_t *ce, unsigned int *var,
 		const char *defunit)
 {
 	unsigned long v;
@@ -201,7 +236,7 @@ bool process_duration_configentry(mowgli_config_file_entry_t *ce, unsigned int *
 		conf_report_warning(ce, "value %lu%s is out of range [%u%s,%u%s]",
 				v,
 				duration_units[i].name,
-				0,
+				0U,
 				duration_units[i].name,
 				max,
 				duration_units[i].name);
@@ -211,7 +246,8 @@ bool process_duration_configentry(mowgli_config_file_entry_t *ce, unsigned int *
 	return true;
 }
 
-static void set_default(struct ConfTable *ct)
+static void
+set_default(struct ConfTable *ct)
 {
 	return_if_fail(ct != NULL);
 
@@ -223,13 +259,16 @@ static void set_default(struct ConfTable *ct)
 		case CONF_UINT:
 			*ct->un.uint_val.var = ct->un.uint_val.def;
 			break;
+		case CONF_DOUBLE:
+			*ct->un.double_val.var = ct->un.double_val.def;
+			break;
 		case CONF_DURATION:
 			*ct->un.duration_val.var = ct->un.duration_val.def;
 			break;
 		case CONF_DUPSTR:
 			if (*ct->un.dupstr_val.var)
-				free(*ct->un.dupstr_val.var);
-			*ct->un.dupstr_val.var = ct->un.dupstr_val.def ? sstrdup(ct->un.dupstr_val.def) : NULL;
+				sfree(*ct->un.dupstr_val.var);
+			*ct->un.dupstr_val.var = sstrdup(ct->un.dupstr_val.def);
 			break;
 		case CONF_BOOL:
 			*ct->un.bool_val.var = ct->un.bool_val.def;
@@ -240,7 +279,8 @@ static void set_default(struct ConfTable *ct)
 	}
 }
 
-static void process_configentry(struct ConfTable *ct, mowgli_config_file_entry_t *ce)
+static void
+process_configentry(struct ConfTable *ct, mowgli_config_file_entry_t *ce)
 {
 	return_if_fail(ct != NULL);
 	return_if_fail(ce != NULL);
@@ -259,6 +299,12 @@ static void process_configentry(struct ConfTable *ct, mowgli_config_file_entry_t
 					ct->un.uint_val.max))
 				return;
 			break;
+		case CONF_DOUBLE:
+			if (!process_double_configentry(ce, ct->un.double_val.var,
+					ct->un.double_val.min,
+					ct->un.double_val.max))
+				return;
+			break;
 		case CONF_DURATION:
 			if (!process_duration_configentry(ce,
 						ct->un.duration_val.var,
@@ -271,7 +317,7 @@ static void process_configentry(struct ConfTable *ct, mowgli_config_file_entry_t
 			else
 			{
 				if (*ct->un.dupstr_val.var)
-					free(*ct->un.dupstr_val.var);
+					sfree(*ct->un.dupstr_val.var);
 				*ct->un.dupstr_val.var = sstrdup(ce->vardata);
 			}
 			break;
@@ -296,7 +342,8 @@ static void process_configentry(struct ConfTable *ct, mowgli_config_file_entry_t
 	}
 }
 
-void conf_process(mowgli_config_file_t *cfp)
+void
+conf_process(mowgli_config_file_t *cfp)
 {
 	mowgli_config_file_t *cfptr;
 	mowgli_config_file_entry_t *ce;
@@ -353,7 +400,8 @@ void conf_process(mowgli_config_file_t *cfp)
 	conf_need_rehash = false;
 }
 
-int subblock_handler(mowgli_config_file_entry_t *ce, mowgli_list_t *entries)
+int
+subblock_handler(mowgli_config_file_entry_t *ce, mowgli_list_t *entries)
 {
 	mowgli_node_t *tn;
 	struct ConfTable *ct = NULL;
@@ -387,7 +435,8 @@ int subblock_handler(mowgli_config_file_entry_t *ce, mowgli_list_t *entries)
 	return 0;
 }
 
-struct ConfTable *find_top_conf(const char *name)
+struct ConfTable *
+find_top_conf(const char *name)
 {
 	mowgli_node_t *n;
 	struct ConfTable *ct;
@@ -405,7 +454,8 @@ struct ConfTable *find_top_conf(const char *name)
 	return NULL;
 }
 
-struct ConfTable *find_conf_item(const char *name, mowgli_list_t *conflist)
+struct ConfTable *
+find_conf_item(const char *name, mowgli_list_t *conflist)
 {
 	mowgli_node_t *n;
 	struct ConfTable *ct;
@@ -424,10 +474,9 @@ struct ConfTable *find_conf_item(const char *name, mowgli_list_t *conflist)
 	return NULL;
 }
 
-void add_top_conf(const char *name, int (*handler) (mowgli_config_file_entry_t *ce))
+void
+add_top_conf(const char *name, int (*handler) (mowgli_config_file_entry_t *ce))
 {
-	struct ConfTable *ct;
-
 	return_if_fail(name != NULL);
 	return_if_fail(handler != NULL);
 
@@ -437,8 +486,7 @@ void add_top_conf(const char *name, int (*handler) (mowgli_config_file_entry_t *
 		return;
 	}
 
-	ct = mowgli_heap_alloc(conftable_heap);
-
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
 	ct->name = sstrdup(name);
 	ct->type = CONF_HANDLER;
 	ct->flags = 0;
@@ -448,10 +496,9 @@ void add_top_conf(const char *name, int (*handler) (mowgli_config_file_entry_t *
 	conf_need_rehash = true;
 }
 
-void add_subblock_top_conf(const char *name, mowgli_list_t *list)
+void
+add_subblock_top_conf(const char *name, mowgli_list_t *list)
 {
-	struct ConfTable *ct;
-
 	return_if_fail(name != NULL);
 	return_if_fail(list != NULL);
 
@@ -461,8 +508,7 @@ void add_subblock_top_conf(const char *name, mowgli_list_t *list)
 		return;
 	}
 
-	ct = mowgli_heap_alloc(conftable_heap);
-
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
 	ct->name = sstrdup(name);
 	ct->type = CONF_SUBBLOCK;
 	ct->flags = 0;
@@ -472,10 +518,9 @@ void add_subblock_top_conf(const char *name, mowgli_list_t *list)
 	conf_need_rehash = true;
 }
 
-void add_conf_item(const char *name, mowgli_list_t *conflist, int (*handler) (mowgli_config_file_entry_t *ce))
+void
+add_conf_item(const char *name, mowgli_list_t *conflist, int (*handler) (mowgli_config_file_entry_t *ce))
 {
-	struct ConfTable *ct;
-
 	return_if_fail(name != NULL);
 	return_if_fail(conflist != NULL);
 	return_if_fail(handler != NULL);
@@ -486,8 +531,7 @@ void add_conf_item(const char *name, mowgli_list_t *conflist, int (*handler) (mo
 		return;
 	}
 
-	ct = mowgli_heap_alloc(conftable_heap);
-
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
 	ct->name = sstrdup(name);
 	ct->type = CONF_HANDLER;
 	ct->flags = 0;
@@ -497,18 +541,16 @@ void add_conf_item(const char *name, mowgli_list_t *conflist, int (*handler) (mo
 	conf_need_rehash = true;
 }
 
-void add_uint_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, unsigned int *var, unsigned int min, unsigned int max, unsigned int def)
+void
+add_uint_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, unsigned int *var, unsigned int min, unsigned int max, unsigned int def)
 {
-	struct ConfTable *ct;
-
 	if (find_conf_item(name, conflist))
 	{
 		slog(LG_DEBUG, "add_uint_conf_item(): duplicate item %s", name);
 		return;
 	}
 
-	ct = mowgli_heap_alloc(conftable_heap);
-
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
 	ct->name = sstrdup(name);
 	ct->type = CONF_UINT;
 	ct->flags = flags;
@@ -521,18 +563,38 @@ void add_uint_conf_item(const char *name, mowgli_list_t *conflist, unsigned int 
 	conf_need_rehash = true;
 }
 
-void add_duration_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, unsigned int *var, const char *defunit, unsigned int def)
+void
+add_double_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, double *var, double min, double max, double def)
 {
-	struct ConfTable *ct;
+	if (find_conf_item(name, conflist))
+	{
+		slog(LG_DEBUG, "add_double_conf_item(): duplicate item %s", name);
+		return;
+	}
 
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
+	ct->name = sstrdup(name);
+	ct->type = CONF_DOUBLE;
+	ct->flags = flags;
+	ct->un.double_val.var = var;
+	ct->un.double_val.min = min;
+	ct->un.double_val.max = max;
+	ct->un.double_val.def = def;
+
+	mowgli_node_add(ct, &ct->node, conflist);
+	conf_need_rehash = true;
+}
+
+void
+add_duration_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, unsigned int *var, const char *defunit, unsigned int def)
+{
 	if (find_conf_item(name, conflist))
 	{
 		slog(LG_DEBUG, "add_duration_conf_item(): duplicate item %s", name);
 		return;
 	}
 
-	ct = mowgli_heap_alloc(conftable_heap);
-
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
 	ct->name = sstrdup(name);
 	ct->type = CONF_DURATION;
 	ct->flags = flags;
@@ -544,18 +606,16 @@ void add_duration_conf_item(const char *name, mowgli_list_t *conflist, unsigned 
 	conf_need_rehash = true;
 }
 
-void add_dupstr_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, char **var, const char *def)
+void
+add_dupstr_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, char **var, const char *def)
 {
-	struct ConfTable *ct;
-
 	if (find_conf_item(name, conflist))
 	{
 		slog(LG_DEBUG, "add_dupstr_conf_item(): duplicate item %s", name);
 		return;
 	}
 
-	ct = mowgli_heap_alloc(conftable_heap);
-
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
 	ct->name = sstrdup(name);
 	ct->type = CONF_DUPSTR;
 	ct->flags = flags;
@@ -566,18 +626,16 @@ void add_dupstr_conf_item(const char *name, mowgli_list_t *conflist, unsigned in
 	conf_need_rehash = true;
 }
 
-void add_bool_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, bool *var, bool def)
+void
+add_bool_conf_item(const char *name, mowgli_list_t *conflist, unsigned int flags, bool *var, bool def)
 {
-	struct ConfTable *ct;
-
 	if (find_conf_item(name, conflist))
 	{
 		slog(LG_DEBUG, "add_bool_conf_item(): duplicate item %s", name);
 		return;
 	}
 
-	ct = mowgli_heap_alloc(conftable_heap);
-
+	struct ConfTable *const ct = mowgli_heap_alloc(conftable_heap);
 	ct->name = sstrdup(name);
 	ct->type = CONF_BOOL;
 	ct->flags = flags;
@@ -588,7 +646,8 @@ void add_bool_conf_item(const char *name, mowgli_list_t *conflist, unsigned int 
 	conf_need_rehash = true;
 }
 
-void del_top_conf(const char *name)
+void
+del_top_conf(const char *name)
 {
 	struct ConfTable *ct;
 
@@ -596,18 +655,19 @@ void del_top_conf(const char *name)
 
 	if (!(ct = find_top_conf(name)))
 	{
-		slog(LG_DEBUG, "del_top_conf(): cannot delete nonexistant block %s", name);
+		slog(LG_DEBUG, "del_top_conf(): cannot delete nonexistent block %s", name);
 		return;
 	}
 
 	mowgli_node_delete(&ct->node, &confblocks);
 
-	free(ct->name);
+	sfree(ct->name);
 
 	mowgli_heap_free(conftable_heap, ct);
 }
 
-void del_conf_item(const char *name, mowgli_list_t *conflist)
+void
+del_conf_item(const char *name, mowgli_list_t *conflist)
 {
 	struct ConfTable *ct;
 
@@ -616,7 +676,7 @@ void del_conf_item(const char *name, mowgli_list_t *conflist)
 
 	if (!(ct = find_conf_item(name, conflist)))
 	{
-		slog(LG_DEBUG, "del_conf_item(): cannot delete nonexistant item %s", name);
+		slog(LG_DEBUG, "del_conf_item(): cannot delete nonexistent item %s", name);
 		return;
 	}
 
@@ -624,15 +684,16 @@ void del_conf_item(const char *name, mowgli_list_t *conflist)
 
 	if (ct->type == CONF_DUPSTR && ct->un.dupstr_val.def)
 	{
-		free(ct->un.dupstr_val.def);
+		sfree(ct->un.dupstr_val.def);
 	}
 
-	free(ct->name);
+	sfree(ct->name);
 
 	mowgli_heap_free(conftable_heap, ct);
 }
 
-conf_handler_t conftable_get_conf_handler(struct ConfTable *ct)
+conf_handler_fn
+conftable_get_conf_handler(struct ConfTable *ct)
 {
 	return_val_if_fail(ct != NULL, NULL);
 
@@ -640,7 +701,8 @@ conf_handler_t conftable_get_conf_handler(struct ConfTable *ct)
 }
 
 /* stolen from Sentinel */
-int token_to_value(struct Token token_table[], const char *token)
+int
+token_to_value(struct Token token_table[], const char *token)
 {
 	int i;
 
@@ -659,7 +721,8 @@ int token_to_value(struct Token token_table[], const char *token)
 	return TOKEN_UNMATCHED;
 }
 
-void init_confprocess(void)
+void
+init_confprocess(void)
 {
 	conftable_heap = sharedheap_get(sizeof(struct ConfTable));
 

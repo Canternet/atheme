@@ -1,450 +1,180 @@
-dnl Copyright (c) 2005 Atheme Development Group
-dnl Rights to this code are documented in doc/LICENSE.
-dnl
-dnl This file is the autoconf stub.
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
+#
+# Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+# Copyright (C) 2015-2019 Atheme Development Group (https://atheme.github.io/)
 
-dnl Process this file with autoconf to produce a configure script.
+AC_PREREQ([2.69])
 
-AC_PREREQ(2.59)
+AC_LANG([C])
+AC_INIT([Atheme IRC Services], [7.3.0-rc2], [https://github.com/atheme/atheme/issues/], [atheme], [https://atheme.github.io/])
 
-AC_INIT(atheme, 7.2.6, bugs@atheme.org)
+AC_CONFIG_AUX_DIR([build-aux])
+AC_CONFIG_FILES([buildsys.mk extra.mk])
+AC_CONFIG_HEADERS([include/atheme/sysconf.h])
+AC_CONFIG_MACRO_DIR([m4])
+AC_CONFIG_SRCDIR([src/services/main.c])
+AC_PREFIX_DEFAULT([~/atheme])
+AS_IF([test "x${prefix}" = "xNONE"], [prefix="${ac_default_prefix}"])
 
-AC_CONFIG_AUX_DIR(autoconf)
+AS_IF([test -d ".git"], [
+    AC_MSG_CHECKING([if you read GIT-Access.txt])
+    AS_IF([test -f "libmowgli-2/Makefile" -a -f "modules/contrib/Makefile"], [
+        AC_MSG_RESULT([yes])
+    ], [
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([please read GIT-Access.txt before trying to build from git])
+    ])
+], [
+    AC_MSG_CHECKING([if you downloaded the correct source code tarball])
+    AS_IF([test -f "include/atheme/serno.h"], [
+        AC_MSG_RESULT([yes])
+    ], [
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([please read the Obtaining Atheme section of README.md])
+    ])
+])
 
-AC_CONFIG_HEADER(include/sysconf.h)
-AC_PREFIX_DEFAULT(~/atheme)
+AH_TOP([
+#ifndef ATHEME_INC_SYSCONF_H
+#define ATHEME_INC_SYSCONF_H 1
 
-dnl Buildsys module stuff
-BUILDSYS_INIT
-BUILDSYS_SHARED_LIB
-BUILDSYS_PROG_IMPLIB
-LIBS="$LIBS $DYNAMIC_LD_LIBS"
+#define ATHEME_API_DIGEST_FRONTEND_INTERNAL     0x00U
+#define ATHEME_API_DIGEST_FRONTEND_MBEDTLS      0x01U
+#define ATHEME_API_DIGEST_FRONTEND_OPENSSL      0x02U
+#define ATHEME_API_DIGEST_FRONTEND_GCRYPT       0x03U
 
-AC_MSG_CHECKING([if you read GIT-Access])
-if ! test -f libmowgli-2/Makefile -a -f modules/contrib/Makefile; then
-	AC_MSG_RESULT(no)
-	AC_ERROR([please read GIT-Access before trying to build from git])
-fi
-AC_MSG_RESULT(yes)
+#define ATHEME_API_RANDOM_FRONTEND_INTERNAL     0x00U
+#define ATHEME_API_RANDOM_FRONTEND_MBEDTLS      0x01U
+#define ATHEME_API_RANDOM_FRONTEND_ARC4RANDOM   0x02U
+#define ATHEME_API_RANDOM_FRONTEND_SODIUM       0x03U
+#define ATHEME_API_RANDOM_FRONTEND_OPENSSL      0x04U
+])
 
-AC_PATH_PROG(RM, rm)
-AC_PATH_PROG(MV, mv)
-AC_PATH_PROG(CP, cp)
-AC_PATH_PROG(LN, ln)
-AC_PROG_LN_S
-AC_PATH_PROG(TAR, tar)
-AC_PATH_PROG(AR, ar)
-AC_PATH_PROG(RANLIB, ranlib)
+AH_BOTTOM([
+#ifndef ATHEME_API_DIGEST_FRONTEND
+#  error "No Digest API frontend was selected by the build system"
+#endif /* !ATHEME_API_DIGEST_FRONTEND */
 
+#ifndef ATHEME_API_RANDOM_FRONTEND
+#  error "No RNG API frontend was selected by the build system"
+#endif /* !ATHEME_API_RANDOM_FRONTEND */
+
+#endif /* !ATHEME_INC_SYSCONF_H */
+])
+
+# If CFLAGS is empty or unset, explicitly set it to the empty string, so that
+# AC_PROG_CC (below) does not add "-O2 -g", as this will conflict with the
+# optimisation flags that the compiler sanitizers feature uses, and the
+# more advanced debugging flags detection that the CFLAGS feature test uses
+AS_IF([test "x${CFLAGS:-}" = "x"], [CFLAGS=""])
+
+# Programs required by the build system
+AC_PROG_CC
 AC_PROG_CC_C99
-AC_GNU_SOURCE
-AC_C_BIGENDIAN
+AS_IF([test "x${ac_cv_prog_cc_c99}" = "xno"], [
+    AC_MSG_FAILURE([This program requires a C99 compiler])
+])
+AC_CHECK_TOOL([AR], [ar])
+AC_PATH_PROG([CP], [cp])
+AC_PROG_INSTALL
+AC_PATH_PROG([LN], [ln])
+AC_PROG_LN_S
 AC_PROG_MAKE_SET
-
+AC_PATH_PROG([MV], [mv])
+AC_PROG_RANLIB
+AC_PATH_PROG([RM], [rm])
+AC_PROG_SED
+AC_PATH_PROG([TAR], [tar])
 PKG_PROG_PKG_CONFIG
-if test -z "$PKG_CONFIG"; then
-	AC_ERROR([pkg-config not found])
-fi
+AS_IF([test -z "${PKG_CONFIG}"], [
+    AC_MSG_WARN([please consider installing pkg-config])
+    AC_MSG_WARN([many of this script's library and feature detection tests rely upon it being available])
+    AC_MSG_WARN([if you choose to do so, please re-run this script again])
+])
 
-dnl Automake compatibility. --nenolod
+# Does what its name implies. The above block can't be put into this function
+# because of autotools black magic voodoo crap that no-one understands ...
+ATHEME_CHECK_BUILD_REQUIREMENTS
+
+# Automake compatibility. --nenolod
 AC_SUBST([PACKAGE], [AC_PACKAGE_TARNAME])
 AC_SUBST([VERSION], [AC_PACKAGE_VERSION])
+AC_SUBST([VENDOR_STRING], ["Atheme Development Group <https://atheme.github.io/>"])
+AC_SUBST([PACKAGE_BUGREPORT_I18N], ["ircs://irc.libera.chat:6697/atheme-i18n"])
+AC_DEFINE_UNQUOTED([PACKAGE], ["${PACKAGE}"], [Name of package])
+AC_DEFINE_UNQUOTED([VERSION], ["${VERSION}"], [Version number of package])
+AC_DEFINE_UNQUOTED([VENDOR_STRING], ["${VENDOR_STRING}"], [Vendor string for in-tree module headers])
+AC_DEFINE_UNQUOTED([PACKAGE_BUGREPORT_I18N], ["${PACKAGE_BUGREPORT_I18N}"], [Where to report translation bugs])
 
-AC_DEFINE_UNQUOTED(PACKAGE, "$PACKAGE", [Name of package])
-AC_DEFINE_UNQUOTED(VERSION, "$VERSION", [Version number of package])
+# This should be before any library tests so that insufficient header
+# inclusions in those tests are caught before they become a runtime
+# problem
+ATHEME_TEST_CC_FLAGS([-Werror=implicit])
 
-dnl GNU gettext
+# Conditional libraries for standard functions (no option to control detection)
+ATHEME_LIBTEST_DL
+ATHEME_LIBTEST_MATH
+ATHEME_LIBTEST_SOCKET
 
-dnl Uncomment this if we choose to provide our own libintl.
-AM_GNU_GETTEXT([external])
-LIBS="${LIBS} ${LIBINTL}"
+# Libraries that are autodetected (alphabetical)
+ATHEME_LIBTEST_ARGON2
+ATHEME_LIBTEST_CRACK
+ATHEME_LIBTEST_CRYPT
+ATHEME_LIBTEST_CRYPTO
+ATHEME_LIBTEST_GCRYPT
+ATHEME_LIBTEST_IDN
+ATHEME_LIBTEST_LDAP
+ATHEME_LIBTEST_MBEDCRYPTO
+ATHEME_LIBTEST_MOWGLI
+ATHEME_LIBTEST_NETTLE
+ATHEME_LIBTEST_PASSWDQC
+ATHEME_LIBTEST_PCRE
+ATHEME_LIBTEST_QRENCODE
+ATHEME_LIBTEST_SODIUM
 
-if test "$prefix" = "NONE"; then
-	prefix="${ac_default_prefix}"
-fi
+# Libraries that need to be explicitly enabled (alphabetical)
+ATHEME_LIBTEST_PERL
 
-dnl the following is wrong! -- jilles
-dnl AC_DEFINE_UNQUOTED([PREFIX], "${prefix}", [Installation prefix.])
+# Digest and RNG frontend to use in libathemecore
+ATHEME_DECIDE_DIGEST_FRONTEND
+ATHEME_DECIDE_RANDOM_FRONTEND
 
-dnl Checks for header files.
-AC_CHECK_HEADERS(link.h,,,[-])
+# Optional features
+# These must be after library tests, because some of them depend on the
+# library detection logic in the tests to set appropriate variables
+ATHEME_FEATURETEST_CONTRIB
+ATHEME_FEATURETEST_CRYPTO_BENCHMARKING
+ATHEME_FEATURETEST_ECDH_X25519_TOOL
+ATHEME_FEATURETEST_ECDSA_NIST256P_TOOLS
+ATHEME_FEATURETEST_FHSPATHS
+ATHEME_FEATURETEST_HEAP_ALLOCATOR
+ATHEME_FEATURETEST_LARGENET
+ATHEME_FEATURETEST_LEGACY_PWCRYPTO
+ATHEME_FEATURETEST_REPROBUILDS
 
-dnl Checks for library functions.
-AC_CHECK_FUNCS([inet_pton inet_ntop gettimeofday umask arc4random arc4random_buf arc4random_uniform explicit_bzero memset_s getrlimit fork getpid execve strtok_r inet_ntop strcasestr])
-AC_CHECK_FUNC(socket,, AC_CHECK_LIB(socket, socket))
-AC_CHECK_FUNC(gethostbyname,, AC_CHECK_LIB(nsl, gethostbyname))
-AC_SEARCH_LIBS(crypt, crypt, [AC_DEFINE([HAVE_CRYPT], [], [Define if crypt() is available])])
-HW_FUNC_SNPRINTF
-HW_FUNC_ASPRINTF
+# These must be here, not above, or they might interfere with library and feature tests
+# Explanation is that these modify one or more of CFLAGS, CPPFLAGS, LDFLAGS, and LIBS
+# Warnings should be last so that diagnostics don't clutter the contents of config.log
+# Sanitizers must be before CFLAGS and LDFLAGS
+ATHEME_FEATURETEST_COMPILER_SANITIZERS
+ATHEME_FEATURETEST_CPPFLAGS
+ATHEME_FEATURETEST_CFLAGS
+ATHEME_FEATURETEST_LDFLAGS
+ATHEME_FEATURETEST_NLS
+ATHEME_FEATURETEST_WARNINGS
 
-CRACKLIB_C=""
-CRACKLIB_LIBS=""
-AC_ARG_WITH([cracklib],
-	[AS_HELP_STRING([--with-cracklib], [Compile cracklib nickserv submodule for checking password strength.])],
-	[],
-	[with_cracklib="auto"])
-AS_IF([test "x$with_cracklib" != "xno"],
-	[LIBS_save="$LIBS"
-	AC_SEARCH_LIBS([FascistCheck], [crack],
-		[CRACKLIB_C="cracklib.c"
-		AS_IF([test "x$ac_cv_search_FascistCheck" != "xnone required"],
-			[CRACKLIB_LIBS="$ac_cv_search_FascistCheck"])],
-		[AS_IF([test "x$with_cracklib" != "xauto"],
-			[AC_MSG_ERROR([--with-cracklib was specified but cracklib could not be found.])])])
-	LIBS="$LIBS_save"])
-AC_SUBST(CRACKLIB_C)
-AC_SUBST([CRACKLIB_LIBS])
+# Handle enabling and configuration of submodules
+ATHEME_HANDLE_SUBMODULES
 
-AC_ARG_WITH([ldap],
-	[AS_HELP_STRING([--without-ldap],[Disable building ldap auth module.])],
-	[],
-	[with_ldap="auto"])
+# Now add libmowgli and libpcre to CFLAGS and LIBS because the whole codebase uses them
+AS_IF([test "x${LIBMOWGLI_CFLAGS}" != "x"], [CFLAGS="${LIBMOWGLI_CFLAGS} ${CFLAGS}"])
+AS_IF([test "x${LIBMOWGLI_LIBS}" != "x"], [LIBS="${LIBMOWGLI_LIBS} ${LIBS}"])
+AS_IF([test "x${LIBPCRE_CFLAGS}" != "x"], [CFLAGS="${LIBPCRE_CFLAGS} ${CFLAGS}"])
+AS_IF([test "x${LIBPCRE_LIBS}" != "x"], [LIBS="${LIBPCRE_LIBS} ${LIBS}"])
 
-AS_IF([test "x$with_ldap" != "xno"],
-[
-# Thank autoconf and openldap developers for making me do all this stuff.
-LDAP_CFLAGS=""
-LDAP_LIBS=""
-LDAP_AUTHC=""
-AC_CHECK_LIB(ldap, ldap_initialize, [
-	LDAP_CFLAGS=""
-	LDAP_LIBS="-lldap"
-	LDAP_AUTHC="ldap.c"
-], [
-	unset ac_cv_lib_ldap_ldap_initialize
-	saveCFLAGS="$CFLAGS"
-	saveLIBS="$LIBS"
-	CFLAGS="$CFLAGS -I/usr/local/include"
-	LIBS="$LIBS -L/usr/local/lib"
-	AC_CHECK_LIB(ldap, ldap_initialize, [
-		LDAP_CFLAGS="-I/usr/local/include"
-		LDAP_LIBS="-L/usr/local/lib -lldap"
-		LDAP_AUTHC="ldap.c"
-	])
-	CFLAGS="$saveCFLAGS"
-	LIBS="$saveLIBS"
-])
-dnl with_ldap != no
-])
 
-AS_IF([test "x$with_ldap" = "xyes" && test "x$LDAP_AUTHC" = "x"],
-[AC_MSG_ERROR([LDAP support was explicitly requested but could not be found.])])
 
-AC_SUBST(LDAP_CFLAGS)
-AC_SUBST(LDAP_LIBS)
-AC_SUBST(LDAP_AUTHC)
-
-AC_ARG_WITH([perl],
-        [AS_HELP_STRING([--without-perl],[Disable building perl scripting module.])],
-        [],
-        [with_perl="no"])
-
-AS_IF([test "x$with_perl" != "xno"],
-[
-  AC_PATH_PROG(perlpath, perl)
-  if test -n "$perlpath"; then
-      PERL_ENABLE=perl
-      PERL_CFLAGS=`perl -MExtUtils::Embed -e ccopts`
-      PERL_LIBS=`perl -MExtUtils::Embed -e ldopts`
-  fi
-
-  dnl if Perl is built with threading support, we need to link atheme against libpthread
-  if test -n "`echo "$PERL_LIBS" | grep pthread`"; then
-     LIBS="$LIBS -lpthread"
-  fi
-])
-
-AS_IF([test "x$with_perl" = "xyes" && test "x$PERL_CFLAGS" = "x"],
-[AC_MSG_ERROR([Perl support was requested but Perl could not be found.])])
-
-AC_SUBST(PERL_CFLAGS)
-AC_SUBST(PERL_LIBS)
-AC_SUBST(PERL_ENABLE)
-
-dnl gettextize's Makefile.in wants this
-mkdir_p="mkdir -p"
-AC_SUBST(mkdir_p)
-
-DOCDIR='${prefix}/doc'
-MODDIR='${exec_prefix}'
-SHAREDIR='${prefix}'
-LOGDIR='${prefix}/var'
-DATADIR='${prefix}/etc'
-RUNDIR='${prefix}/var'
-
-FHSPATHS="no"
-AC_MSG_CHECKING(if you want FHS-like pathnames)
-AC_ARG_ENABLE(fhs-paths,
-AC_HELP_STRING([--enable-fhs-paths],[ Use more FHS-like pathnames (for packagers).]),
-[
-  case "$enableval" in
-  yes)
-    FHSPATHS="yes"
-    DOCDIR='${datadir}/doc/atheme'
-    MODDIR='${libdir}/atheme'
-    SHAREDIR='${datadir}/atheme'
-    LOGDIR='${localstatedir}/log/atheme'
-    DATADIR='${localstatedir}/lib/atheme'
-    RUNDIR='${localstatedir}/run/atheme'
-    ;;
-  no)
-    FHSPATHS="no"
-    ;;
-  esac
-])
-AC_MSG_RESULT($FHSPATHS)
-AC_SUBST(DOCDIR)
-AC_SUBST(MODDIR)
-AC_SUBST(SHAREDIR)
-AC_SUBST(DATADIR)
-AC_SUBST(LOGDIR)
-AC_SUBST(RUNDIR)
-AC_SUBST(ABSPATHS)
-AC_SUBST(SRCDIR)
-AC_SUBST(BUILDDIR)
-dnl the following is wrong! -- jilles
-dnl AC_DEFINE_UNQUOTED([MODDIR], "${MODDIR}", [Module root directory.])
-
-dnl gettext
-LOCALEDIR='${datadir}/locale'
-AC_SUBST(LOCALEDIR)
-
-LARGENET="no"
-AC_MSG_CHECKING(if you want large network support)
-AC_ARG_ENABLE(large-net,
-AC_HELP_STRING([--enable-large-net],[ Enable large network support.]),
-[
-  case "$enableval" in
-  yes)
-    LARGENET="yes"
-    AC_DEFINE([LARGE_NETWORK], 1, [Uncomment to enable large network support.])
-    ;;
-  no)
-    LARGENET="no"
-    ;;
-  esac
-])
-AC_MSG_RESULT($LARGENET)
-
-CONTRIB="no"
-AC_MSG_CHECKING(if you want contrib modules)
-AC_ARG_ENABLE(contrib,
-AC_HELP_STRING([--enable-contrib],[ Enable contrib modules.]),
-[
-  case "$enableval" in
-  yes)
-    CONTRIB="yes"
-    ;;
-  no)
-    CONTRIB="no"
-    ;;
-  esac
-])
-AC_MSG_RESULT($CONTRIB)
-
-if test "$CONTRIB" = "yes"; then
-	CONTRIB_ENABLE="contrib"
-else
-	CONTRIB_ENABLE=""
-fi
-
-AC_SUBST(CONTRIB_ENABLE)
-
-AC_ARG_ENABLE(ssl,
-	AC_HELP_STRING([--disable-ssl], [don't use OpenSSL to provide more SASL mechanisms]),
-	,
-	enable_ssl=yes)
-
-SSL=no
-if test "$enable_ssl" = "yes"; then
-	AC_CHECK_LIB(ssl, SSL_read, [
-		AC_CHECK_HEADERS(openssl/ssl.h openssl/err.h, [
-			SSL_LIBS="-lssl -lcrypto"
-			AC_SUBST(SSL_LIBS)
-			SSL=yes
-			],[SSL=no],[-])
-		], [
-			AC_CHECK_LIB(eay32, DH_generate_key, [
-				AC_CHECK_HEADERS(openssl/ssl.h openssl/err.h, [
-					# Ugh.
-					SSL_LIBS="-leay32 /mingw/lib/ssleay32.a"
-					AC_SUBST(SSL_LIBS)
-					SSL=yes
-					],[SSL=no],[-])
-			], [], [])
-		], -lcrypto)
-	if test "$SSL" = "yes"; then
-		AC_CHECK_HEADERS(openssl/ec.h, [], [], []) # Defines HAVE_OPENSSL_EC_H
-		AC_DEFINE(HAVE_OPENSSL,, Define to 1 if openssl is available)
-	fi
-fi
-
-case "$host" in
-*-*-mingw32)
-    CFLAGS="-I/mingw/include $CFLAGS"
-    LIBS="$LIBS -lwsock32 -lws2_32 -lregex"
-        ;;
-esac
-
-ATHEME_C_GCC_TRY_FLAGS([-std=gnu99], atheme_cv_c_gcc_std_gnu99)
-ATHEME_C_GCC_TRY_FLAGS([-Werror-implicit-function-declaration], atheme_cv_c_gcc_w_error_implicit_function_declaration)
-
-AC_ARG_ENABLE([warnings],
-	[AS_HELP_STRING([--enable-warnings],[ Enable compiler warnings])],
-	[], [enable_warnings=no])
-AS_IF([test "x$enable_warnings" = "xyes"],
-[
-dnl See what warnings we can get away with
-ATHEME_C_GCC_TRY_FLAGS([-Wall], atheme_cv_c_gcc_w_all)
-ATHEME_C_GCC_TRY_FLAGS([-Wpointer-arith], atheme_cv_c_gcc_w_pointer_arith)
-ATHEME_C_GCC_TRY_FLAGS([-Wimplicit -Wnested-externs], atheme_cv_c_gcc_w_implicit)
-ATHEME_C_GCC_TRY_FLAGS([-Wcast-align], atheme_cv_c_gcc_w_cast_align)
-ATHEME_C_GCC_TRY_FLAGS([-Wcast-qual], atheme_cv_c_gcc_w_cast_qual)
-ATHEME_C_GCC_TRY_FLAGS([-Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations], atheme_cv_c_gcc_prototypes)
-ATHEME_C_GCC_TRY_FLAGS([-Wparenthesis], atheme_cv_c_gcc_parenthesis)
-ATHEME_C_GCC_TRY_FLAGS([-W -Wno-unused], atheme_cv_c_gcc_w)
-ATHEME_C_GCC_TRY_FLAGS([-Wextra], atheme_cv_c_gcc_w_extra)
-ATHEME_C_GCC_TRY_FLAGS([-Wshadow], atheme_cv_c_gcc_w_shadow)
-ATHEME_C_GCC_TRY_FLAGS([-Wundef], atheme_cv_c_gcc_w_undef)
-ATHEME_C_GCC_TRY_FLAGS([-Wpacked], atheme_cv_c_gcc_w_packed)
-ATHEME_C_GCC_TRY_FLAGS([-Wnested-externs], atheme_cv_c_gcc_w_nested_externs)
-ATHEME_C_GCC_TRY_FLAGS([-Wunused-function -Wunused-label -Wunused-value -Wunused-variable], atheme_cv_c_gcc_w_unused)
-ATHEME_C_GCC_TRY_FLAGS([-Wredundant-decls], atheme_cv_c_gcc_w_redundant_decls)
-ATHEME_C_GCC_TRY_FLAGS([-Wfloat-equal], atheme_cv_c_gcc_w_float_equal)
-dnl Added -fno-builtin-strftime to squelch a few (pointless) warnings from the time_format patch.
-ATHEME_C_GCC_TRY_FLAGS([-Wformat=2 -fno-builtin-strftime], atheme_cv_c_gcc_w_format)
-ATHEME_C_GCC_TRY_FLAGS([-Wdisabled-optimization], atheme_cv_c_gcc_w_disabled_optimization)
-dnl ATHEME_C_GCC_TRY_FLAGS([-pedantic], atheme_cv_c_gcc_pedantic)
-
-ATHEME_C_GCC_TRY_FLAGS([-Wunreachable-code], atheme_cv_c_gcc_w_unreachable_code)
-
-dnl Maintainer flags.
-dnl ATHEME_C_GCC_TRY_FLAGS([-Wconversion], atheme_cv_c_gcc_w_conversion)
-dnl ATHEME_C_GCC_TRY_FLAGS([-Wwrite-strings], atheme_cv_c_gcc_w_strings)
-dnl ATHEME_C_GCC_TRY_FLAGS([-Werror], atheme_cv_c_gcc_w_error)
-])
-
-AC_ARG_ENABLE([propolice],
-	[AS_HELP_STRING([--disable-propolice],[ Disable propolice protections (for debugging.)])],
-	[], [enable_propolice=no])
-AS_IF([test "x$enable_propolice" = "xyes"],
-[
-ATHEME_C_GCC_TRY_FLAGS([-fno-stack-protector-all], atheme_cv_nspa)
-ATHEME_C_GCC_TRY_FLAGS([-fno-pie], atheme_cv_npie)
-ATHEME_C_GCC_TRY_FLAGS([-nonow], atheme_cv_nonow)
-ATHEME_C_GCC_TRY_FLAGS([-norelro], atheme_cv_no_relro)
-])
-
-AC_ARG_ENABLE([profile],
-	[AS_HELP_STRING([--enable-profile],[ Enable profiling extensions])],
-	[], [enable_profile=no])
-AS_IF([test "x$enable_profile" = "xyes"],
-[
-ATHEME_C_GCC_TRY_FLAGS([-pg], atheme_cv_pg)
-ac_save_LDFLAGS="${LDFLAGS} -pg"
-LDFLAGS=${ac_save_LDFLAGS}
-])
-
-ac_save_CPPFLAGS="${CFLAGS} ${orig_CFLAGS} ${CWARNS} -DPREFIX=\\\"\${prefix}\\\" -DLOCALEDIR=\\\"\${LOCALEDIR}\\\" -DMODDIR=\\\"\${MODDIR}\\\" -DSHAREDIR=\\\"${SHAREDIR}\\\" -DSYSCONFDIR=\\\"${sysconfdir}\\\" -DLOGDIR=\\\"${LOGDIR}\\\" -DRUNDIR=\\\"${RUNDIR}\\\" -DDATADIR=\\\"${DATADIR}\\\""
-CPPFLAGS=${ac_save_CPPFLAGS}
-AC_SUBST(CPPFLAGS)
-dnl export CFLAGS
-
-enablerpath="yes"
-AC_ARG_ENABLE(rpath,
-AC_HELP_STRING([--disable-rpath],[Disable use of -Wl,-rpath= during linking.]),
-   [enablerpath="$enableval"], [enablerpath="yes"])
-
-if test "x$enablerpath" != "xyes"; then
-	LDFLAGS_RPATH=""
-fi
-
-PKG_CHECK_MODULES(LIBQRENCODE, [libqrencode], [LIBQRENCODE="yes"], [LIBQRENCODE="no"])
-
-if test "$LIBQRENCODE" = "yes"; then
-	AC_DEFINE(HAVE_LIBQRENCODE,, Define to 1 if libqrencode is available)
-fi
-
-AC_ARG_WITH(libmowgli,
-  AC_HELP_STRING([--with-libmowgli@<:@=prefix@:>@],
-    [ Specify location of system libmowgli install, or "no" to force use of internal libmowgli]),
-  [], [with_libmowgli=yes])
-
-if test "x$with_libmowgli" = "xyes"; then
-  PKG_CHECK_MODULES(MOWGLI, [libmowgli-2 >= 2.0.0],
-    [MOWGLI_SOURCE="system"],
-    [with_libmowgli=no])
-fi
-
-AS_IF(
-  [test "x$with_libmowgli" = "xyes"], [ ],
-  [test "x$with_libmowgli" = "xno"], [
-    MOWGLI_CFLAGS="-I../libmowgli-2/src/libmowgli -I../../libmowgli-2/src/libmowgli -I../../../libmowgli-2/src/libmowgli"
-    MOWGLI_LIBS="-L../libmowgli-2/src/libmowgli -L../../libmowgli-2/src/libmowgli -L../../../libmowgli-2/src/libmowgli -lmowgli-2"
-    LIBMOWGLI="libmowgli-2"
-    MOWGLI_SOURCE="internal"
-    AC_CONFIG_SUBDIRS([libmowgli-2])],
-  [ MOWGLI_SOURCE="system"
-    MOWGLI_CFLAGS="-I$with_libmowgli/include/libmowgli-2"
-    MOWGLI_LIBS="-L$with_libmowgli/lib -lmowgli-2" ])
-
-CPPFLAGS="$CPPFLAGS $MOWGLI_CFLAGS"
-LIBS="$LIBS $MOWGLI_LIBS"
-
-AC_SUBST(MOWGLI_CFLAGS)
-AC_SUBST(MOWGLI_LIBS)
-AC_SUBST(LIBMOWGLI)
-
-AC_ARG_WITH(pcre,
-AC_HELP_STRING([--with-pcre],[ Enable PCRE regular expression support]),
-[],
-[with_pcre=no])
-
-if test "x$with_pcre" != xno; then
-	PKG_CHECK_MODULES(PCRE, [libpcre], [], [
-		AC_ERROR([PCRE requested, but not found.])])
-
-	AC_SUBST(PCRE_CFLAGS)
-	AC_SUBST(PCRE_LIBS)
-	AC_DEFINE([HAVE_PCRE], [1], [Define if you want to use PCRE])
-fi
-
-BUILDROOT=`pwd`
-AC_SUBST(BUILDROOT)
-
-PODIR=""
-if test "x$USE_NLS" = "xyes"; then
-	PODIR="po"
-fi
-AC_SUBST(PODIR)
-
+AC_OUTPUT
 BUILDSYS_TOUCH_DEPS
-
-AC_OUTPUT([
-	buildsys.mk
-	extra.mk
-	atheme-services.pc
-])
-
-d=`eval echo ${MODDIR}`
-d=`eval echo $d`
-echo "
-Configuration:
-	Atheme version       : ${PACKAGE_VERSION}
-	Installation prefix  : ${prefix}
-	Module root directory: `eval echo $d`
-	Config directory     : ${sysconfdir}
-	Logfile directory    : ${LOGDIR}
-	Data directory       : ${DATADIR}
-	PID directory        : ${RUNDIR}
-	Large network support: ${LARGENET}
-	OpenSSL SASL support : ${SSL}
-	Contrib modules      : ${CONTRIB}
-	Mowgli installation  : ${MOWGLI_SOURCE}
-	PCRE support         : ${with_pcre}
-	Perl support         : ${with_perl}
-	QR Code support      : ${LIBQRENCODE}
-	CFLAGS               : ${CFLAGS}
-	Internationalization : ${USE_NLS}
-
-Type make to build Atheme, and make install to install it."
+ATHEME_PRINT_CONFIGURATION

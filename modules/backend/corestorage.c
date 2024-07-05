@@ -1,6 +1,8 @@
 /*
- * Copyright (c) 2005-2012 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2012 Atheme Project (http://atheme.org/)
  *
  * This contains the core storage components, which comprises basically
  * everything which used to live in atheme.db a long time ago.  It is not
@@ -10,55 +12,60 @@
  * a set of non-finite table cells).
  *
  * The stuff here should be moved to the individual components which depend
- * on them.  e.g. myuser_t should register their own writer, mychan_t same
- * story etc.
+ * on them.  e.g. struct myuser should register their own writer, struct mychan
+ * same story etc.
  *
  *    --nenolod
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"backend/corestorage", true, _modinit, NULL,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+// MDEPs to write to the database on commit, for reloading on startup
+#define MODFLAG_PRIV_MDEP       (MODFLAG_DBCRYPTO | MODFLAG_DBHANDLER)
 
-unsigned int dbv;
-unsigned int their_ca_all;
+static unsigned int dbv;
+static unsigned int their_ca_all;
 
-extern mowgli_list_t modules;
+static time_t db_time;
 
-/* write atheme.db (core fields) */
+static bool mdep_load_mdeps = true;
+
+#ifdef HAVE_FORK
+static pid_t child_pid;
+#endif
+
+// write atheme.db (core fields)
 static void
-corestorage_db_save(database_handle_t *db)
+corestorage_db_save(struct database_handle *db)
 {
-	metadata_t *md;
-	myuser_t *mu;
-	myentity_t *ment;
-	myuser_name_t *mun;
-	mychan_t *mc;
-	chanacs_t *ca;
-	kline_t *k;
-	xline_t *x;
-	qline_t *q;
-	svsignore_t *svsignore;
-	soper_t *soper;
+	struct metadata *md;
+	struct myuser *mu;
+	struct myentity *ment;
+	struct myuser_name *mun;
+	struct mychan *mc;
+	struct chanacs *ca;
+	struct kline *k;
+	struct xline *x;
+	struct qline *q;
+	struct svsignore *svsignore;
+	struct soper *soper;
 	mowgli_node_t *n, *tn;
 	mowgli_patricia_iteration_state_t state;
-	myentity_iteration_state_t mestate;
+	struct myentity_iteration_state mestate;
 
 	errno = 0;
 
-	/* write the database version */
+	// write the database version
 	db_start_row(db, "DBV");
-	db_write_int(db, 12);
+	db_write_uint(db, 12);
 	db_commit_row(db);
 
 	MOWGLI_ITER_FOREACH(n, modules.head)
 	{
-		module_t *m = n->data;
+		const struct module *const m = n->data;
+
+		if (! (m->mflags & MODFLAG_PRIV_MDEP))
+			continue;
 
 		db_start_row(db, "MDEP");
 		db_write_word(db, m->name);
@@ -71,6 +78,10 @@ corestorage_db_save(database_handle_t *db)
 
 	db_start_row(db, "CF");
 	db_write_word(db, bitmask_to_flags(ca_all));
+	db_commit_row(db);
+
+	db_start_row(db, "TS");
+	db_write_time(db, CURRTIME);
 	db_commit_row(db);
 
 	slog(LG_DEBUG, "db_save(): saving myusers");
@@ -90,14 +101,19 @@ corestorage_db_save(database_handle_t *db)
 		db_write_word(db, mu->pass);
 		db_write_word(db, mu->email);
 		db_write_time(db, mu->registered);
-		db_write_time(db, mu->lastlogin);
+
+		if (MOWGLI_LIST_LENGTH(&mu->logins))
+			db_write_time(db, 0);
+		else
+			db_write_time(db, mu->lastlogin);
+
 		db_write_word(db, flags);
 		db_write_word(db, language_get_name(mu->language));
 		db_commit_row(db);
 
-		if (object(mu)->metadata)
+		if (atheme_object(mu)->metadata)
 		{
-			MOWGLI_PATRICIA_FOREACH(md, &state, object(mu)->metadata)
+			MOWGLI_PATRICIA_FOREACH(md, &state, atheme_object(mu)->metadata)
 			{
 				db_start_row(db, "MDU");
 				db_write_word(db, entity(mu)->name);
@@ -109,7 +125,7 @@ corestorage_db_save(database_handle_t *db)
 
 		MOWGLI_ITER_FOREACH(tn, mu->memos.head)
 		{
-			mymemo_t *mz = (mymemo_t *)tn->data;
+			struct mymemo *mz = (struct mymemo *)tn->data;
 
 			db_start_row(db, "ME");
 			db_write_word(db, entity(mu)->name);
@@ -138,19 +154,25 @@ corestorage_db_save(database_handle_t *db)
 
 		MOWGLI_ITER_FOREACH(tn, mu->nicks.head)
 		{
-			mynick_t *mn = tn->data;
+			struct mynick *mn = tn->data;
 
 			db_start_row(db, "MN");
 			db_write_word(db, entity(mu)->name);
 			db_write_word(db, mn->nick);
 			db_write_time(db, mn->registered);
-			db_write_time(db, mn->lastseen);
+
+			struct user *u = user_find_named(mn->nick);
+			if (u != NULL && u->myuser == mn->owner)
+				db_write_time(db, 0);
+			else
+				db_write_time(db, mn->lastseen);
+
 			db_commit_row(db);
 		}
 
 		MOWGLI_ITER_FOREACH(tn, mu->cert_fingerprints.head)
 		{
-			mycertfp_t *mcfp = tn->data;
+			struct mycertfp *mcfp = tn->data;
 
 			db_start_row(db, "MCFP");
 			db_write_word(db, entity(mu)->name);
@@ -159,7 +181,7 @@ corestorage_db_save(database_handle_t *db)
 		}
 	}
 
-	/* XXX: groupserv hack.  remove when we have proper dependency resolution. --nenolod */
+	// XXX: groupserv hack.  remove when we have proper dependency resolution. --nenolod
 	hook_call_db_write_pre_ca(db);
 
 	slog(LG_DEBUG, "db_save(): saving mychans");
@@ -169,18 +191,20 @@ corestorage_db_save(database_handle_t *db)
 		mowgli_patricia_iteration_state_t state2;
 
 		char *flags = gflags_tostr(mc_flags, mc->flags);
-		/* find a founder */
+
+		// find a founder
 		mu = NULL;
 		MOWGLI_ITER_FOREACH(tn, mc->chanacs.head)
 		{
-			ca = (chanacs_t *)tn->data;
+			ca = (struct chanacs *)tn->data;
 			if (ca->entity != NULL && ca->level & CA_FOUNDER)
 			{
 				mu = user(ca->entity);
 				break;
 			}
 		}
-		/* MC <name> <registered> <used> <flags> <mlock_on> <mlock_off> <mlock_limit> [mlock_key] */
+
+		// MC <name> <registered> <used> <flags> <mlock_on> <mlock_off> <mlock_limit> [mlock_key]
 		db_start_row(db, "MC");
 		db_write_word(db, mc->name);
 		db_write_time(db, mc->registered);
@@ -194,19 +218,25 @@ corestorage_db_save(database_handle_t *db)
 
 		MOWGLI_ITER_FOREACH(tn, mc->chanacs.head)
 		{
-			ca = (chanacs_t *)tn->data;
+			struct myentity *setter = NULL;
+			ca = (struct chanacs *)tn->data;
 
 			db_start_row(db, "CA");
 			db_write_word(db, ca->mychan->name);
 			db_write_word(db, ca->entity ? ca->entity->name : ca->host);
 			db_write_word(db, bitmask_to_flags(ca->level));
 			db_write_time(db, ca->tmodified);
-			db_write_word(db, ca->setter ? ca->setter : "*");
+
+			if (*ca->setter_uid != '\0' && (setter = myentity_find_uid(ca->setter_uid)))
+				db_write_word(db, setter->name);
+			else
+				db_write_word(db, "*");
+
 			db_commit_row(db);
 
-			if (object(ca)->metadata)
+			if (atheme_object(ca)->metadata)
 			{
-				MOWGLI_PATRICIA_FOREACH(md, &state2, object(ca)->metadata)
+				MOWGLI_PATRICIA_FOREACH(md, &state2, atheme_object(ca)->metadata)
 				{
 					db_start_row(db, "MDA");
 					db_write_word(db, ca->mychan->name);
@@ -218,9 +248,9 @@ corestorage_db_save(database_handle_t *db)
 			}
 		}
 
-		if (object(mc)->metadata)
+		if (atheme_object(mc)->metadata)
 		{
-			MOWGLI_PATRICIA_FOREACH(md, &state2, object(mc)->metadata)
+			MOWGLI_PATRICIA_FOREACH(md, &state2, atheme_object(mc)->metadata)
 			{
 				db_start_row(db, "MDC");
 				db_write_word(db, mc->name);
@@ -231,7 +261,7 @@ corestorage_db_save(database_handle_t *db)
 		}
 	}
 
-	/* Old names */
+	// Old names
 	MOWGLI_PATRICIA_FOREACH(mun, &state, oldnameslist)
 	{
 		mowgli_patricia_iteration_state_t state2;
@@ -240,9 +270,9 @@ corestorage_db_save(database_handle_t *db)
 		db_write_word(db, mun->name);
 		db_commit_row(db);
 
-		if (object(mun)->metadata)
+		if (atheme_object(mun)->metadata)
 		{
-			MOWGLI_PATRICIA_FOREACH(md, &state2, object(mun)->metadata)
+			MOWGLI_PATRICIA_FOREACH(md, &state2, atheme_object(mun)->metadata)
 			{
 				db_start_row(db, "MDN");
 				db_write_word(db, mun->name);
@@ -253,14 +283,14 @@ corestorage_db_save(database_handle_t *db)
 		}
 	}
 
-	/* Services ignores */
+	// Services ignores
 	slog(LG_DEBUG, "db_save(): saving svsignores");
 
 	MOWGLI_ITER_FOREACH(n, svs_ignore_list.head)
 	{
-		svsignore = (svsignore_t *)n->data;
+		svsignore = (struct svsignore *)n->data;
 
-		/* SI <mask> <settime> <setby> <reason> */
+		// SI <mask> <settime> <setby> <reason>
 		db_start_row(db, "SI");
 		db_write_word(db, svsignore->mask);
 		db_write_time(db, svsignore->settime);
@@ -269,7 +299,7 @@ corestorage_db_save(database_handle_t *db)
 		db_commit_row(db);
 	}
 
-	/* Services operators */
+	// Services operators
 	slog(LG_DEBUG, "db_save(): saving sopers");
 
 	MOWGLI_ITER_FOREACH(n, soperlist.head)
@@ -281,7 +311,7 @@ corestorage_db_save(database_handle_t *db)
 		if (soper->flags & SOPER_CONF || soper->myuser == NULL)
 			continue;
 
-		/* SO <account> <operclass> <flags> [password] */
+		// SO <account> <operclass> <flags> [password]
 		db_start_row(db, "SO");
 		db_write_word(db, entity(soper->myuser)->name);
 		db_write_word(db, soper->classname);
@@ -301,9 +331,9 @@ corestorage_db_save(database_handle_t *db)
 
 	MOWGLI_ITER_FOREACH(n, klnlist.head)
 	{
-		k = (kline_t *)n->data;
+		k = (struct kline *)n->data;
 
-		/* KL <user> <host> <duration> <settime> <setby> <reason> */
+		// KL <user> <host> <duration> <settime> <setby> <reason>
 		db_start_row(db, "KL");
 		db_write_uint(db, k->number);
 		db_write_word(db, k->user);
@@ -323,9 +353,9 @@ corestorage_db_save(database_handle_t *db)
 
 	MOWGLI_ITER_FOREACH(n, xlnlist.head)
 	{
-		x = (xline_t *)n->data;
+		x = (struct xline *)n->data;
 
-		/* XL <gecos> <duration> <settime> <setby> <reason> */
+		// XL <gecos> <duration> <settime> <setby> <reason>
 		db_start_row(db, "XL");
 		db_write_uint(db, x->number);
 		db_write_word(db, x->realname);
@@ -342,9 +372,9 @@ corestorage_db_save(database_handle_t *db)
 
 	MOWGLI_ITER_FOREACH(n, qlnlist.head)
 	{
-		q = (qline_t *)n->data;
+		q = (struct qline *)n->data;
 
-		/* QL <mask> <duration> <settime> <setby> <reason> */
+		// QL <mask> <duration> <settime> <setby> <reason>
 		db_start_row(db, "QL");
 		db_write_uint(db, q->number);
 		db_write_word(db, q->mask);
@@ -356,25 +386,69 @@ corestorage_db_save(database_handle_t *db)
 	}
 }
 
-static void corestorage_h_unknown(database_handle_t *db, const char *type)
+static void ATHEME_FATTR_NORETURN
+corestorage_h_unknown(struct database_handle *db, const char *type)
 {
-	slog(LG_ERROR, "db %s:%d: unknown directive '%s'", db->file, db->line, type);
+	slog(LG_ERROR, "db %s:%u: unknown directive '%s'", db->file, db->line, type);
 	slog(LG_ERROR, "corestorage: exiting to avoid data loss");
 	exit(EXIT_FAILURE);
 }
 
-static void corestorage_h_dbv(database_handle_t *db, const char *type)
+static void
+corestorage_h_dbv(struct database_handle *db, const char *type)
 {
-	dbv = db_sread_int(db);
-	slog(LG_INFO, "corestorage: data schema version is %d.", dbv);
+	dbv = db_sread_uint(db);
+	slog(LG_INFO, "corestorage: data schema version is %u.", dbv);
 }
 
-static void corestorage_h_luid(database_handle_t *db, const char *type)
+static void
+corestorage_h_mdep(struct database_handle *const restrict db, const char ATHEME_VATTR_UNUSED *const restrict type)
+{
+	if (! mdep_load_mdeps)
+		return;
+
+	const char *const modname = db_sread_word(db);
+
+	if (! modname || ! *modname)
+		return;
+
+	if (strncmp(modname, "transport/", 10) == 0 || strncmp(modname, "protocol/", 9) == 0)
+	{
+		// Old (<= 7.2) database
+		mdep_load_mdeps = false;
+		return;
+	}
+
+	if (module_find_published(modname))
+		return;
+
+	if (config_options.load_database_mdeps)
+	{
+		(void) slog(LG_INFO, "corestorage: auto-loading module '%s' (database depends on it)", modname);
+
+		if (module_request(modname))
+			return;
+
+		(void) slog(LG_ERROR, "db %s:%u: cannot load module '%s'", db->file, db->line, modname);
+	}
+	else
+		(void) slog(LG_ERROR, "db %s:%u: need module '%s' to process the database successfully, but have "
+		                      "been configured to not load any (general::load_database_mdeps)", db->file,
+		                      db->line, modname);
+
+	(void) slog(LG_ERROR, "corestorage: exiting to avoid data loss");
+
+	exit(EXIT_FAILURE);
+}
+
+static void
+corestorage_h_luid(struct database_handle *db, const char *type)
 {
 	myentity_set_last_uid(db_sread_word(db));
 }
 
-static void corestorage_h_cf(database_handle_t *db, const char *type)
+static void
+corestorage_h_cf(struct database_handle *db, const char *type)
 {
 	const char *flags = db_sread_word(db);
 
@@ -389,7 +463,14 @@ static void corestorage_h_cf(database_handle_t *db, const char *type)
 	}
 }
 
-static void corestorage_h_mu(database_handle_t *db, const char *type)
+static void
+corestorage_h_ts(struct database_handle *db, const char *type)
+{
+	db_time = db_sread_time(db);
+}
+
+static void
+corestorage_h_mu(struct database_handle *db, const char *type)
 {
 	const char *uid = NULL;
 	const char *name;
@@ -397,7 +478,7 @@ static void corestorage_h_mu(database_handle_t *db, const char *type)
 	time_t reg, login;
 	const char *sflags;
 	unsigned int flags = 0;
-	myuser_t *mu;
+	struct myuser *mu;
 
 	if (dbv >= 10)
 		uid = db_sread_word(db);
@@ -406,13 +487,13 @@ static void corestorage_h_mu(database_handle_t *db, const char *type)
 
 	if (myuser_find(name))
 	{
-		slog(LG_INFO, "db-h-mu: line %d: skipping duplicate account %s", db->line, name);
+		slog(LG_INFO, "db-h-mu: line %u: skipping duplicate account %s", db->line, name);
 		return;
 	}
 
 	if (strict_mode && uid && myuser_find_uid(uid))
 	{
-		slog(LG_INFO, "db-h-mu: line %d: skipping account %s with duplicate UID %s", db->line, name, uid);
+		slog(LG_INFO, "db-h-mu: line %u: skipping account %s with duplicate UID %s", db->line, name, uid);
 		return;
 	}
 
@@ -423,7 +504,7 @@ static void corestorage_h_mu(database_handle_t *db, const char *type)
 	if (dbv >= 8) {
 		sflags = db_sread_word(db);
 		if (!gflags_fromstr(mu_flags, sflags, &flags))
-			slog(LG_INFO, "db-h-mu: line %d: confused by flags: %s", db->line, sflags);
+			slog(LG_INFO, "db-h-mu: line %u: confused by flags: %s", db->line, sflags);
 	} else {
 		flags = db_sread_uint(db);
 	}
@@ -432,34 +513,43 @@ static void corestorage_h_mu(database_handle_t *db, const char *type)
 
 	mu = myuser_add_id(uid, name, pass, email, flags);
 	mu->registered = reg;
-	mu->lastlogin = login;
+
+	if (login != 0)
+		mu->lastlogin = login;
+	else if (db_time != 0)
+		mu->lastlogin = db_time;
+	else
+		/* we'll only get here if someone manually corrupted a DB */
+		mu->lastlogin = CURRTIME;
+
 	if (language)
 		mu->language = language_add(language);
 }
 
-static void corestorage_h_me(database_handle_t *db, const char *type)
+static void
+corestorage_h_me(struct database_handle *db, const char *type)
 {
 	const char *dest, *src, *text;
 	time_t sent;
 	unsigned int status;
-	myuser_t *mu;
-	mymemo_t *mz;
+	struct myuser *mu;
+	struct mymemo *mz;
 
 	dest = db_sread_word(db);
 	src = db_sread_word(db);
 	sent = db_sread_time(db);
-	status = db_sread_int(db);
+	status = db_sread_uint(db);
 	text = db_sread_str(db);
 
 	if (!(mu = myuser_find(dest)))
 	{
-		slog(LG_DEBUG, "db-h-me: line %d: memo for unknown account %s", db->line, dest);
+		slog(LG_DEBUG, "db-h-me: line %u: memo for unknown account %s", db->line, dest);
 		return;
 	}
 
 	mz = smalloc(sizeof *mz);
-	mowgli_strlcpy(mz->sender, src, NICKLEN);
-	mowgli_strlcpy(mz->text, text, MEMOLEN);
+	mowgli_strlcpy(mz->sender, src, sizeof mz->sender);
+	mowgli_strlcpy(mz->text, text, sizeof mz->text);
 	mz->sent = sent;
 	mz->status = status;
 
@@ -469,9 +559,10 @@ static void corestorage_h_me(database_handle_t *db, const char *type)
 	mowgli_node_add(mz, mowgli_node_create(), &mu->memos);
 }
 
-static void corestorage_h_mi(database_handle_t *db, const char *type)
+static void
+corestorage_h_mi(struct database_handle *db, const char *type)
 {
-	myuser_t *mu;
+	struct myuser *mu;
 	const char *user, *target;
 
 	user = db_sread_word(db);
@@ -480,16 +571,17 @@ static void corestorage_h_mi(database_handle_t *db, const char *type)
 	mu = myuser_find(user);
 	if (!mu)
 	{
-		slog(LG_DEBUG, "db-h-mi: line %d: ignore for unknown account %s", db->line, user);
+		slog(LG_DEBUG, "db-h-mi: line %u: ignore for unknown account %s", db->line, user);
 		return;
 	}
 
 	mowgli_node_add(sstrdup(target), mowgli_node_create(), &mu->memo_ignores);
 }
 
-static void corestorage_h_ac(database_handle_t *db, const char *type)
+static void
+corestorage_h_ac(struct database_handle *db, const char *type)
 {
-	myuser_t *mu;
+	struct myuser *mu;
 	const char *user, *mask;
 
 	user = db_sread_word(db);
@@ -498,17 +590,18 @@ static void corestorage_h_ac(database_handle_t *db, const char *type)
 	mu = myuser_find(user);
 	if (!mu)
 	{
-		slog(LG_DEBUG, "db-h-ac: line %d: access entry for unknown account %s", db->line, user);
+		slog(LG_DEBUG, "db-h-ac: line %u: access entry for unknown account %s", db->line, user);
 		return;
 	}
 
 	myuser_access_add(mu, mask);
 }
 
-static void corestorage_h_mn(database_handle_t *db, const char *type)
+static void
+corestorage_h_mn(struct database_handle *db, const char *type)
 {
-	myuser_t *mu;
-	mynick_t *mn;
+	struct myuser *mu;
+	struct mynick *mn;
 	const char *user, *nick;
 	time_t reg, seen;
 
@@ -520,25 +613,33 @@ static void corestorage_h_mn(database_handle_t *db, const char *type)
 	mu = myuser_find(user);
 	if (!mu)
 	{
-		slog(LG_DEBUG, "db-h-mn: line %d: registered nick %s for unknown account %s", db->line, nick, user);
+		slog(LG_DEBUG, "db-h-mn: line %u: registered nick %s for unknown account %s", db->line, nick, user);
 		return;
 	}
 
 	if (mynick_find(nick))
 	{
-		slog(LG_INFO, "db-h-mn: line %d: skipping duplicate nick %s for account %s", db->line, nick, user);
+		slog(LG_INFO, "db-h-mn: line %u: skipping duplicate nick %s for account %s", db->line, nick, user);
 		return;
 	}
 
 	mn = mynick_add(mu, nick);
 	mn->registered = reg;
-	mn->lastseen = seen;
+
+	if (seen != 0)
+		mn->lastseen = seen;
+	else if (db_time != 0)
+		mn->lastseen = db_time;
+	else
+		/* we'll only get here if someone manually corrupted a DB */
+		mn->lastseen = CURRTIME;
 }
 
-static void corestorage_h_mcfp(database_handle_t *db, const char *type)
+static void
+corestorage_h_mcfp(struct database_handle *db, const char *type)
 {
 	const char *user, *certfp;
-	myuser_t *mu;
+	struct myuser *mu;
 
 	user = db_sread_word(db);
 	certfp = db_sread_word(db);
@@ -550,25 +651,28 @@ static void corestorage_h_mcfp(database_handle_t *db, const char *type)
 		return;
 	}
 
-	mycertfp_add(mu, certfp);
+	mycertfp_add(mu, certfp, true);
 }
 
-static void corestorage_h_su(database_handle_t *db, const char *type)
+static void
+corestorage_h_su(struct database_handle *db, const char *type)
 {
-	slog(LG_INFO, "db-h-su: line %d: metadata change subscriptions have been dropped, ignoring", db->line);
+	slog(LG_INFO, "db-h-su: line %u: metadata change subscriptions have been dropped, ignoring", db->line);
 }
 
-static void corestorage_h_nam(database_handle_t *db, const char *type)
+static void
+corestorage_h_nam(struct database_handle *db, const char *type)
 {
 	const char *user = db_sread_word(db);
 	myuser_name_add(user);
 }
 
-static void corestorage_h_so(database_handle_t *db, const char *type)
+static void
+corestorage_h_so(struct database_handle *db, const char *type)
 {
 	const char *user, *class, *pass;
 	unsigned int flags = 0;
-	myuser_t *mu;
+	struct myuser *mu;
 	const char *sflags;
 
 	user = db_sread_word(db);
@@ -577,10 +681,10 @@ static void corestorage_h_so(database_handle_t *db, const char *type)
 	{
 		sflags = db_sread_word(db);
 		if (!gflags_fromstr(soper_flags, sflags, &flags))
-			slog(LG_INFO, "db-h-so: line %d: confused by flags %s",
+			slog(LG_INFO, "db-h-so: line %u: confused by flags %s",
 			     db->line, sflags);
 	} else {
-		flags = db_sread_int(db);
+		flags = db_sread_uint(db);
 	}
 	pass = db_read_word(db);
 	if (pass != NULL && !*pass)
@@ -588,14 +692,20 @@ static void corestorage_h_so(database_handle_t *db, const char *type)
 
 	if (!(mu = myuser_find(user)))
 	{
-		slog(LG_INFO, "db-h-so: soper for nonexistent account %s", user);
+		slog(LG_ERROR, "db-h-so: soper for nonexistent account %s", user);
+		return;
+	}
+	if (!operclass_find(class))
+	{
+		slog(LG_ERROR, "db-h-so: soper for nonexistent class %s", class);
 		return;
 	}
 
 	soper_add(entity(mu)->name, class, flags & ~SOPER_CONF, pass);
 }
 
-static void corestorage_h_mc(database_handle_t *db, const char *type)
+static void
+corestorage_h_mc(struct database_handle *db, const char *type)
 {
 	char buf[4096];
 	const char *name = db_sread_word(db);
@@ -604,14 +714,14 @@ static void corestorage_h_mc(database_handle_t *db, const char *type)
 	unsigned int flags = 0;
 
 	mowgli_strlcpy(buf, name, sizeof buf);
-	mychan_t *mc = mychan_add(buf);
+	struct mychan *mc = mychan_add(buf);
 
 	mc->registered = db_sread_time(db);
 	mc->used = db_sread_time(db);
 	if (dbv >= 8) {
 		sflags = db_sread_word(db);
 		if (!gflags_fromstr(mc_flags, sflags, &flags))
-			slog(LG_INFO, "db-h-mc: line %d: confused by flags %s",
+			slog(LG_INFO, "db-h-mc: line %u: confused by flags %s",
 			     db->line, sflags);
 	} else {
 		flags = db_sread_uint(db);
@@ -631,7 +741,7 @@ static void corestorage_h_mc(database_handle_t *db, const char *type)
 	}
 }
 
-static char *
+static char * ATHEME_FATTR_MALLOC
 convert_templates(const char *value)
 {
 	char *newvalue, *p;
@@ -659,7 +769,8 @@ convert_templates(const char *value)
 	return newvalue;
 }
 
-static void corestorage_h_md(database_handle_t *db, const char *type)
+static void
+corestorage_h_md(struct database_handle *db, const char *type)
 {
 	const char *name = db_sread_word(db);
 	const char *prop = db_sread_word(db);
@@ -704,15 +815,16 @@ static void corestorage_h_md(database_handle_t *db, const char *type)
 	{
 		slog(LG_INFO, "db-h-md: attempting to add %s property to non-existant object %s",
 		     prop, name);
-		free(newvalue);
+		sfree(newvalue);
 		return;
 	}
 
 	metadata_add(obj, prop, value);
-	free(newvalue);
+	sfree(newvalue);
 }
 
-static void corestorage_h_mda(database_handle_t *db, const char *type)
+static void
+corestorage_h_mda(struct database_handle *db, const char *type)
 {
 	const char *name, *prop, *value, *mask;
 	void *obj = NULL;
@@ -737,20 +849,21 @@ static void corestorage_h_mda(database_handle_t *db, const char *type)
 	metadata_add(obj, prop, value);
 }
 
-static void corestorage_h_ca(database_handle_t *db, const char *type)
+static void
+corestorage_h_ca(struct database_handle *db, const char *type)
 {
 	const char *chan, *target;
 	time_t tmod;
 	unsigned int flags;
-	mychan_t *mc;
-	myentity_t *mt;
-	myentity_t *setter;
+	struct mychan *mc;
+	struct myentity *mt;
+	struct myentity *setter;
 
 	chan = db_sread_word(db);
 	target = db_sread_word(db);
 	flags = flags_to_bitmask(db_sread_word(db), 0);
 
-	/* UNBAN self and akick exempt have been split to +e per github #75 */
+	// UNBAN self and akick exempt have been split to +e per GitHub #75
 	if (!(their_ca_all & CA_EXEMPT) && (flags & CA_REMOVE))
 		flags |= CA_EXEMPT;
 
@@ -765,17 +878,17 @@ static void corestorage_h_ca(database_handle_t *db, const char *type)
 
 	if (mc == NULL)
 	{
-		slog(LG_INFO, "db-h-ca: line %d: chanacs for nonexistent channel %s - exiting to avoid data loss", db->line, chan);
-		slog(LG_INFO, "db-h-ca: line %d: if this depends on a specific module or feature; please make sure", db->line);
-		slog(LG_INFO, "db-h-ca: line %d: that feature is enabled.", db->line);
+		slog(LG_INFO, "db-h-ca: line %u: chanacs for nonexistent channel %s - exiting to avoid data loss", db->line, chan);
+		slog(LG_INFO, "db-h-ca: line %u: if this depends on a specific module or feature; please make sure", db->line);
+		slog(LG_INFO, "db-h-ca: line %u: that feature is enabled.", db->line);
 		exit(EXIT_FAILURE);
 	}
 
 	if (mt == NULL && !validhostmask(target))
 	{
-		slog(LG_INFO, "db-h-ca: line %d: chanacs for nonexistent target %s - exiting to avoid data loss", db->line, target);
-		slog(LG_INFO, "db-h-ca: line %d: if this depends on a specific module or feature; please make sure", db->line);
-		slog(LG_INFO, "db-h-ca: line %d: that feature is enabled.", db->line);
+		slog(LG_INFO, "db-h-ca: line %u: chanacs for nonexistent target %s - exiting to avoid data loss", db->line, target);
+		slog(LG_INFO, "db-h-ca: line %u: if this depends on a specific module or feature; please make sure", db->line);
+		slog(LG_INFO, "db-h-ca: line %u: that feature is enabled.", db->line);
 		exit(EXIT_FAILURE);
 	}
 
@@ -789,12 +902,13 @@ static void corestorage_h_ca(database_handle_t *db, const char *type)
 	}
 }
 
-static void corestorage_h_si(database_handle_t *db, const char *type)
+static void
+corestorage_h_si(struct database_handle *db, const char *type)
 {
 	char buf[4096];
 	const char *mask, *setby, *reason;
 	time_t settime;
-	svsignore_t *svsignore;
+	struct svsignore *svsignore;
 
 	mask = db_sread_word(db);
 	settime = db_sread_time(db);
@@ -805,22 +919,24 @@ static void corestorage_h_si(database_handle_t *db, const char *type)
 	strip(buf);
 	svsignore = svsignore_add(mask, reason);
 	svsignore->settime = settime;
-	svsignore->setby = strdup(setby);
+	svsignore->setby = sstrdup(setby);
 }
 
-static void corestorage_h_kid(database_handle_t *db, const char *type)
+static void
+corestorage_h_kid(struct database_handle *db, const char *type)
 {
-	me.kline_id = db_sread_int(db);
+	me.kline_id = db_sread_uint(db);
 }
 
-static void corestorage_h_kl(database_handle_t *db, const char *type)
+static void
+corestorage_h_kl(struct database_handle *db, const char *type)
 {
 	char buf[4096];
 	const char *user, *host, *reason, *setby;
 	unsigned int id = 0;
 	time_t settime;
 	long duration;
-	kline_t *k;
+	struct kline *k;
 
 	if (dbv > 10)
 		id = db_sread_uint(db);
@@ -840,19 +956,21 @@ static void corestorage_h_kl(database_handle_t *db, const char *type)
 	k->expires = k->settime + k->duration;
 }
 
-static void corestorage_h_xid(database_handle_t *db, const char *type)
+static void
+corestorage_h_xid(struct database_handle *db, const char *type)
 {
-	me.xline_id = db_sread_int(db);
+	me.xline_id = db_sread_uint(db);
 }
 
-static void corestorage_h_xl(database_handle_t *db, const char *type)
+static void
+corestorage_h_xl(struct database_handle *db, const char *type)
 {
 	char buf[4096];
 	const char *realname, *reason, *setby;
 	unsigned int id = 0;
 	time_t settime;
 	long duration;
-	xline_t *x;
+	struct xline *x;
 
 	if (dbv > 10)
 		id = db_sread_uint(db);
@@ -874,19 +992,21 @@ static void corestorage_h_xl(database_handle_t *db, const char *type)
 		x->number = id;
 }
 
-static void corestorage_h_qid(database_handle_t *db, const char *type)
+static void
+corestorage_h_qid(struct database_handle *db, const char *type)
 {
-	me.qline_id = db_sread_int(db);
+	me.qline_id = db_sread_uint(db);
 }
 
-static void corestorage_h_ql(database_handle_t *db, const char *type)
+static void
+corestorage_h_ql(struct database_handle *db, const char *type)
 {
 	char buf[4096];
 	const char *mask, *reason, *setby;
 	unsigned int id = 0;
 	time_t settime;
 	long duration;
-	qline_t *q;
+	struct qline *q;
 
 	if (dbv > 10)
 		id = db_sread_uint(db);
@@ -908,28 +1028,39 @@ static void corestorage_h_ql(database_handle_t *db, const char *type)
 		q->number = id;
 }
 
-static void corestorage_ignore_row(database_handle_t *db, const char *type)
+static void
+corestorage_ignore_row(struct database_handle *db, const char *type)
 {
 	return;
 }
 
-static void corestorage_db_load(const char *filename)
+static void
+corestorage_db_load(const char *filename)
 {
-	database_handle_t *db;
+	struct database_handle *db;
 
 	db = db_open(filename, DB_READ);
 	if (db == NULL)
 		return;
 
+	db_time = 0;
+
 	db_parse(db);
 	db_close(db);
 }
 
-static void corestorage_db_write(void *filename)
+static void
+corestorage_db_write_blocking(void *filename)
 {
-	database_handle_t *db;
+	struct database_handle *db;
 
 	db = db_open(filename, DB_WRITE);
+
+	if (! db)
+	{
+		slog(LG_ERROR, "db_write_blocking(): db_open() failed, aborting save");
+		return;
+	}
 
 	corestorage_db_save(db);
 	hook_call_db_write(db);
@@ -937,17 +1068,82 @@ static void corestorage_db_write(void *filename)
 	db_close(db);
 }
 
-void _modinit(module_t *m)
+#ifdef HAVE_FORK
+static void
+corestorage_db_saved_cb(pid_t pid, int status, void *data)
 {
-	m->mflags = MODTYPE_CORE;
+	if (child_pid != pid)
+		return; // probably killed our child for a forced write
+	else
+	{
+		child_pid = 0;
+		slog(LG_DEBUG, "db_save(): finished asynchronous DB write");
+	}
+}
+#endif
 
+static void
+corestorage_db_write(void *filename, enum db_save_strategy strategy)
+{
+#ifndef HAVE_FORK
+	corestorage_db_write_blocking(filename);
+#else
+	if (child_pid && strategy == DB_SAVE_BG_REGULAR)
+	{
+		slog(LG_DEBUG, "db_save(): previous save unfinished, skipping save");
+		return;
+	}
+
+	if (child_pid)
+	{
+		slog(LG_DEBUG, "db_save(): interrupting unfinished previous save for forced save");
+		if (kill(child_pid, SIGKILL) == -1 && errno != ESRCH)
+		{
+			slog(LG_ERROR, "db_save(): kill() on previous save failed; trying to carry on somehow...");
+			waitpid(child_pid, NULL, 0);
+		}
+	}
+
+	if (config_options.db_save_blocking)
+		strategy = DB_SAVE_BLOCKING;
+
+	if (strategy == DB_SAVE_BLOCKING)
+	{
+		corestorage_db_write_blocking(filename);
+		return;
+	}
+
+	pid_t pid = fork();
+	switch (pid)
+	{
+		case -1:
+			slog(LG_ERROR, "db_save(): fork() failed; writing database synchronously");
+			corestorage_db_write_blocking(filename);
+			return;
+
+		case 0:
+			corestorage_db_write_blocking(filename);
+			exit(EXIT_SUCCESS);
+
+		default:
+			child_pid = pid;
+			childproc_add(pid, "db_save", corestorage_db_saved_cb, NULL);
+			return;
+	}
+#endif
+}
+
+static void
+mod_init(struct module *const restrict m)
+{
 	db_load = &corestorage_db_load;
 	db_save = &corestorage_db_write;
 
 	db_register_type_handler("DBV", corestorage_h_dbv);
-	db_register_type_handler("MDEP", corestorage_ignore_row);
+	db_register_type_handler("MDEP", corestorage_h_mdep);
 	db_register_type_handler("LUID", corestorage_h_luid);
 	db_register_type_handler("CF", corestorage_h_cf);
+	db_register_type_handler("TS", corestorage_h_ts);
 	db_register_type_handler("MU", corestorage_h_mu);
 	db_register_type_handler("ME", corestorage_h_me);
 	db_register_type_handler("MI", corestorage_h_mi);
@@ -977,10 +1173,14 @@ void _modinit(module_t *m)
 	db_register_type_handler("???", corestorage_h_unknown);
 
 	backend_loaded = true;
+
+	m->mflags |= MODFLAG_DBHANDLER;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("backend/corestorage", MODULE_UNLOAD_CAPABILITY_NEVER)

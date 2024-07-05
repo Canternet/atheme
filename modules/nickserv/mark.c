@@ -1,35 +1,26 @@
 /*
- * Copyright (c) 2005 William Pitcock
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock
  *
  * Marking for nicknames.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "list_common.h"
 #include "list.h"
 
 //NickServ mark module
 //Do NOT use this in combination with contrib/multimark!
 
-DECLARE_MODULE_V1
-(
-	"nickserv/mark", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_mark(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_mark = { "MARK", N_("Adds a note to a user."), PRIV_MARK, 3, ns_cmd_mark, { .path = "nickserv/mark" } };
-
-static bool mark_match(const mynick_t *mn, const void *arg)
+static bool
+mark_match(const struct mynick *mn, const void *arg)
 {
 	const char *markpattern = (const char*)arg;
-	metadata_t *mdmark;
+	struct metadata *mdmark;
 
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 	mdmark = metadata_find(mu, "private:mark:reason");
 
 	if (mdmark != NULL && !match(markpattern, mdmark->value))
@@ -38,53 +29,22 @@ static bool mark_match(const mynick_t *mn, const void *arg)
 	return false;
 }
 
-static bool is_marked(const mynick_t *mn, const void *arg)
+static bool
+is_marked(const struct mynick *mn, const void *arg)
 {
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 
 	return !!metadata_find(mu, "private:mark:setter");
 }
 
-void _modinit(module_t *m)
-{
-	if (module_find_published("nickserv/multimark"))
-	{
-		slog(LG_INFO, "Loading both multimark and mark has severe consequences for the space-time continuum. Refusing to load.");
-		m->mflags = MODTYPE_FAIL;
-		return;
-	}
-
-	service_named_bind_command("nickserv", &ns_mark);
-
-	use_nslist_main_symbols(m);
-
-	static list_param_t mark;
-	mark.opttype = OPT_STRING;
-	mark.is_match = mark_match;
-
-	static list_param_t marked;
-	marked.opttype = OPT_BOOL;
-	marked.is_match = is_marked;
-
-	list_register("mark-reason", &mark);
-	list_register("marked", &marked);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_mark);
-
-	list_unregister("mark-reason");
-	list_unregister("marked");
-}
-
-static void ns_cmd_mark(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_mark(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *action = parv[1];
 	char *info = parv[2];
-	myuser_t *mu;
-	myuser_name_t *mun;
+	struct myuser *mu;
+	struct myuser_name *mun;
 
 	if (!target || !action)
 	{
@@ -98,13 +58,13 @@ static void ns_cmd_mark(sourceinfo_t *si, int parc, char *parv[])
 		mun = myuser_name_find(target);
 		if (mun != NULL && !strcasecmp(action, "OFF"))
 		{
-			object_unref(mun);
-			wallops("%s unmarked the name \2%s\2.", get_oper_name(si), target);
+			atheme_object_unref(mun);
+			wallops("\2%s\2 unmarked the name \2%s\2.", get_oper_name(si), target);
 			logcommand(si, CMDLOG_ADMIN, "MARK:OFF: \2%s\2", target);
 			command_success_nodata(si, _("\2%s\2 is now unmarked."), target);
 			return;
 		}
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
 
@@ -127,7 +87,7 @@ static void ns_cmd_mark(sourceinfo_t *si, int parc, char *parv[])
 		metadata_add(mu, "private:mark:reason", info);
 		metadata_add(mu, "private:mark:timestamp", number_to_string(time(NULL)));
 
-		wallops("%s marked the account \2%s\2.", get_oper_name(si), entity(mu)->name);
+		wallops("\2%s\2 marked the account \2%s\2.", get_oper_name(si), entity(mu)->name);
 		logcommand(si, CMDLOG_ADMIN, "MARK:ON: \2%s\2 (reason: \2%s\2)", entity(mu)->name, info);
 		command_success_nodata(si, _("\2%s\2 is now marked."), entity(mu)->name);
 	}
@@ -143,7 +103,7 @@ static void ns_cmd_mark(sourceinfo_t *si, int parc, char *parv[])
 		metadata_delete(mu, "private:mark:reason");
 		metadata_delete(mu, "private:mark:timestamp");
 
-		wallops("%s unmarked the account \2%s\2.", get_oper_name(si), entity(mu)->name);
+		wallops("\2%s\2 unmarked the account \2%s\2.", get_oper_name(si), entity(mu)->name);
 		logcommand(si, CMDLOG_ADMIN, "MARK:OFF: \2%s\2", entity(mu)->name);
 		command_success_nodata(si, _("\2%s\2 is now unmarked."), entity(mu)->name);
 	}
@@ -154,8 +114,44 @@ static void ns_cmd_mark(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_mark = {
+	.name           = "MARK",
+	.desc           = N_("Adds a note to a user."),
+	.access         = PRIV_MARK,
+	.maxparc        = 3,
+	.cmd            = &ns_cmd_mark,
+	.help           = { .path = "nickserv/mark" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_CONFLICT(m, "nickserv/multimark")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	use_nslist_main_symbols(m);
+
+	service_named_bind_command("nickserv", &ns_mark);
+
+	static struct list_param mark;
+	mark.opttype = OPT_STRING;
+	mark.is_match = mark_match;
+
+	static struct list_param marked;
+	marked.opttype = OPT_BOOL;
+	marked.is_match = is_marked;
+
+	list_register("mark-reason", &mark);
+	list_register("marked", &marked);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_mark);
+
+	list_unregister("mark-reason");
+	list_unregister("marked");
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/mark", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,57 +1,25 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2008 William Pitcock, et al.
  *
  * This file contains code for the CService OWNER functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanserv.h"
-
-DECLARE_MODULE_V1
-(
-	"chanserv/owner", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_owner(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_deowner(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_owner = { "OWNER", N_("Gives the channel owner flag to a user."),
-                        AC_NONE, 2, cs_cmd_owner, { .path = "cservice/owner" } };
-command_t cs_deowner = { "DEOWNER", N_("Removes channel owner flag from a user."),
-                        AC_NONE, 2, cs_cmd_deowner, { .path = "cservice/owner" } };
-
-void _modinit(module_t *m)
-{
-	if (ircd != NULL && !ircd->uses_owner)
-	{
-		slog(LG_INFO, "Module %s requires owner support, refusing to load.", m->name);
-		m->mflags = MODTYPE_FAIL;
-		return;
-	}
-
-        service_named_bind_command("chanserv", &cs_owner);
-        service_named_bind_command("chanserv", &cs_deowner);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_owner);
-	service_named_unbind_command("chanserv", &cs_deowner);
-}
 
 static mowgli_list_t owner_actions;
 
-static void cmd_owner(sourceinfo_t *si, bool ownering, int parc, char *parv[])
+static void
+cmd_owner(struct sourceinfo *si, bool ownering, int parc, char *parv[])
 {
 	char *chan = parv[0];
 	char *nick = parv[1];
-	mychan_t *mc;
-	user_t *tu;
-	chanuser_t *cu;
+	struct mychan *mc;
+	struct user *tu;
+	struct chanuser *cu;
 	char *nicks;
 	bool owner;
 	mowgli_node_t *n;
@@ -65,25 +33,31 @@ static void cmd_owner(sourceinfo_t *si, bool ownering, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_USEOWNER))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
-	nicks = (!nick ? strdup(si->su->nick) : strdup(nick));
+	if (!mc->chan)
+	{
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
+		return;
+	}
+
+	nicks = (!nick ? sstrdup(si->su->nick) : sstrdup(nick));
 	prefix_action_set_all(&owner_actions, ownering, nicks);
-	free(nicks);
+	sfree(nicks);
 
 	MOWGLI_LIST_FOREACH(n, owner_actions.head)
 	{
@@ -91,7 +65,7 @@ static void cmd_owner(sourceinfo_t *si, bool ownering, int parc, char *parv[])
 		nick = act->nick;
 		owner = act->en;
 
-		/* figure out who we're going to op */
+		// figure out who we're going to op
 		if (!(tu = user_find_named(nick)))
 		{
 			command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), nick);
@@ -101,10 +75,10 @@ static void cmd_owner(sourceinfo_t *si, bool ownering, int parc, char *parv[])
 		if (is_internal_client(tu))
 			continue;
 
-		/* SECURE check; we can skip this if deownering or sender == target, because we already verified */
+		// SECURE check; we can skip this if deownering or sender == target, because we already verified
 		if (owner && (si->su != tu) && (mc->flags & MC_SECURE) && !chanacs_user_has_flag(mc, tu, CA_OP) && !chanacs_user_has_flag(mc, tu, CA_AUTOOP))
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			command_fail(si, fault_noprivs, _("\2%s\2 has the SECURE option enabled, and \2%s\2 does not have appropriate access."), mc->name, tu->nick);
 			continue;
 		}
@@ -116,24 +90,47 @@ static void cmd_owner(sourceinfo_t *si, bool ownering, int parc, char *parv[])
 			continue;
 		}
 
-		modestack_mode_param(chansvs.nick, mc->chan, owner ? MTYPE_ADD : MTYPE_DEL, ircd->owner_mchar[1], CLIENT_NAME(tu));
 		if (owner)
+		{
+			modestack_mode_param(chansvs.nick, mc->chan, MTYPE_ADD, ircd->owner_mchar[1], CLIENT_NAME(tu));
 			cu->modes |= CSTATUS_OWNER;
+
+			if (! si->c && tu != si->su)
+				change_notify(chansvs.nick, tu, "You have had owner (+%c) status given to you on "
+				                                "\2%s\2 by \2%s\2", ircd->owner_mchar[1], mc->name,
+				                                get_source_name(si));
+
+			if (! si->su || ! chanuser_find(mc->chan, si->su))
+				command_success_nodata(si, _("\2%s\2 has had owner (+%c) status given to them on "
+				                             "\2%s\2"), tu->nick, ircd->owner_mchar[1], mc->name);
+
+			logcommand(si, CMDLOG_DO, "OWNER: \2%s!%s@%s\2 on \2%s\2", tu->nick, tu->user, tu->vhost,
+			                                                           mc->name);
+		}
 		else
+		{
+			modestack_mode_param(chansvs.nick, mc->chan, MTYPE_DEL, ircd->owner_mchar[1], CLIENT_NAME(tu));
 			cu->modes &= ~CSTATUS_OWNER;
 
-		if (si->c == NULL && tu != si->su)
-			change_notify(chansvs.nick, tu, "You have been %sset as owner on %s by %s", owner ? "" : "un", mc->name, get_source_name(si));
+			if (! si->c && tu != si->su)
+				change_notify(chansvs.nick, tu, "You have had owner (+%c) status taken from you on "
+				                                "\2%s\2 by \2%s\2", ircd->owner_mchar[1], mc->name,
+				                                get_source_name(si));
 
-		logcommand(si, CMDLOG_DO, "%sOWNER: \2%s!%s@%s\2 on \2%s\2", owner ? "" : "DE", tu->nick, tu->user, tu->vhost, mc->name);
-		if (si->su == NULL || !chanuser_find(mc->chan, si->su))
-			command_success_nodata(si, _("\2%s\2 has been %sset as owner on \2%s\2."), tu->nick, owner ? "" : "un", mc->name);
+			if (! si->su || ! chanuser_find(mc->chan, si->su))
+				command_success_nodata(si, _("\2%s\2 has had owner (+%c) status taken from them on "
+				                             "\2%s\2"), tu->nick, ircd->owner_mchar[1], mc->name);
+
+			logcommand(si, CMDLOG_DO, "OWNER: \2%s!%s@%s\2 on \2%s\2", tu->nick, tu->user, tu->vhost,
+			                                                           mc->name);
+		}
 	}
 
 	prefix_action_clear(&owner_actions);
 }
 
-static void cs_cmd_owner(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_owner(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (!parv[0])
 	{
@@ -145,7 +142,8 @@ static void cs_cmd_owner(sourceinfo_t *si, int parc, char *parv[])
 	cmd_owner(si, true, parc, parv);
 }
 
-static void cs_cmd_deowner(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_deowner(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (!parv[0])
 	{
@@ -157,8 +155,56 @@ static void cs_cmd_deowner(sourceinfo_t *si, int parc, char *parv[])
 	cmd_owner(si, false, parc, parv);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_owner = {
+	.name           = "OWNER",
+	.desc           = N_("Gives the channel owner flag to a user."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_owner,
+	.help           = { .path = "cservice/owner" },
+};
+
+static struct command cs_deowner = {
+	.name           = "DEOWNER",
+	.desc           = N_("Removes channel owner flag from a user."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_deowner,
+	.help           = { .path = "cservice/owner" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	if (! ircd)
+	{
+		(void) slog(LG_ERROR, "Module %s must be loaded after an IRCd protocol module; refusing to load",
+		                      m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	if (! ircd->uses_owner)
+	{
+		(void) slog(LG_ERROR, "Module %s requires IRCd channel owner status support; refusing to load",
+		                      m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_owner);
+        service_named_bind_command("chanserv", &cs_deowner);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_owner);
+	service_named_unbind_command("chanserv", &cs_deowner);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/owner", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,27 +1,33 @@
-/* main.c - rpgserv main() routine.
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+ *
+ * main.c - rpgserv main() routine.
  * based on elly's rpgserv for atheme-6.x --nenolod
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"rpgserv/main", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static struct service *rpgserv = NULL;
 
-service_t *rpgserv;
-
-void _modinit(module_t *m)
+static void
+mod_init(struct module *const restrict m)
 {
-	rpgserv = service_add("rpgserv", NULL);
-}
+	if (! (rpgserv = service_add("rpgserv", NULL)))
+	{
+		(void) slog(LG_ERROR, "%s: service_add() failed", m->name);
 
-void _moddeinit(module_unload_intent_t intent)
-{
-	if (rpgserv) {
-		service_delete(rpgserv);
-		rpgserv = NULL;
+		m->mflags |= MODFLAG_FAIL;
+		return;
 	}
 }
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_delete(rpgserv);
+}
+
+SIMPLE_DECLARE_MODULE_V1("rpgserv/main", MODULE_UNLOAD_CAPABILITY_OK)

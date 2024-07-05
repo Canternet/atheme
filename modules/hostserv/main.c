@@ -1,44 +1,23 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2009 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * This file contains the main() routine.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "hostserv.h"
 
-DECLARE_MODULE_V1
-(
-	"hostserv/main", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static struct service *hostsvs = NULL;
 
-static void on_user_identify(user_t *u);
-service_t *hostsvs;
-
-void _modinit(module_t *m)
+static void
+on_user_identify(struct user *u)
 {
-	hook_add_event("user_identify");
-	hook_add_user_identify(on_user_identify);
-
-	hostsvs = service_add("hostserv", NULL);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	if (hostsvs != NULL)
-		service_delete(hostsvs);
-
-	hook_del_user_identify(on_user_identify);
-}
-
-static void on_user_identify(user_t *u)
-{
-	myuser_t *mu = u->myuser;
-	metadata_t *md;
+	struct myuser *mu = u->myuser;
+	struct metadata *md;
 	char buf[NICKLEN + 20];
 
 	snprintf(buf, sizeof buf, "private:usercloak:%s", u->nick);
@@ -51,8 +30,26 @@ static void on_user_identify(user_t *u)
 	do_sethost(u, md->value);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_init(struct module *const restrict m)
+{
+	if (! (hostsvs = service_add("hostserv", NULL)))
+	{
+		(void) slog(LG_ERROR, "%s: service_add() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) hook_add_first_user_identify(&on_user_identify);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) hook_del_user_identify(&on_user_identify);
+
+	(void) service_delete(hostsvs);
+}
+
+SIMPLE_DECLARE_MODULE_V1("hostserv/main", MODULE_UNLOAD_CAPABILITY_OK)

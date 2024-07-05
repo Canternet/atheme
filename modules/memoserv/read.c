@@ -1,49 +1,29 @@
 /*
- * Copyright (c) 2005-2007 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 Atheme Project (http://atheme.org/)
  *
  * This file contains code for the Memoserv READ function
- *
  */
 
-#include "atheme.h"
-
-DECLARE_MODULE_V1
-(
-	"memoserv/read", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+#include <atheme.h>
 
 #define MAX_READ_AT_ONCE 5
 
-static void ms_cmd_read(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ms_read = { "READ", N_("Reads a memo."),
-                        AC_AUTHENTICATED, 2, ms_cmd_read, { .path = "memoserv/read" } };
-
-void _modinit(module_t *m)
+static void
+ms_cmd_read(struct sourceinfo *si, int parc, char *parv[])
 {
-        service_named_bind_command("memoserv", &ms_read);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("memoserv", &ms_read);
-}
-
-static void ms_cmd_read(sourceinfo_t *si, int parc, char *parv[])
-{
-	/* Misc structs etc */
-	myuser_t *tmu;
-	mymemo_t *memo, *receipt;
+	// Misc structs etc
+	struct myuser *tmu;
+	struct mymemo *memo, *receipt;
 	mowgli_node_t *n;
 	unsigned int i = 1, memonum = 0, numread = 0;
 	char strfbuf[BUFSIZE];
-	struct tm tm;
+	struct tm *tm;
 	bool readnew;
 
-	/* Grab arg */
+	// Grab arg
 	char *arg1 = parv[0];
 
 	if (!arg1)
@@ -55,37 +35,35 @@ static void ms_cmd_read(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* Check to see if any memos */
+	// Check to see if any memos
 	if (!si->smu->memos.count)
 	{
 		command_fail(si, fault_nosuch_key, _("You have no memos."));
 		return;
 	}
 
-	memonum = atoi(arg1);
 	readnew = !strcasecmp(arg1, "NEW");
-	if (!readnew && !memonum)
+	if (!readnew && (! string_to_uint(arg1, &memonum) || ! memonum))
 	{
 		command_fail(si, fault_badparams, _("Invalid message index."));
 		return;
 	}
 
-	/* Check to see if memonum is greater than memocount */
+	// Check to see if memonum is greater than memocount
 	if (memonum > si->smu->memos.count)
 	{
 		command_fail(si, fault_nosuch_key, _("Invalid message index."));
 		return;
 	}
 
-	/* Go to reading memos */
+	// Go to reading memos
 	MOWGLI_ITER_FOREACH(n, si->smu->memos.head)
 	{
-		memo = (mymemo_t *)n->data;
+		memo = (struct mymemo *)n->data;
 		if (i == memonum || (readnew && !(memo->status & MEMO_READ)))
 		{
-			tm = *localtime(&memo->sent);
-			strftime(strfbuf, sizeof strfbuf,
-				TIME_FORMAT, &tm);
+			tm = localtime(&memo->sent);
+			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 			if (!(memo->status & MEMO_READ))
 			{
@@ -101,17 +79,16 @@ static void ms_cmd_read(sourceinfo_t *si, int parc, char *parv[])
 					myuser_notice(si->service->me->nick, tmu, "%s has read your memo, which was sent at %s", entity(si->smu)->name, strfbuf);
 				else
 				{
-					/* If they have an account, their inbox is not full and they aren't memoserv */
+					// If they have an account, their inbox is not full and they aren't memoserv
 					if ( (tmu != NULL) && (tmu->memos.count < me.mdlimit) && strcasecmp(si->service->nick, memo->sender))
 					{
-						/* Malloc and populate memo struct */
-						receipt = smalloc(sizeof(mymemo_t));
+						// Malloc and populate memo struct
+						receipt = smalloc(sizeof *receipt);
 						receipt->sent = CURRTIME;
-						receipt->status = 0;
-						mowgli_strlcpy(receipt->sender, si->service->nick, NICKLEN);
-						snprintf(receipt->text, MEMOLEN, "%s has read a memo from you sent at %s", entity(si->smu)->name, strfbuf);
+						mowgli_strlcpy(receipt->sender, si->service->nick, sizeof receipt->sender);
+						snprintf(receipt->text, sizeof receipt->text, "%s has read a memo from you sent at %s", entity(si->smu)->name, strfbuf);
 
-						/* Attach to their linked list */
+						// Attach to their linked list
 						n = mowgli_node_create();
 						mowgli_node_add(receipt, n, &tmu->memos);
 						tmu->memoct_new++;
@@ -119,19 +96,16 @@ static void ms_cmd_read(sourceinfo_t *si, int parc, char *parv[])
 				}
 			}
 
-			command_success_nodata(si,
-				"\2Memo %d - Sent by %s, %s\2",i,memo->sender, strfbuf);
-
-			command_success_nodata(si,
-				"------------------------------------------");
-
+			command_success_nodata(si, _("\2Memo %u - Sent by %s, %s\2"), i, memo->sender, strfbuf);
+			command_success_nodata(si, "----------------------------------------------------------------");
 			command_success_nodata(si, "%s", memo->text);
+			command_success_nodata(si, "----------------------------------------------------------------");
 
 			if (!readnew)
 				return;
 			if (++numread >= MAX_READ_AT_ONCE && si->smu->memoct_new > 0)
 			{
-				command_success_nodata(si, _("Stopping command after %d memos."), numread);
+				command_success_nodata(si, _("Stopping command after %u memos."), numread);
 				return;
 			}
 		}
@@ -141,11 +115,32 @@ static void ms_cmd_read(sourceinfo_t *si, int parc, char *parv[])
 	if (readnew && numread == 0)
 		command_fail(si, fault_nosuch_key, _("You have no new memos."));
 	else if (readnew)
-		command_success_nodata(si, _("Read %d memos."), numread);
+		command_success_nodata(si, ngettext(N_("Read %u memo."),
+		                                    N_("Read %u memos."),
+		                                    numread), numread);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ms_read = {
+	.name           = "READ",
+	.desc           = N_("Reads a memo."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &ms_cmd_read,
+	.help           = { .path = "memoserv/read" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "memoserv/main")
+
+        service_named_bind_command("memoserv", &ms_read);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("memoserv", &ms_read);
+}
+
+SIMPLE_DECLARE_MODULE_V1("memoserv/read", MODULE_UNLOAD_CAPABILITY_OK)

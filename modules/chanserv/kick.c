@@ -1,48 +1,23 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService KICK functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/kick", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_kick(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_kickban(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_kick = { "KICK", N_("Removes a user from a channel."),
-                        AC_NONE, 3, cs_cmd_kick, { .path = "cservice/kick" } };
-command_t cs_kickban = { "KICKBAN", N_("Removes and bans a user from a channel."),
-			AC_NONE, 3, cs_cmd_kickban, { .path = "cservice/kickban" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_kick);
-	service_named_bind_command("chanserv", &cs_kickban);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_kick);
-	service_named_unbind_command("chanserv", &cs_kickban);
-}
-
-static void cs_cmd_kick(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_kick(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
 	char *nick = parv[1];
 	char *reason = parv[2];
-	mychan_t *mc;
-	user_t *tu;
-	chanuser_t *cu;
+	struct mychan *mc;
+	struct user *tu;
+	struct chanuser *cu;
 	char reasonbuf[BUFSIZE];
 
 	if (!chan || !nick)
@@ -55,30 +30,36 @@ static void cs_cmd_kick(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_REMOVE))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
-	/* figure out who we're going to kick */
+	if (!mc->chan)
+	{
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
+		return;
+	}
+
+	// figure out who we're going to kick
 	if ((tu = user_find_named(nick)) == NULL)
 	{
 		command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), nick);
 		return;
 	}
 
-	/* if target is a service, bail. --nenolod */
+	// if target is a service, bail. --nenolod
 	if (is_service(tu))
 	{
 		command_fail(si, fault_noprivs, _("\2%s\2 is a network service; you cannot kick or deop them."), tu->nick);
@@ -106,16 +87,17 @@ static void cs_cmd_kick(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("\2%s\2 has been kicked from \2%s\2."), tu->nick, mc->name);
 }
 
-static void cs_cmd_kickban(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_kickban(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
 	char *nick = parv[1];
 	char *reason = parv[2];
-	mychan_t *mc;
-	user_t *tu;
-	chanuser_t *cu;
+	struct mychan *mc;
+	struct user *tu;
+	struct chanuser *cu;
 	char reasonbuf[BUFSIZE];
-	int n;
+	unsigned int n;
 
 	if (!chan || !nick)
 	{
@@ -127,24 +109,30 @@ static void cs_cmd_kickban(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_REMOVE))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
-	/* figure out who we're going to kick */
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
+		return;
+	}
+
+	// figure out who we're going to kick
 	if ((tu = user_find_named(nick)) == NULL)
 	{
 		command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), nick);
 		return;
 	}
 
-        /* if target is a service, bail. --nenolod */
+        // if target is a service, bail. --nenolod
 	if (is_service(tu))
 	{
 		command_fail(si, fault_noprivs, _("\2%s\2 is a network service; you cannot kick or deop them."), tu->nick);
@@ -168,7 +156,10 @@ static void cs_cmd_kickban(sourceinfo_t *si, int parc, char *parv[])
 	ban(si->service->me, mc->chan, tu);
 	n = remove_ban_exceptions(si->service->me, mc->chan, tu);
 	if (n > 0)
-		command_success_nodata(si, _("To avoid rejoin, %d ban exception(s) matching \2%s\2 have been removed from \2%s\2."), n, tu->nick, mc->name);
+		command_success_nodata(si, ngettext(N_("To avoid rejoin, %u ban exception matching \2%s\2 has been removed from \2%s\2."),
+		                                    N_("To avoid rejoin, %u ban exceptions matching \2%s\2 have been removed from \2%s\2."),
+		                                    n), n, tu->nick, mc->name);
+
 	try_kick(chansvs.me->me, mc->chan, tu, reasonbuf);
 	logcommand(si, CMDLOG_DO, "KICKBAN: \2%s!%s@%s\2 from \2%s\2", tu->nick, tu->user, tu->vhost, mc->name);
 	if (si->su == NULL ||
@@ -176,8 +167,38 @@ static void cs_cmd_kickban(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("\2%s\2 has been kickbanned from \2%s\2."), tu->nick, mc->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_kick = {
+	.name           = "KICK",
+	.desc           = N_("Removes a user from a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_kick,
+	.help           = { .path = "cservice/kick" },
+};
+
+static struct command cs_kickban = {
+	.name           = "KICKBAN",
+	.desc           = N_("Removes and bans a user from a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_kickban,
+	.help           = { .path = "cservice/kickban" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_kick);
+	service_named_bind_command("chanserv", &cs_kickban);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_kick);
+	service_named_unbind_command("chanserv", &cs_kickban);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/kick", MODULE_UNLOAD_CAPABILITY_OK)

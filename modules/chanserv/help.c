@@ -1,114 +1,134 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * This file contains routines to handle the CService HELP command.
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
+ * This file contains routines to handle the ChanServ HELP command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/help", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+#define SHORTHELP_CMDS_DEF      "AKICK BAN CLEAR DEOP DEVOICE DROP FLAGS GETKEY INFO INVITE KICK KICKBAN OP " \
+                                "QUIET REGISTER SET TOPIC UNBAN UNQUIET VOICE WHY"
 
-static void cs_cmd_help(sourceinfo_t *si, int parc, char *parv[]);
+static char *shorthelp_cmds = NULL;
 
-command_t cs_help = { "HELP", N_("Displays contextual help information."),
-                        AC_NONE, 1, cs_cmd_help, { .path = "help" } };
-
-void _modinit(module_t *m)
+static void
+cs_cmd_help(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc, char **const restrict parv)
 {
-	service_named_bind_command("chanserv", &cs_help);
-}
+	const char *command = parv[0];
 
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_help);
-}
-
-/* HELP <command> [params] */
-static void cs_cmd_help(sourceinfo_t *si, int parc, char *parv[])
-{
-	char *command = parv[0];
-
-	/* strip off channel name for fantasy commands */
-	if (si->c)
+	if (si->c && command)
 	{
+		// Advance past the prefix and HELP command text, & channel name, for fantasy commands
 		command = strchr(command, ' ');
-		if (command != NULL)
+		if (command)
 			command++;
 	}
 
-	if (!command)
+	if (command)
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), chansvs.nick);
-		command_success_nodata(si, _("\2%s\2 gives normal users the ability to maintain control\n"
-					"of a channel, without the need of a bot. Channel takeovers are\n"
-					"virtually impossible when a channel is registered with \2%s\2.\n"
-					"Registration is a quick and painless process. Once registered,\n"
-					"the founder can maintain complete and total control over the channel."),
-				chansvs.nick, chansvs.nick);
-		if (chansvs.expiry > 0)
+		if (strcasecmp(command, "COMMANDS") == 0)
 		{
-			command_success_nodata(si, _("Please note that channels will expire after %d days of inactivity,\n"
-						"or if there are no eligible channel successors.\n"
-						"Activity is defined as a user with one of %s being on the channel."), (chansvs.expiry / 86400), bitmask_to_flags2(CA_USEDUPDATE & ca_all, 0));
+			(void) help_display_prefix(si, chansvs.me);
+			(void) command_help(si, chansvs.me->commands);
+			(void) help_display_moreinfo(si, chansvs.me, NULL);
+			(void) help_display_locations(si);
+			(void) help_display_suffix(si);
 		}
 		else
-		{
-			command_success_nodata(si, _("Please note that channels will expire if there are no eligible channel successors."));
-		}
-		command_success_nodata(si, _("Successors are primarily those who have the +R flag\n"
-					"set on their account in the channel, although other\n"
-					"people may be chosen depending on their access\n"
-					"level and activity."));
-		command_success_nodata(si, " ");
-		if (chansvs.fantasy && config_options.join_chans && chansvs.trigger != '\0')
-		{
-			command_success_nodata(si, _("Commands can also be given on channel by prefixing one of '%s'\n"
-						"and omitting the channel name. These are called \"fantasy\"\n"
-						"commands and can also be disabled on a per-channel basis."), chansvs.trigger);
-			command_success_nodata(si, " ");
-		}
-		command_success_nodata(si, _("For more information on a command, type:"));
-		command_success_nodata(si, "\2/%s%s help <command>\2", (ircd->uses_rcommand == false) ? "msg " : "", chansvs.me->disp);
-		command_success_nodata(si, _("For a verbose listing of all commands, type:"));
-		command_success_nodata(si, "\2/%s%s help commands\2", (ircd->uses_rcommand == false) ? "msg " : "", chansvs.me->disp);
-		command_success_nodata(si, " ");
-
-		command_help_short(si, chansvs.me->commands, "REGISTER OP INVITE UNBAN FLAGS RECOVER SET CLOSE FDROP FFLAGS FTRANSFER");
-
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
-
-		/* Fun for helpchan/helpurl. */
-		if (config_options.helpchan && config_options.helpurl)
-			command_success_nodata(si, _("If you're having trouble or you need some additional help, you may want to join the help channel %s or visit the help webpage %s"),
-					config_options.helpchan, config_options.helpurl);
-		else if (config_options.helpchan && !config_options.helpurl)
-			command_success_nodata(si, _("If you're having trouble or you need some additional help, you may want to join the help channel %s"), config_options.helpchan);
-		else if (!config_options.helpchan && config_options.helpurl)
-			command_success_nodata(si, _("If you're having trouble or you need some additional help, you may want to visit the help webpage %s"), config_options.helpurl);
+			(void) help_display(si, chansvs.me, command, chansvs.me->commands);
 
 		return;
 	}
 
-	if (!strcasecmp("COMMANDS", command))
+	(void) help_display_prefix(si, chansvs.me);
+
+	(void) command_success_nodata(si, _("\2%s\2 gives normal users the ability to maintain control\n"
+	                                    "of a channel, without the need of a bot. Channel takeovers are\n"
+	                                    "virtually impossible when a channel is registered with \2%s\2."),
+	                                    chansvs.nick, chansvs.nick);
+
+	(void) help_display_newline(si);
+
+	(void) command_success_nodata(si, _("Registration is a quick and painless process. Once registered,\n"
+	                                    "the founder can maintain complete and total control over the\n"
+	                                    "channel."));
+
+	(void) help_display_newline(si);
+
+	if (chansvs.expiry > 0)
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), chansvs.nick);
-		command_help(si, chansvs.me->commands);
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
-		return;
+		(void) command_success_nodata(si, _("Please note that channels will expire after %u days of inactivity,\n"
+		                                    "or if there are no eligible channel successors."),
+		                                    (chansvs.expiry / SECONDS_PER_DAY));
+
+		(void) help_display_newline(si);
+
+		(void) command_success_nodata(si, _("Activity is defined as a user with one of \2%s\2 being on the "
+		                                    "channel."), bitmask_to_flags2(CA_USEDUPDATE & ca_all, 0));
+	}
+	else
+		(void) command_success_nodata(si, _("Please note that channels will expire if there are no eligible "
+		                                    "channel successors."));
+
+	(void) help_display_newline(si);
+
+	(void) command_success_nodata(si, _("Successors are primarily those who have the \2+S\2 (if available)\n"
+	                                    "or \2+R\2 flag set on their account in the channel, although other\n"
+	                                    "people may be chosen depending on their access level and activity."));
+
+	if (config_options.join_chans && chansvs.fantasy && *chansvs.trigger)
+	{
+		(void) help_display_newline(si);
+
+		(void) command_success_nodata(si, _("Commands can also be given on channel by prefixing one of '%s'\n"
+		                                    "and omitting the channel name. These are called \"fantasy\"\n"
+		                                    "commands and can also be disabled on a per-channel basis."),
+		                                    chansvs.trigger);
 	}
 
-	help_display(si, chansvs.me, command, chansvs.me->commands);
+	(void) help_display_newline(si);
+
+	if (shorthelp_cmds)
+		(void) command_help_short(si, chansvs.me->commands, shorthelp_cmds);
+	else
+		(void) command_help_short(si, chansvs.me->commands, SHORTHELP_CMDS_DEF);
+
+	(void) help_display_moreinfo(si, chansvs.me, NULL);
+	(void) help_display_verblist(si, chansvs.me);
+	(void) help_display_locations(si);
+	(void) help_display_suffix(si);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_help = {
+	.name           = "HELP",
+	.desc           = STR_HELP_DESCRIPTION,
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_help,
+	.help           = { .path = "help" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	(void) add_dupstr_conf_item("SHORTHELP", &chansvs.me->conf_table, 0, &shorthelp_cmds, NULL);
+
+	(void) service_named_bind_command("chanserv", &cs_help);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_named_unbind_command("chanserv", &cs_help);
+
+	(void) del_conf_item("SHORTHELP", &chansvs.me->conf_table);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/help", MODULE_UNLOAD_CAPABILITY_OK)

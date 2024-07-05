@@ -1,66 +1,35 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Disables the ability to receive memos.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 #include "list.h"
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_nomemo", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
-
-static void ns_cmd_set_nomemo(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_nomemo = { "NOMEMO", N_("Disables the ability to receive memos."), AC_NONE, 1, ns_cmd_set_nomemo, { .path = "nickserv/set_nomemo" } };
-
-static bool has_nomemo(const mynick_t *mn, const void *arg)
+static bool
+has_nomemo(const struct mynick *mn, const void *arg)
 {
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 
 	return ( mu->flags & MU_NOMEMO ) == MU_NOMEMO;
 }
 
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_nomemo, *ns_set_cmdtree);
-
-	use_nslist_main_symbols(m);
-
-	static list_param_t nomemo;
-	nomemo.opttype = OPT_BOOL;
-	nomemo.is_match = has_nomemo;
-
-	list_register("nomemo", &nomemo);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_nomemo, *ns_set_cmdtree);
-
-	list_unregister("nomemo");
-}
-
-/* SET NOMEMO [ON|OFF] */
-static void ns_cmd_set_nomemo(sourceinfo_t *si, int parc, char *parv[])
+// SET NOMEMO [ON|OFF]
+static void
+ns_cmd_set_nomemo(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *params = parv[0];
 
 	if (!params)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "NOMEMO");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET NOMEMO");
 		return;
 	}
 
@@ -93,13 +62,42 @@ static void ns_cmd_set_nomemo(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "NOMEMO");
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET NOMEMO");
 		return;
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_set_nomemo = {
+	.name           = "NOMEMO",
+	.desc           = N_("Disables the ability to receive memos."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_nomemo,
+	.help           = { .path = "nickserv/set_nomemo" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	use_nslist_main_symbols(m);
+
+	command_add(&ns_set_nomemo, *ns_set_cmdtree);
+
+	static struct list_param nomemo;
+	nomemo.opttype = OPT_BOOL;
+	nomemo.is_match = has_nomemo;
+
+	list_register("nomemo", &nomemo);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_nomemo, *ns_set_cmdtree);
+
+	list_unregister("nomemo");
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_nomemo", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,19 +1,25 @@
-# Copyright (c) 2003-2004 E. Will et al.
-# Rights to this code are documented in doc/LICENSE.
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
 #
-# This file contains build instructions.
-#
-# $Id: Makefile.in 8375 2007-06-03 20:03:26Z pippijn $
-#
-
-MODULE = exttarget
-
-SRCS = main.c oper.c registered.c channel.c chanacs.c server.c
+# Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2011 JD Horelick <jdhore1@gmail.com>
+# Copyright (C) 2014 Mantas Mikulėnas <grawity@gmail.com>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../extra.mk
+
+MODULE = exttarget
+SRCS   =                    \
+    chanacs.c               \
+    channel.c               \
+    main.c                  \
+    oper.c                  \
+    registered.c            \
+    server.c
+
 include ../../buildsys.mk
 include ../../buildsys.module.mk
 
-CPPFLAGS	+= -I../../include
-LIBS +=	-L../../libathemecore -lathemecore ${LDFLAGS_RPATH}
-
+CPPFLAGS += -I../../include
+LDFLAGS  += -L../../libathemecore
+LIBS     += -lathemecore

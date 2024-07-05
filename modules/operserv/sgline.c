@@ -1,83 +1,25 @@
 /*
- * Copyright (c) 2009 Atheme Development Group
- * Copyright (c) 2009 Rizon Development Team <http://redmine.rizon.net>
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2009 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2009 Rizon Development Team (http://redmine.rizon.net/)
  *
  * This file contains functionality which implements
  * the OperServ SGLINE command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/sgline", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t *os_sgline_cmds = NULL;
 
-static void os_sgline_newuser(hook_user_nick_t *data);
-
-static void os_cmd_sgline(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_sgline_add(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_sgline_del(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_sgline_list(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_sgline_sync(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_sgline = { "SGLINE", N_("Manages network realname bans."), PRIV_MASS_AKILL, 3, os_cmd_sgline, { .path = "oservice/sgline" } };
-
-command_t os_sgline_add = { "ADD", N_("Adds a network realname ban"), AC_NONE, 2, os_cmd_sgline_add, { .path = "" } };
-command_t os_sgline_del = { "DEL", N_("Deletes a network realname ban"), AC_NONE, 1, os_cmd_sgline_del, { .path = "" } };
-command_t os_sgline_list = { "LIST", N_("Lists all network realname bans"), AC_NONE, 1, os_cmd_sgline_list, { .path = "" } };
-command_t os_sgline_sync = { "SYNC", N_("Synchronises network realname bans to servers"), AC_NONE, 0, os_cmd_sgline_sync, { .path = "" } };
-
-mowgli_patricia_t *os_sgline_cmds;
-
-void _modinit(module_t *m)
+static void
+os_sgline_newuser(struct hook_user_nick *data)
 {
-	if (ircd != NULL && xline_sts == generic_xline_sts)
-	{
-		slog(LG_INFO, "Module %s requires xline support, refusing to load.",
-				m->name);
-		m->mflags = MODTYPE_FAIL;
-		return;
-	}
+	struct user *u = data->u;
+	struct xline *x;
 
-	service_named_bind_command("operserv", &os_sgline);
-
-	os_sgline_cmds = mowgli_patricia_create(strcasecanon);
-
-	/* Add sub-commands */
-	command_add(&os_sgline_add, os_sgline_cmds);
-	command_add(&os_sgline_del, os_sgline_cmds);
-	command_add(&os_sgline_list, os_sgline_cmds);
-	command_add(&os_sgline_sync, os_sgline_cmds);
-
-	hook_add_event("user_add");
-	hook_add_user_add(os_sgline_newuser);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_sgline);
-
-	/* Delete sub-commands */
-	command_delete(&os_sgline_add, os_sgline_cmds);
-	command_delete(&os_sgline_del, os_sgline_cmds);
-	command_delete(&os_sgline_list, os_sgline_cmds);
-	command_delete(&os_sgline_sync, os_sgline_cmds);
-
-	hook_del_user_add(os_sgline_newuser);
-
-	mowgli_patricia_destroy(os_sgline_cmds, NULL, NULL);
-}
-
-static void os_sgline_newuser(hook_user_nick_t *data)
-{
-	user_t *u = data->u;
-	xline_t *x;
-
-	/* If the user has been killed, don't do anything. */
+	// If the user has been killed, don't do anything.
 	if (!u)
 		return;
 
@@ -93,38 +35,28 @@ static void os_sgline_newuser(hook_user_nick_t *data)
 	}
 }
 
-static void os_cmd_sgline(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_sgline(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
 {
-	/* Grab args */
-	char *cmd = parv[0];
-	command_t *c;
-
-	/* Bad/missing arg */
-	if (!cmd)
+	if (parc < 1)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SGLINE");
-		command_fail(si, fault_needmoreparams, _("Syntax: SGLINE ADD|DEL|LIST"));
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SGLINE");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: SGLINE ADD|DEL|LIST"));
 		return;
 	}
 
-	c = command_find(os_sgline_cmds, cmd);
-	if(c == NULL)
-	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-		return;
-	}
-
-	command_exec(si->service, si, c, parc - 1, parv + 1);
+	(void) subcommand_dispatch_simple(si->service, si, parc, parv, os_sgline_cmds, "SGLINE");
 }
 
-static void os_cmd_sgline_add(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_sgline_add(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *token = strtok(parv[1], " ");
 	char *treason, reason[BUFSIZE];
 	long duration;
 	char *s;
-	xline_t *x;
+	struct xline *x;
 
 	if (!target || !token)
 	{
@@ -153,15 +85,15 @@ static void os_cmd_sgline_add(sourceinfo_t *si, int parc, char *parv[])
 			mowgli_strlcpy(reason, "No reason given", BUFSIZE);
 		if (s)
 		{
-			duration = (atol(s) * 60);
+			duration = (atol(s) * SECONDS_PER_MINUTE);
 			while (isdigit((unsigned char)*s))
 				s++;
 			if (*s == 'h' || *s == 'H')
-				duration *= 60;
+				duration *= MINUTES_PER_HOUR;
 			else if (*s == 'd' || *s == 'D')
-				duration *= 1440;
+				duration *= MINUTES_PER_DAY;
 			else if (*s == 'w' || *s == 'W')
-				duration *= 10080;
+				duration *= MINUTES_PER_WEEK;
 			else if (*s == '\0')
 				;
 			else
@@ -210,7 +142,7 @@ static void os_cmd_sgline_add(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if (strlen(target) > GECOSLEN * 2)
+	if (strlen(target) > (GECOSLEN + 1) * 2)
 	{
 		command_fail(si, fault_badparams, _("The mask provided is too long."));
 		return;
@@ -234,10 +166,11 @@ static void os_cmd_sgline_add(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_ADMIN, "SGLINE:ADD: \2%s\2 (reason: \2%s\2)", x->realname, x->reason);
 }
 
-static void os_cmd_sgline_del(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_sgline_del(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
-	xline_t *x;
+	struct xline *x;
 	unsigned int number;
 	char *s;
 
@@ -265,7 +198,7 @@ static void os_cmd_sgline_del(sourceinfo_t *si, int parc, char *parv[])
 				t[++i] = '\0';
 				start = atoi(t);
 
-				s++;	/* skip past the : */
+				s++;	// skip past the :
 
 				for (i = 0; *s != '\0'; s++, i++)
 					t[i] = *s;
@@ -277,7 +210,7 @@ static void os_cmd_sgline_del(sourceinfo_t *si, int parc, char *parv[])
 				{
 					if (!(x = xline_find_num(i)))
 					{
-						command_fail(si, fault_nosuch_target, _("No such SGLINE with number \2%d\2."), i);
+						command_fail(si, fault_nosuch_target, _("No such SGLINE with number \2%u\2."), i);
 						continue;
 					}
 
@@ -296,7 +229,7 @@ static void os_cmd_sgline_del(sourceinfo_t *si, int parc, char *parv[])
 
 			if (!(x = xline_find_num(number)))
 			{
-				command_fail(si, fault_nosuch_target, _("No such SGLINE with number \2%d\2."), number);
+				command_fail(si, fault_nosuch_target, _("No such SGLINE with number \2%u\2."), number);
 				return;
 			}
 
@@ -326,12 +259,13 @@ static void os_cmd_sgline_del(sourceinfo_t *si, int parc, char *parv[])
 	xline_delete(target);
 }
 
-static void os_cmd_sgline_list(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_sgline_list(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *param = parv[0];
 	bool full = false;
 	mowgli_node_t *n;
-	xline_t *x;
+	struct xline *x;
 
 	if (param != NULL && !strcasecmp(param, "FULL"))
 		full = true;
@@ -343,32 +277,36 @@ static void os_cmd_sgline_list(sourceinfo_t *si, int parc, char *parv[])
 
 	MOWGLI_ITER_FOREACH(n, xlnlist.head)
 	{
-		x = (xline_t *)n->data;
+		x = (struct xline *)n->data;
 
 		if (x->duration && full)
-			command_success_nodata(si, _("%d: %s - by \2%s\2 - expires in \2%s\2 - (%s)"), x->number, x->realname, x->setby, timediff(x->expires > CURRTIME ? x->expires - CURRTIME : 0), x->reason);
+			command_success_nodata(si, _("%u: %s - by \2%s\2 - expires in \2%s\2 - (%s)"), x->number, x->realname, x->setby, timediff(x->expires > CURRTIME ? x->expires - CURRTIME : 0), x->reason);
 		else if (x->duration && !full)
-			command_success_nodata(si, _("%d: %s - by \2%s\2 - expires in \2%s\2"), x->number, x->realname, x->setby, timediff(x->expires > CURRTIME ? x->expires - CURRTIME : 0));
+			command_success_nodata(si, _("%u: %s - by \2%s\2 - expires in \2%s\2"), x->number, x->realname, x->setby, timediff(x->expires > CURRTIME ? x->expires - CURRTIME : 0));
 		else if (!x->duration && full)
-			command_success_nodata(si, _("%d: %s - by \2%s\2 - \2permanent\2 - (%s)"), x->number, x->realname, x->setby, x->reason);
+			command_success_nodata(si, _("%u: %s - by \2%s\2 - \2permanent\2 - (%s)"), x->number, x->realname, x->setby, x->reason);
 		else
-			command_success_nodata(si, _("%d: %s - by \2%s\2 - \2permanent\2"), x->number, x->realname, x->setby);
+			command_success_nodata(si, _("%u: %s - by \2%s\2 - \2permanent\2"), x->number, x->realname, x->setby);
 	}
 
-	command_success_nodata(si, _("Total of \2%zu\2 %s in SGLINE list."), xlnlist.count, (xlnlist.count == 1) ? "entry" : "entries");
+	command_success_nodata(si, ngettext(N_("Total of \2%zu\2 entry in SGLINE list."),
+	                                    N_("Total of \2%zu\2 entries in SGLINE list."),
+	                                    xlnlist.count), xlnlist.count);
+
 	logcommand(si, CMDLOG_GET, "SGLINE:LIST: \2%s\2", full ? " FULL" : "");
 }
 
-static void os_cmd_sgline_sync(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_sgline_sync(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
-	xline_t *x;
+	struct xline *x;
 
 	logcommand(si, CMDLOG_DO, "SGLINE:SYNC");
 
 	MOWGLI_ITER_FOREACH(n, xlnlist.head)
 	{
-		x = (xline_t *)n->data;
+		x = (struct xline *)n->data;
 
 		if (x->duration == 0)
 			xline_sts("*", x->realname, 0, x->reason);
@@ -379,8 +317,90 @@ static void os_cmd_sgline_sync(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("SGLINE list synchronized to servers."));
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_sgline = {
+	.name           = "SGLINE",
+	.desc           = N_("Manages network realname bans."),
+	.access         = PRIV_MASS_AKILL,
+	.maxparc        = 3,
+	.cmd            = &os_cmd_sgline,
+	.help           = { .path = "oservice/sgline" },
+};
+
+static struct command os_sgline_add = {
+	.name           = "ADD",
+	.desc           = N_("Adds a network realname ban."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &os_cmd_sgline_add,
+	.help           = { .path = "" },
+};
+
+static struct command os_sgline_del = {
+	.name           = "DEL",
+	.desc           = N_("Deletes a network realname ban."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_sgline_del,
+	.help           = { .path = "" },
+};
+
+static struct command os_sgline_list = {
+	.name           = "LIST",
+	.desc           = N_("Lists all network realname bans."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_sgline_list,
+	.help           = { .path = "" },
+};
+
+static struct command os_sgline_sync = {
+	.name           = "SYNC",
+	.desc           = N_("Synchronises network realname bans to all servers."),
+	.access         = AC_NONE,
+	.maxparc        = 0,
+	.cmd            = &os_cmd_sgline_sync,
+	.help           = { .path = "" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	if (ircd && xline_sts == &generic_xline_sts)
+	{
+		(void) slog(LG_ERROR, "Module %s requires xline support, refusing to load.", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	if (! (os_sgline_cmds = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) command_add(&os_sgline_add, os_sgline_cmds);
+	(void) command_add(&os_sgline_del, os_sgline_cmds);
+	(void) command_add(&os_sgline_list, os_sgline_cmds);
+	(void) command_add(&os_sgline_sync, os_sgline_cmds);
+
+	(void) service_named_bind_command("operserv", &os_sgline);
+
+	(void) hook_add_user_add(&os_sgline_newuser);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) hook_del_user_add(&os_sgline_newuser);
+
+	(void) service_named_unbind_command("operserv", &os_sgline);
+
+	(void) mowgli_patricia_destroy(os_sgline_cmds, &command_delete_trie_cb, os_sgline_cmds);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/sgline", MODULE_UNLOAD_CAPABILITY_OK)

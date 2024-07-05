@@ -1,38 +1,18 @@
 /*
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality which implements the HelpServ SERVICES command.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"helpserv/services", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void helpserv_cmd_services(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t helpserv_services = { "SERVICES", N_("List all services currently running on the network."), AC_NONE, 1, helpserv_cmd_services, { .path = "helpserv/services" } };
-
-void _modinit(module_t *m)
+static void
+helpserv_cmd_services(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("helpserv", &helpserv_services);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("helpserv", &helpserv_services);
-}
-
-static void helpserv_cmd_services(sourceinfo_t *si, int parc, char *parv[])
-{
-	service_t *sptr;
+	struct service *sptr;
 	mowgli_patricia_iteration_state_t state;
 
 	command_success_nodata(si, _("Services running on %s:"), me.netname);
@@ -43,12 +23,31 @@ static void helpserv_cmd_services(sourceinfo_t *si, int parc, char *parv[])
 			command_success_nodata(si, "%s", sptr->nick);
 	}
 
-	command_success_nodata(si, _("More information on each service is available by messaging it like so: /msg service help"));
-
-	return;
+	command_success_nodata(si, _("More information on each service is available by messaging it like so: "
+	                             "\2/msg <service> HELP\2"));
 }
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+
+static struct command helpserv_services = {
+	.name           = "SERVICES",
+	.desc           = N_("List all services currently running on the network."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &helpserv_cmd_services,
+	.help           = { .path = "helpserv/services" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "helpserv/main")
+
+	service_named_bind_command("helpserv", &helpserv_services);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("helpserv", &helpserv_services);
+}
+
+SIMPLE_DECLARE_MODULE_V1("helpserv/services", MODULE_UNLOAD_CAPABILITY_OK)

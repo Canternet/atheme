@@ -1,88 +1,28 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 William Pitcock, et al.
  *
  * OperServ NOOP command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/noop", true, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-typedef struct noop_ noop_t;
-
-struct noop_ {
+struct noop
+{
 	char *target;
 	char *added_by;
 	char *reason;
 };
 
-mowgli_list_t noop_hostmask_list;
-mowgli_list_t noop_server_list;
-
-static void os_cmd_noop(sourceinfo_t *si, int parc, char *parv[]);
-static void noop_kill_users(void *dummy);
-static void check_quit(user_t *u);
-static void check_user(user_t *u);
+static mowgli_list_t noop_hostmask_list;
+static mowgli_list_t noop_server_list;
 static mowgli_list_t noop_kill_queue;
 static mowgli_eventloop_timer_t *noop_kill_users_timer = NULL;
 
-command_t os_noop = { "NOOP", N_("Restricts IRCop access."), PRIV_NOOP, 4, os_cmd_noop, { .path = "oservice/noop" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("operserv", &os_noop);
-	hook_add_event("user_oper");
-	hook_add_user_oper(check_user);
-	hook_add_event("user_delete");
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	mowgli_node_t *n, *tn;
-
-	if (MOWGLI_LIST_LENGTH(&noop_kill_queue) > 0)
-	{
-		/* Cannot safely delete users from here, so just forget
-		 * about them.
-		 */
-		mowgli_timer_destroy(base_eventloop, noop_kill_users_timer);
-		MOWGLI_ITER_FOREACH_SAFE(n, tn, noop_kill_queue.head)
-		{
-			mowgli_node_delete(n, &noop_kill_queue);
-			mowgli_node_free(n);
-		}
-		hook_del_user_delete(check_quit);
-	}
-	service_named_unbind_command("operserv", &os_noop);
-	hook_del_user_oper(check_user);
-}
-
-static void noop_kill_users(void *dummy)
-{
-	service_t *service;
-	mowgli_node_t *n, *tn;
-	user_t *u;
-
-	hook_del_user_delete(check_quit);
-
-	service = service_find("operserv");
-	MOWGLI_ITER_FOREACH_SAFE(n, tn, noop_kill_queue.head)
-	{
-		u = n->data;
-		kill_user(service->me, u, "Operator access denied");
-		mowgli_node_delete(n, &noop_kill_queue);
-		mowgli_node_free(n);
-	}
-}
-
-static void check_quit(user_t *u)
+static void
+check_quit(struct user *u)
 {
 	mowgli_node_t *n;
 
@@ -99,7 +39,27 @@ static void check_quit(user_t *u)
 	}
 }
 
-static void check_user(user_t *u)
+static void
+noop_kill_users(void *dummy)
+{
+	struct service *service;
+	mowgli_node_t *n, *tn;
+	struct user *u;
+
+	hook_del_user_delete(check_quit);
+
+	service = service_find("operserv");
+	MOWGLI_ITER_FOREACH_SAFE(n, tn, noop_kill_queue.head)
+	{
+		u = n->data;
+		kill_user(service->me, u, "Operator access denied");
+		mowgli_node_delete(n, &noop_kill_queue);
+		mowgli_node_free(n);
+	}
+}
+
+static void
+check_user(struct user *u)
 {
 	mowgli_node_t *n;
 	char hostbuf[BUFSIZE];
@@ -111,7 +71,7 @@ static void check_user(user_t *u)
 
 	MOWGLI_ITER_FOREACH(n, noop_hostmask_list.head)
 	{
-		noop_t *np = n->data;
+		struct noop *np = n->data;
 
 		if (!match(np->target, hostbuf))
 		{
@@ -122,7 +82,8 @@ static void check_user(user_t *u)
 			}
 			if (!mowgli_node_find(u, &noop_kill_queue))
 				mowgli_node_add(u, mowgli_node_create(), &noop_kill_queue);
-			/* Prevent them using the privs in Atheme. */
+
+			// Prevent them using the privs in Atheme.
 			u->flags &= ~UF_IRCOP;
 			return;
 		}
@@ -130,7 +91,7 @@ static void check_user(user_t *u)
 
 	MOWGLI_ITER_FOREACH(n, noop_server_list.head)
 	{
-		noop_t *np = n->data;
+		struct noop *np = n->data;
 
 		if (!match(np->target, u->server->name))
 		{
@@ -141,20 +102,22 @@ static void check_user(user_t *u)
 			}
 			if (!mowgli_node_find(u, &noop_kill_queue))
 				mowgli_node_add(u, mowgli_node_create(), &noop_kill_queue);
-			/* Prevent them using the privs in Atheme. */
+
+			// Prevent them using the privs in Atheme.
 			u->flags &= ~UF_IRCOP;
 			return;
 		}
 	}
 }
 
-static noop_t *noop_find(char *target, mowgli_list_t *list)
+static struct noop *
+noop_find(char *target, mowgli_list_t *list)
 {
 	mowgli_node_t *n;
 
 	MOWGLI_ITER_FOREACH(n, list->head)
 	{
-		noop_t *np = n->data;
+		struct noop *np = n->data;
 
 		if (!match(np->target, target))
 			return np;
@@ -163,11 +126,12 @@ static noop_t *noop_find(char *target, mowgli_list_t *list)
 	return NULL;
 }
 
-/* NOOP <ADD|DEL|LIST> <HOSTMASK|SERVER> [reason] */
-static void os_cmd_noop(sourceinfo_t *si, int parc, char *parv[])
+// NOOP <ADD|DEL|LIST> <HOSTMASK|SERVER> [reason]
+static void
+os_cmd_noop(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
-	noop_t *np;
+	struct noop *np;
 	char *action = parv[0];
 	enum { type_all, type_hostmask, type_server } type;
 	char *mask = parv[2];
@@ -262,13 +226,13 @@ static void os_cmd_noop(sourceinfo_t *si, int parc, char *parv[])
 
 			n = mowgli_node_find(np, &noop_hostmask_list);
 
-			free(np->target);
-			free(np->added_by);
-			free(np->reason);
+			sfree(np->target);
+			sfree(np->added_by);
+			sfree(np->reason);
 
 			mowgli_node_delete(n, &noop_hostmask_list);
 			mowgli_node_free(n);
-			free(np);
+			sfree(np);
 
 			return;
 		}
@@ -285,13 +249,13 @@ static void os_cmd_noop(sourceinfo_t *si, int parc, char *parv[])
 
 			n = mowgli_node_find(np, &noop_server_list);
 
-			free(np->target);
-			free(np->added_by);
-			free(np->reason);
+			sfree(np->target);
+			sfree(np->added_by);
+			sfree(np->reason);
 
 			mowgli_node_delete(n, &noop_server_list);
 			mowgli_node_free(n);
-			free(np);
+			sfree(np);
 
 			return;
 		}
@@ -313,39 +277,55 @@ static void os_cmd_noop(sourceinfo_t *si, int parc, char *parv[])
 		if (type == type_all || type == type_hostmask)
 		{
 			unsigned int i = 1;
+
 			command_success_nodata(si, _("Hostmask NOOP list (%zu entries):"), noop_hostmask_list.count);
 			command_success_nodata(si, " ");
-			command_success_nodata(si, _("Entry Hostmask                        Adder                 Reason"));
-			command_success_nodata(si, "----- ------------------------------- --------------------- --------------------------");
+
+			/* TRANSLATORS: Adjust these numbers only if the translated column
+			 * headers would exceed that length. Pay particular attention to
+			 * also changing the numbers in the format string inside the loop
+			 * below to match them, and beware that these format strings are
+			 * shared across multiple files!
+			 */
+			command_success_nodata(si, _("%-8s %-31s %-21s %s"), _("Entry"), _("Hostmask"), _("Added By"), _("Reason"));
+			command_success_nodata(si, "--------------------------------------------------------------------------------");
 
 			MOWGLI_ITER_FOREACH(n, noop_hostmask_list.head)
 			{
 				np = n->data;
 
-				command_success_nodata(si, "%-5d %-31s %-21s %s", i, np->target, np->added_by, np->reason);
+				command_success_nodata(si, _("%-8u %-31s %-21s %s"), i, np->target, np->added_by, np->reason);
 				i++;
 			}
 
-			command_success_nodata(si, "----- ------------------------------- --------------------- --------------------------");
+			command_success_nodata(si, "--------------------------------------------------------------------------------");
 			command_success_nodata(si, _("End of Hostmask NOOP list."));
 		}
 		if (type == type_all || type == type_server)
 		{
 			unsigned int i = 1;
+
 			command_success_nodata(si, _("Server NOOP list (%zu entries):"), noop_server_list.count);
 			command_success_nodata(si, " ");
-			command_success_nodata(si, _("Entry Hostmask                        Adder                 Reason"));
-			command_success_nodata(si, "----- ------------------------------- --------------------- --------------------------");
+
+			/* TRANSLATORS: Adjust these numbers only if the translated column
+			 * headers would exceed that length. Pay particular attention to
+			 * also changing the numbers in the format string inside the loop
+			 * below to match them, and beware that these format strings are
+			 * shared across multiple files!
+			 */
+			command_success_nodata(si, _("%-8s %-31s %-21s %s"), _("Entry"), _("Hostmask"), _("Added By"), _("Reason"));
+			command_success_nodata(si, "--------------------------------------------------------------------------------");
 
 			MOWGLI_ITER_FOREACH(n, noop_server_list.head)
 			{
 				np = n->data;
 
-				command_success_nodata(si, "%-5d %-31s %-21s %s", i, np->target, np->added_by, np->reason);
+				command_success_nodata(si, _("%-8u %-31s %-21s %s"), i, np->target, np->added_by, np->reason);
 				i++;
 			}
 
-			command_success_nodata(si, "----- ------------------------------- --------------------- --------------------------");
+			command_success_nodata(si, "--------------------------------------------------------------------------------");
 			command_success_nodata(si, _("End of Server NOOP list."));
 		}
 	}
@@ -356,8 +336,28 @@ static void os_cmd_noop(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_noop = {
+	.name           = "NOOP",
+	.desc           = N_("Restricts IRCop access."),
+	.access         = PRIV_NOOP,
+	.maxparc        = 4,
+	.cmd            = &os_cmd_noop,
+	.help           = { .path = "oservice/noop" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	service_named_bind_command("operserv", &os_noop);
+	hook_add_user_oper(check_user);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/noop", MODULE_UNLOAD_CAPABILITY_NEVER)

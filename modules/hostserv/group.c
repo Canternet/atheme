@@ -1,52 +1,33 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2009 William Pitcock <nenolod -at- nenolod.net>
  *
  * Allows syncing the vhost for all nicks in a group.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "hostserv.h"
 
-DECLARE_MODULE_V1
-(
-	"hostserv/group", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void hs_cmd_group(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t hs_group = { "GROUP", N_("Syncs the vhost for all nicks in a group."), AC_AUTHENTICATED, 1, hs_cmd_group, { .path = "hostserv/group" } };
-
-void _modinit(module_t *m)
+static void
+hs_cmd_group(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("hostserv", &hs_group);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("hostserv", &hs_group);
-}
-
-static void hs_cmd_group(sourceinfo_t *si, int parc, char *parv[])
-{
-	mynick_t *mn;
-	metadata_t *md;
+	struct mynick *mn;
+	struct metadata *md;
 	char buf[BUFSIZE];
 
-	/* This is only because we need a nick to copy from. */
+	// This is only because we need a nick to copy from.
 	if (si->su == NULL)
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 can only be executed via IRC."), "GROUP");
+		command_fail(si, fault_noprivs, STR_IRC_COMMAND_ONLY, "GROUP");
 		return;
 	}
 
 	mn = mynick_find(si->su->nick);
 	if (mn == NULL)
 	{
-		command_fail(si, fault_nosuch_target, _("Nick \2%s\2 is not registered."), si->su->nick);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, si->su->nick);
 		return;
 	}
 	if (mn->owner != si->smu)
@@ -69,8 +50,27 @@ static void hs_cmd_group(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("All vhosts in the group \2%s\2 have been set to \2%s\2."), entity(si->smu)->name, buf);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command hs_group = {
+	.name           = "GROUP",
+	.desc           = N_("Syncs the vhost for all nicks in a group."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &hs_cmd_group,
+	.help           = { .path = "hostserv/group" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "hostserv/main")
+
+	service_named_bind_command("hostserv", &hs_group);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("hostserv", &hs_group);
+}
+
+SIMPLE_DECLARE_MODULE_V1("hostserv/group", MODULE_UNLOAD_CAPABILITY_OK)

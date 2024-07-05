@@ -1,34 +1,27 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * template.c: Functions to work with predefined flags collections
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2010 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * template.c: Functions to work with predefined flags collections
  */
 
-#include "atheme.h"
-#include "template.h"
+#include <atheme.h>
+#include "internal.h"
 
 mowgli_patricia_t *global_template_dict = NULL;
 
-void fix_global_template_flags(void)
+void
+fix_global_template_flags(void)
 {
-	default_template_t *def_t;
+	struct default_template *def_t;
 	mowgli_patricia_iteration_state_t state;
 
 	MOWGLI_PATRICIA_FOREACH(def_t, &state, global_template_dict)
@@ -37,30 +30,31 @@ void fix_global_template_flags(void)
 	}
 }
 
-void set_global_template_flags(const char *name, unsigned int flags)
+void
+set_global_template_flags(const char *name, unsigned int flags)
 {
-	default_template_t *def_t;
-
 	if (global_template_dict == NULL)
 		global_template_dict = mowgli_patricia_create(strcasecanon);
 
-	def_t = mowgli_patricia_retrieve(global_template_dict, name);
+	struct default_template *def_t = mowgli_patricia_retrieve(global_template_dict, name);
+
 	if (def_t != NULL)
 	{
 		def_t->flags = flags;
 		return;
 	}
 
-	def_t = smalloc(sizeof(default_template_t));
+	def_t = smalloc(sizeof *def_t);
 	def_t->flags = flags;
 	mowgli_patricia_add(global_template_dict, name, def_t);
 
 	slog(LG_DEBUG, "set_global_template_flags(): add %s", name);
 }
 
-unsigned int get_global_template_flags(const char *name)
+unsigned int
+get_global_template_flags(const char *name)
 {
-	default_template_t *def_t;
+	struct default_template *def_t;
 
 	if (global_template_dict == NULL)
 		global_template_dict = mowgli_patricia_create(strcasecanon);
@@ -72,14 +66,16 @@ unsigned int get_global_template_flags(const char *name)
 	return def_t->flags;
 }
 
-static void release_global_template_data(const char *key, void *data, void *privdata)
+static void
+release_global_template_data(const char *key, void *data, void *privdata)
 {
 	slog(LG_DEBUG, "release_global_template_data(): delete %s", key);
 
-	free(data);
+	sfree(data);
 }
 
-void clear_global_template_flags(void)
+void
+clear_global_template_flags(void)
 {
 	if (global_template_dict == NULL)
 		return;
@@ -89,7 +85,8 @@ void clear_global_template_flags(void)
 }
 
 /* name1=value1 name2=value2 name3=value3... */
-const char *getitem(const char *str, const char *name)
+const char *
+getitem(const char *str, const char *name)
 {
 	char *p;
 	static char result[300];
@@ -117,9 +114,10 @@ const char *getitem(const char *str, const char *name)
 	}
 }
 
-unsigned int get_template_flags(mychan_t *mc, const char *name)
+unsigned int
+get_template_flags(struct mychan *mc, const char *name)
 {
-	metadata_t *md;
+	struct metadata *md;
 	const char *d;
 
 	if (mc != NULL)

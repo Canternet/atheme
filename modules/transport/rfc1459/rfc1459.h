@@ -1,20 +1,15 @@
 /*
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * Header for IRC code.
- *
  */
 
-#ifndef RFC1459_H
-#define RFC1459_H
+#ifndef ATHEME_MOD_TRANSPORT_RFC1459_RFC1459_H
+#define ATHEME_MOD_TRANSPORT_RFC1459_RFC1459_H 1
 
-E void irc_parse(char *line);
+void irc_parse(char *line);
 
-#endif
-
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+#endif /* !ATHEME_MOD_TRANSPORT_RFC1459_RFC1459_H */

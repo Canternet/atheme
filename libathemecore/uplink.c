@@ -1,42 +1,36 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * uplink.c: Uplink management.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * uplink.c: Uplink management.
  */
 
-#include "atheme.h"
-#include "datastream.h"
-#include "uplink.h"
+#include <atheme.h>
+#include "internal.h"
 
-void (*parse) (char *line) = NULL;
+static void uplink_close(struct connection *cptr);
+
+static mowgli_heap_t *uplink_heap = NULL;
 
 mowgli_list_t uplinks;
-uplink_t *curr_uplink;
+struct uplink *curr_uplink;
 
-mowgli_heap_t *uplink_heap;
+void (*parse)(char *line) = NULL;
 
-static void uplink_close(connection_t *cptr);
-
-void init_uplinks(void)
+void
+init_uplinks(void)
 {
-	uplink_heap = sharedheap_get(sizeof(uplink_t));
+	(void) memset(&uplinks, 0x00, sizeof uplinks);
+
+	uplink_heap = sharedheap_get(sizeof(struct uplink));
 	if (!uplink_heap)
 	{
 		slog(LG_INFO, "init_uplinks(): block allocator failed.");
@@ -44,27 +38,28 @@ void init_uplinks(void)
 	}
 }
 
-uplink_t *uplink_add(const char *name, const char *host, const char *send_password, const char *receive_password, const char *vhost, int port)
+struct uplink *
+uplink_add(const char *name, const char *host, const char *send_password, const char *receive_password, const char *vhost, unsigned int port)
 {
-	uplink_t *u;
+	struct uplink *u;
 
-	slog(LG_DEBUG, "uplink_add(): %s -> %s:%d", me.name, name, port);
+	slog(LG_DEBUG, "uplink_add(): %s -> %s:%u", me.name, name, port);
 
 	if ((u = uplink_find(name)))
 	{
 		if (u->flags & UPF_ILLEGAL)
 		{
 			u->flags &= ~UPF_ILLEGAL;
-			free(u->name);
-			free(u->host);
-			free(u->send_pass);
-			free(u->receive_pass);
-			if (u->vhost)
-				free(u->vhost);
+
+			sfree(u->name);
+			sfree(u->host);
+			sfree(u->send_pass);
+			sfree(u->receive_pass);
+			sfree(u->vhost);
 		}
 		else
 		{
-			slog(LG_INFO, "Duplicate uplink %s.", name);
+			slog(LG_ERROR, "Ignoring duplicate uplink %s.", name);
 			return NULL;
 		}
 	}
@@ -79,21 +74,20 @@ uplink_t *uplink_add(const char *name, const char *host, const char *send_passwo
 	u->host = sstrdup(host);
 	u->send_pass = sstrdup(send_password);
 	u->receive_pass = sstrdup(receive_password);
-	if (vhost)
-		u->vhost = sstrdup(vhost);
+	u->vhost = sstrdup(vhost);
 	u->port = port;
 
 	return u;
 }
 
-void uplink_delete(uplink_t * u)
+void
+uplink_delete(struct uplink * u)
 {
-	free(u->name);
-	free(u->host);
-	free(u->send_pass);
-	free(u->receive_pass);
-	if (u->vhost)
-		free(u->vhost);
+	sfree(u->name);
+	sfree(u->host);
+	sfree(u->send_pass);
+	sfree(u->receive_pass);
+	sfree(u->vhost);
 
 	mowgli_node_delete(&u->node, &uplinks);
 	mowgli_heap_free(uplink_heap, u);
@@ -101,13 +95,14 @@ void uplink_delete(uplink_t * u)
 	cnt.uplink--;
 }
 
-uplink_t *uplink_find(const char *name)
+struct uplink *
+uplink_find(const char *name)
 {
 	mowgli_node_t *n;
 
 	MOWGLI_ITER_FOREACH(n, uplinks.head)
 	{
-		uplink_t *u = n->data;
+		struct uplink *u = n->data;
 
 		if (!strcasecmp(u->name, name))
 			return u;
@@ -116,7 +111,8 @@ uplink_t *uplink_find(const char *name)
 	return NULL;
 }
 
-static void reconn(void *arg)
+static void
+reconn(void *arg)
 {
 	if (me.connected)
 		return;
@@ -124,9 +120,10 @@ static void reconn(void *arg)
 	uplink_connect();
 }
 
-void uplink_connect(void)
+void
+uplink_connect(void)
 {
-	uplink_t *u;
+	struct uplink *u;
 
 	if (curr_uplink == NULL)
 	{
@@ -136,19 +133,19 @@ void uplink_connect(void)
 			return;
 		}
 		curr_uplink = uplinks.head->data;
-		slog(LG_INFO, "uplink_connect(): connecting to first entry %s[%s]:%d.", curr_uplink->name, curr_uplink->host, curr_uplink->port);
+		slog(LG_INFO, "uplink_connect(): connecting to first entry %s[%s]:%u.", curr_uplink->name, curr_uplink->host, curr_uplink->port);
 	}
 	else if (curr_uplink->node.next)
 	{
 		u = curr_uplink->node.next->data;
 
 		curr_uplink = u;
-		slog(LG_INFO, "uplink_connect(): trying alternate uplink %s[%s]:%d", curr_uplink->name, curr_uplink->host, curr_uplink->port);
+		slog(LG_INFO, "uplink_connect(): trying alternate uplink %s[%s]:%u", curr_uplink->name, curr_uplink->host, curr_uplink->port);
 	}
 	else
 	{
 		curr_uplink = uplinks.head->data;
-		slog(LG_INFO, "uplink_connect(): trying again first entry %s[%s]:%d", curr_uplink->name, curr_uplink->host, curr_uplink->port);
+		slog(LG_INFO, "uplink_connect(): trying again first entry %s[%s]:%u", curr_uplink->name, curr_uplink->host, curr_uplink->port);
 	}
 
 	u = curr_uplink;
@@ -178,9 +175,10 @@ void uplink_connect(void)
  *       uplink marked dead
  *       uplink deleted if it had been removed from configuration
  */
-static void uplink_close(connection_t *cptr)
+static void
+uplink_close(struct connection *cptr)
 {
-	channel_t *c;
+	struct channel *c;
 	mowgli_patricia_iteration_state_t state;
 
 	mowgli_timer_add_once(base_eventloop, "reconn", reconn, NULL, me.recontime);

@@ -1,57 +1,36 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock <nenolod@nenolod.net> et al
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 William Pitcock <nenolod@nenolod.net>, et al.
  *
  * Choose a random user on the channel.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "gameserv_common.h"
 
-DECLARE_MODULE_V1
-(
-	"gameserv/lottery", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void command_lottery(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cmd_lottery = { "LOTTERY", N_("Choose a random user on a channel."), AC_NONE, 2, command_lottery, { .path = "gameserv/lottery" } };
-
-void _modinit(module_t * m)
+static struct user *
+pick_a_sucker(struct channel *c)
 {
-	service_named_bind_command("gameserv", &cmd_lottery);
+	int slot = atheme_random_uniform(MOWGLI_LIST_LENGTH(&c->members));
+	struct chanuser *cu;
 
-	service_named_bind_command("chanserv", &cmd_lottery);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("gameserv", &cmd_lottery);
-
-	service_named_unbind_command("chanserv", &cmd_lottery);
-}
-
-static user_t *pick_a_sucker(channel_t *c)
-{
-	int slot = arc4random() % MOWGLI_LIST_LENGTH(&c->members);
-	chanuser_t *cu;
-
-	cu = (chanuser_t *) mowgli_node_nth_data(&c->members, slot);
+	cu = (struct chanuser *) mowgli_node_nth_data(&c->members, slot);
 	while (cu != NULL && is_internal_client(cu->user))
 	{
-		slot = arc4random() % MOWGLI_LIST_LENGTH(&c->members);
-		cu = (chanuser_t *) mowgli_node_nth_data(&c->members, slot);
+		slot = atheme_random_uniform(MOWGLI_LIST_LENGTH(&c->members));
+		cu = (struct chanuser *) mowgli_node_nth_data(&c->members, slot);
 	}
 
 	return cu != NULL ? cu->user : NULL;
 }
 
-static void command_lottery(sourceinfo_t *si, int parc, char *parv[])
+static void
+command_lottery(struct sourceinfo *si, int parc, char *parv[])
 {
-	mychan_t *mc;
-	user_t *u;
+	struct mychan *mc;
+	struct user *u;
 
 	if (!gs_do_parameters(si, &parc, &parv, &mc))
 		return;
@@ -68,8 +47,29 @@ static void command_lottery(sourceinfo_t *si, int parc, char *parv[])
 	gs_command_report(si, "%s", u->nick);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cmd_lottery = {
+	.name           = "LOTTERY",
+	.desc           = N_("Choose a random user on a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &command_lottery,
+	.help           = { .path = "gameserv/lottery" },
+};
+
+static void
+mod_init(struct module ATHEME_VATTR_UNUSED *const restrict m)
+{
+	service_named_bind_command("gameserv", &cmd_lottery);
+
+	service_named_bind_command("chanserv", &cmd_lottery);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("gameserv", &cmd_lottery);
+
+	service_named_unbind_command("chanserv", &cmd_lottery);
+}
+
+SIMPLE_DECLARE_MODULE_V1("gameserv/lottery", MODULE_UNLOAD_CAPABILITY_OK)

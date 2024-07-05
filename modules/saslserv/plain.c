@@ -1,103 +1,87 @@
 /*
- * Copyright (c) 2006 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2017-2019 Atheme Development Group (https://atheme.github.io/)
  *
  * PLAIN mechanism provider
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"saslserv/plain", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static const struct sasl_core_functions *sasl_core_functions = NULL;
 
-sasl_mech_register_func_t *regfuncs;
-static int mech_start(sasl_session_t *p, char **out, size_t *out_len);
-static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
-static void mech_finish(sasl_session_t *p);
-sasl_mechanism_t mech = {"PLAIN", &mech_start, &mech_step, &mech_finish};
-
-void _modinit(module_t *m)
+static enum sasl_mechanism_result ATHEME_FATTR_WUR
+sasl_mech_plain_step(struct sasl_session *const restrict p, const struct sasl_input_buf *const restrict in,
+                     struct sasl_output_buf ATHEME_VATTR_UNUSED *const restrict out)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, regfuncs, "saslserv/main", "sasl_mech_register_funcs");
-	regfuncs->mech_register(&mech);
+	if (! (p && in && in->buf && in->len))
+		return ASASL_MRESULT_ERROR;
+
+	// This buffer contains sensitive information
+	*(in->flags) |= ASASL_INFLAG_WIPE_BUF;
+
+	// Data format: [authzid] 0x00 authcid 0x00 password [0x00]
+	if (in->len > (NICKLEN + 1 + NICKLEN + 1 + PASSLEN + 1))
+		return ASASL_MRESULT_ERROR;
+
+	const char *ptr = in->buf;
+	const char *const end = ptr + in->len;
+
+	const char *const authzid = ptr;
+	if (strlen(authzid) > NICKLEN)
+		return ASASL_MRESULT_ERROR;
+	if ((ptr += strlen(authzid) + 1) >= end)
+		return ASASL_MRESULT_ERROR;
+
+	const char *const authcid = ptr;
+	if (! *authcid)
+		return ASASL_MRESULT_ERROR;
+	if (strlen(authcid) > NICKLEN)
+		return ASASL_MRESULT_ERROR;
+	if ((ptr += strlen(authcid) + 1) >= end)
+		return ASASL_MRESULT_ERROR;
+
+	const char *const secret = ptr;
+	if (! *secret)
+		return ASASL_MRESULT_ERROR;
+	if (strlen(secret) > PASSLEN)
+		return ASASL_MRESULT_ERROR;
+
+	if (*authzid && ! sasl_core_functions->authzid_can_login(p, HULM_PASSWORD, authzid, NULL))
+		return ASASL_MRESULT_ERROR;
+
+	struct myuser *mu = NULL;
+	if (! sasl_core_functions->authcid_can_login(p, HULM_PASSWORD, authcid, &mu))
+		return ASASL_MRESULT_ERROR;
+
+	if (! verify_password(mu, secret))
+		return ASASL_MRESULT_FAILURE;
+
+	return ASASL_MRESULT_SUCCESS;
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static const struct sasl_mechanism sasl_mech_plain = {
+
+	.name           = "PLAIN",
+	.mech_start     = NULL,
+	.mech_step      = &sasl_mech_plain_step,
+	.mech_finish    = NULL,
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
-	regfuncs->mech_unregister(&mech);
+	MODULE_TRY_REQUEST_SYMBOL(m, sasl_core_functions, "saslserv/main", "sasl_core_functions")
+
+	(void) sasl_core_functions->mech_register(&sasl_mech_plain);
 }
 
-static int mech_start(sasl_session_t *p, char **out, size_t *out_len)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-	return ASASL_MORE;
+	(void) sasl_core_functions->mech_unregister(&sasl_mech_plain);
 }
 
-static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
-{
-	char authz[256];
-	char authc[256];
-	char pass[256];
-	myuser_t *mu;
-	char *end;
-
-	/* Copy the authzid */
-	end = memchr(message, '\0', len);
-	if (end == NULL)
-		return ASASL_FAIL;
-	if (end - message > 255)
-		return ASASL_FAIL;
-	len -= end - message + 1;
-	if (len <= 0)
-		return ASASL_FAIL;
-	memcpy(authz, message, end - message + 1);
-	message = end + 1;
-
-	/* Copy the authcid */
-	end = memchr(message, '\0', len);
-	if (end == NULL)
-		return ASASL_FAIL;
-	if (end - message > 255)
-		return ASASL_FAIL;
-	len -= end - message + 1;
-	if (len <= 0)
-		return ASASL_FAIL;
-	memcpy(authc, message, end - message + 1);
-	message = end + 1;
-
-	/* Copy the password */
-	end = memchr(message, '\0', len);
-	if (end == NULL)
-		end = message + len;
-	if (end - message > 255)
-		return ASASL_FAIL;
-	memcpy(pass, message, end - message);
-	pass[end - message] = '\0';
-
-	/* Done dissecting, now check. */
-	if(!(mu = myuser_find_by_nick(authc)))
-		return ASASL_FAIL;
-
-	/* Return ASASL_FAIL before p->username is set,
-	   to prevent triggering bad_password(). */
-	if (mu->flags & MU_NOPASSWORD)
-		return ASASL_FAIL;
-
-	p->username = strdup(authc);
-	p->authzid = strdup(authz);
-	return verify_password(mu, pass) ? ASASL_DONE : ASASL_FAIL;
-}
-
-static void mech_finish(sasl_session_t *p)
-{
-}
-
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("saslserv/plain", MODULE_UNLOAD_CAPABILITY_OK)

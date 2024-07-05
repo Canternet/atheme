@@ -1,47 +1,49 @@
 /*
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality which implements the OService UPDATE command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/update", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_update(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_update = { "UPDATE", N_("Flushes services database to disk."), PRIV_ADMIN, 0, os_cmd_update, { .path = "oservice/update" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("operserv", &os_update);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_update);
-}
-
-void os_cmd_update(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_update(struct sourceinfo *si, int parc, char *parv[])
 {
 	logcommand(si, CMDLOG_ADMIN, "UPDATE");
 	wallops("Updating database by request of \2%s\2.", get_oper_name(si));
 	expire_check(NULL);
+	command_success_nodata(si, _("Updating database."));
+
 	if (db_save)
-		db_save(NULL);
-	/* db_save() will wallops/snoop/log the error */
-	command_success_nodata(si, _("UPDATE completed."));
+		db_save(NULL, DB_SAVE_BG_IMPORTANT);
+
+	// db_save() will wallops/snoop/log the error
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_update = {
+	.name           = "UPDATE",
+	.desc           = N_("Flushes services database to disk."),
+	.access         = PRIV_ADMIN,
+	.maxparc        = 0,
+	.cmd            = &os_cmd_update,
+	.help           = { .path = "oservice/update" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+        service_named_bind_command("operserv", &os_update);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_update);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/update", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,28 +1,19 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the GroupServ HELP command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/register", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_register(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_register = { "REGISTER", N_("Registers a group."), AC_AUTHENTICATED, 2, gs_cmd_register, { .path = "groupserv/register" } };
-
-static void gs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
+static void
+gs_cmd_register(struct sourceinfo *si, int parc, char *parv[])
 {
-	mygroup_t *mg;
+	struct mygroup *mg;
 
 	if (!parv[0])
 	{
@@ -40,7 +31,7 @@ static void gs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 
 	if (si->smu->flags & MU_WAITAUTH)
 	{
-		command_fail(si, fault_notverified, _("You need to verify your email address before you may register groups."));
+		command_fail(si, fault_notverified, STR_EMAIL_NOT_VERIFIED);
 		return;
 	}
 
@@ -50,14 +41,14 @@ static void gs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	if (strlen(parv[0]) >= NICKLEN)
+	if (strlen(parv[0]) > GROUPLEN)
 	{
 		command_fail(si, fault_badparams, _("The group name \2%s\2 is invalid."), parv[0]);
 		return;
 	}
 
 	if (myentity_count_group_flag(entity(si->smu), GA_FOUNDER) > gs_config->maxgroups &&
-	    !has_priv(si, PRIV_REG_NOLIMIT))
+	    !has_priv(si, PRIV_EXCEED_LIMITS))
 	{
 		command_fail(si, fault_toomany, _("You have too many groups registered."));
 		return;
@@ -77,16 +68,27 @@ static void gs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("The group \2%s\2 has been registered to \2%s\2."), entity(mg)->name, entity(si->smu)->name);
 }
 
+static struct command gs_register = {
+	.name           = "REGISTER",
+	.desc           = N_("Registers a group."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &gs_cmd_register,
+	.help           = { .path = "groupserv/register" },
+};
 
-void _modinit(module_t *m)
+static void
+mod_init(struct module *const restrict m)
 {
 	use_groupserv_main_symbols(m);
 
 	service_named_bind_command("groupserv", &gs_register);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("groupserv", &gs_register);
 }
 
+SIMPLE_DECLARE_MODULE_V1("groupserv/register", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,47 +1,39 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * pmodule.c: Protocol command management.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2011 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * pmodule.c: Protocol command management.
  */
 
-#include "atheme.h"
-#include "pmodule.h"
+#include <atheme.h>
+#include "internal.h"
 
 mowgli_patricia_t *pcommands;
 
 mowgli_heap_t *pcommand_heap;
 mowgli_heap_t *messagetree_heap;
 
-struct cmode_ *mode_list;
+const struct cmode *mode_list = NULL;
 struct extmode *ignore_mode_list;
 size_t ignore_mode_list_size = 0;
-struct cmode_ *status_mode_list;
-struct cmode_ *prefix_mode_list;
-struct cmode_ *user_mode_list;
-ircd_t *ircd;
-bool pmodule_loaded = false;
+const struct cmode *status_mode_list = NULL;
+const struct cmode *prefix_mode_list = NULL;
+const struct cmode *user_mode_list = NULL;
+struct ircd *ircd = NULL;
 bool backend_loaded = false;
 
-void pcommand_init(void)
+void
+pcommand_init(void)
 {
-	pcommand_heap = sharedheap_get(sizeof(pcommand_t));
+	pcommand_heap = sharedheap_get(sizeof(struct proto_cmd));
 
 	if (!pcommand_heap)
 	{
@@ -52,9 +44,10 @@ void pcommand_init(void)
 	pcommands = mowgli_patricia_create(noopcanon);
 }
 
-void pcommand_add(const char *token, void (*handler) (sourceinfo_t *si, int parc, char *parv[]), int minparc, int sourcetype)
+void
+pcommand_add(const char *token, void (*handler) (struct sourceinfo *si, int parc, char *parv[]), int minparc, int sourcetype)
 {
-	pcommand_t *pcmd;
+	struct proto_cmd *pcmd;
 
 	if (pcommand_find(token))
 	{
@@ -71,9 +64,10 @@ void pcommand_add(const char *token, void (*handler) (sourceinfo_t *si, int parc
 	mowgli_patricia_add(pcommands, pcmd->token, pcmd);
 }
 
-void pcommand_delete(const char *token)
+void
+pcommand_delete(const char *token)
 {
-	pcommand_t *pcmd;
+	struct proto_cmd *pcmd;
 
 	if (!(pcmd = pcommand_find(token)))
 	{
@@ -83,12 +77,13 @@ void pcommand_delete(const char *token)
 
 	mowgli_patricia_delete(pcommands, pcmd->token);
 
-	free(pcmd->token);
+	sfree(pcmd->token);
 	pcmd->handler = NULL;
 	mowgli_heap_free(pcommand_heap, pcmd);
 }
 
-pcommand_t *pcommand_find(const char *token)
+struct proto_cmd *
+pcommand_find(const char *token)
 {
 	return mowgli_patricia_retrieve(pcommands, token);
 }

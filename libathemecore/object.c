@@ -1,37 +1,31 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * object.c: Object management.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2012 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * object.c: Object management.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
 #ifdef OBJECT_DEBUG
 mowgli_list_t object_list = { NULL, NULL, 0 };
 #endif
 
-mowgli_heap_t *metadata_heap;	/* HEAP_CHANUSER */
+static mowgli_heap_t *metadata_heap = NULL;	/* HEAP_CHANUSER */
 
-void init_metadata(void)
+void
+init_metadata(void)
 {
-	metadata_heap = sharedheap_get(sizeof(metadata_t));
+	metadata_heap = sharedheap_get(sizeof(struct metadata));
 
 	if (metadata_heap == NULL)
 	{
@@ -41,7 +35,7 @@ void init_metadata(void)
 }
 
 /*
- * object_init
+ * atheme_object_init
  *
  * Populates the object manager part of an object.
  *
@@ -57,7 +51,8 @@ void init_metadata(void)
  * Side Effects:
  *      - none
  */
-void object_init(object_t *obj, const char *name, destructor_t des)
+void
+atheme_object_init(struct atheme_object *obj, const char *name, atheme_object_destructor_fn des)
 {
 	return_if_fail(obj != NULL);
 
@@ -70,7 +65,7 @@ void object_init(object_t *obj, const char *name, destructor_t des)
 }
 
 /*
- * object_ref
+ * atheme_object_ref
  *
  * Increment the reference counter on an object.
  *
@@ -83,7 +78,8 @@ void object_init(object_t *obj, const char *name, destructor_t des)
  * Side Effects:
  *      - none
  */
-void * object_ref(void *object)
+void *
+atheme_object_ref(void *object)
 {
 	return_val_if_fail(object != NULL, NULL);
 
@@ -97,18 +93,18 @@ void * object_ref(void *object)
 	 * we want to sink the reference to make it an unowned object.
 	 *   --nenolod
 	 */
-	return_val_if_fail(object(object)->refcount >= 0, object);
+	return_val_if_fail(atheme_object(object)->refcount >= 0, object);
 
-	object(object)->refcount++;
+	atheme_object(object)->refcount++;
 #ifdef DEBUG_OBJECT_REF
-	slog(LG_DEBUG, "object_ref(%p): %d references", object, object(object)->refcount);
+	slog(LG_DEBUG, "atheme_object_ref(%p): %d references", object, atheme_object(object)->refcount);
 #endif
 
 	return object;
 }
 
 /*
- * object_sink_ref
+ * atheme_object_sink_ref
  *
  * Decrement the reference counter on an object.
  *
@@ -121,21 +117,22 @@ void * object_ref(void *object)
  * Side Effects:
  *      - none
  */
-void *object_sink_ref(void *obj)
+void *
+atheme_object_sink_ref(void *obj)
 {
 	return_val_if_fail(obj != NULL, NULL);
-	return_val_if_fail(object(obj)->refcount > 0, obj);
-	object(obj)->refcount--;
+	return_val_if_fail(atheme_object(obj)->refcount > 0, obj);
+	atheme_object(obj)->refcount--;
 
 #ifdef DEBUG_OBJECT_REF
-	slog(LG_DEBUG, "object_sink_ref(%p): %d references", obj, object(obj)->refcount);
+	slog(LG_DEBUG, "atheme_object_sink_ref(%p): %d references", obj, atheme_object(obj)->refcount);
 #endif
 
 	return obj;
 }
 
 /*
- * object_unref
+ * atheme_object_unref
  *
  * Decrement the reference counter on an object.
  *
@@ -148,23 +145,24 @@ void *object_sink_ref(void *obj)
  * Side Effects:
  *      - if the refcount is 0, the object is destroyed.
  */
-void object_unref(void *obj)
+void
+atheme_object_unref(void *obj)
 {
 	return_if_fail(obj != NULL);
-	return_if_fail(object(obj)->refcount >= -1);
+	return_if_fail(atheme_object(obj)->refcount >= -1);
 
-	if (object(obj)->refcount == -1)
+	if (atheme_object(obj)->refcount == -1)
 		return;
-	else if (object(obj)->refcount > 0)
+	else if (atheme_object(obj)->refcount > 0)
 	{
-		object_sink_ref(obj);
-		if (object(obj)->refcount == 0)
-			object_dispose(obj);
+		atheme_object_sink_ref(obj);
+		if (atheme_object(obj)->refcount == 0)
+			atheme_object_dispose(obj);
 	}
 }
 
 /*
- * object_dispose
+ * atheme_object_dispose
  *
  * Disposes of an object.
  *
@@ -177,13 +175,14 @@ void object_unref(void *obj)
  * Side Effects:
  *      - the object is destroyed
  */
-void object_dispose(void *object)
+void
+atheme_object_dispose(void *object)
 {
-	object_t *obj;
+	struct atheme_object *obj;
 	mowgli_patricia_t *privatedata, *metadata;
 
 	return_if_fail(object != NULL);
-	obj = object(object);
+	obj = atheme_object(object);
 
 	/* we shouldn't be disposing an object more than once in it's
 	 * lifecycle.  so do a soft assert and get out if that's the case.
@@ -191,7 +190,7 @@ void object_dispose(void *object)
 	 */
 	return_if_fail(obj->refcount != -1);
 
-	/* set refcount to -1 to ensure that object_unref() doesn't cause a loop */
+	/* set refcount to -1 to ensure that atheme_object_unref() doesn't cause a loop */
 	obj->refcount = -1;
 
 	privatedata = obj->privatedata;
@@ -206,7 +205,7 @@ void object_dispose(void *object)
 	else
 	{
 		metadata_delete_all(obj);
-		free(obj);
+		sfree(obj);
 	}
 
 	if (privatedata != NULL)
@@ -216,20 +215,20 @@ void object_dispose(void *object)
 		mowgli_patricia_destroy(metadata, NULL, NULL);
 }
 
-metadata_t *metadata_add(void *target, const char *name, const char *value)
+struct metadata *
+metadata_add(void *target, const char *name, const char *value)
 {
-	object_t *obj;
-	metadata_t *md;
+	struct atheme_object *obj;
+	struct metadata *md;
 
 	return_val_if_fail(name != NULL, NULL);
 	return_val_if_fail(value != NULL, NULL);
 
-	obj = object(target);
+	obj = atheme_object(target);
 
 	if (obj->metadata == NULL)
 		obj->metadata = mowgli_patricia_create(strcasecanon);
-
-	if (metadata_find(target, name))
+	else if (metadata_find(target, name))
 		metadata_delete(target, name);
 
 	md = mowgli_heap_alloc(metadata_heap);
@@ -242,52 +241,54 @@ metadata_t *metadata_add(void *target, const char *name, const char *value)
 	return md;
 }
 
-void metadata_delete(void *target, const char *name)
+void
+metadata_delete(void *target, const char *name)
 {
-	object_t *obj;
-	metadata_t *md = metadata_find(target, name);
+	struct atheme_object *obj;
+	struct metadata *md = metadata_find(target, name);
 
 	if (!md)
 		return;
 
-	obj = object(target);
+	obj = atheme_object(target);
 
-	if (obj->metadata == NULL)
-		obj->metadata = mowgli_patricia_create(strcasecanon);
+	return_if_fail(obj->metadata != NULL);
 
 	mowgli_patricia_delete(obj->metadata, name);
 
 	strshare_unref(md->name);
-	free(md->value);
+	sfree(md->value);
 
 	mowgli_heap_free(metadata_heap, md);
 }
 
-metadata_t *metadata_find(void *target, const char *name)
+struct metadata *
+metadata_find(void *target, const char *name)
 {
-	object_t *obj;
+	struct atheme_object *obj;
 
 	return_val_if_fail(target != NULL, NULL);
 	return_val_if_fail(name != NULL, NULL);
 
-	obj = object(target);
+	obj = atheme_object(target);
 
 	if (obj->metadata == NULL)
-		obj->metadata = mowgli_patricia_create(strcasecanon);
+		return NULL;
 
 	return mowgli_patricia_retrieve(obj->metadata, name);
 }
 
-void metadata_delete_all(void *target)
+void
+metadata_delete_all(void *target)
 {
-	object_t *obj;
-	metadata_t *md;
+	struct atheme_object *obj;
+	struct metadata *md;
 	mowgli_patricia_iteration_state_t state;
 
-	obj = object(target);
+	obj = atheme_object(target);
 
 	if (obj->metadata == NULL)
-		obj->metadata = mowgli_patricia_create(strcasecanon);
+		return;
 
 	MOWGLI_PATRICIA_FOREACH(md, &state, obj->metadata)
 	{
@@ -295,26 +296,40 @@ void metadata_delete_all(void *target)
 	}
 }
 
-void *privatedata_get(void *target, const char *key)
+void *
+privatedata_get(void *target, const char *key)
 {
-	object_t *obj;
+	struct atheme_object *obj;
 
-	obj = object(target);
+	obj = atheme_object(target);
 	if (obj->privatedata == NULL)
 		return NULL;
 
 	return mowgli_patricia_retrieve(obj->privatedata, key);
 }
 
-void privatedata_set(void *target, const char *key, void *data)
+void
+privatedata_set(void *target, const char *key, void *data)
 {
-	object_t *obj;
+	struct atheme_object *obj;
 
-	obj = object(target);
+	obj = atheme_object(target);
 	if (obj->privatedata == NULL)
 		obj->privatedata = mowgli_patricia_create(noopcanon);
 
 	mowgli_patricia_add(obj->privatedata, key, data);
+}
+
+void *
+privatedata_delete(void *target, const char *key)
+{
+	struct atheme_object *obj;
+
+	obj = atheme_object(target);
+	if (obj->privatedata == NULL)
+		return NULL;
+
+	return mowgli_patricia_delete(obj->privatedata, key);
 }
 
 /* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
@@ -322,4 +337,3 @@ void privatedata_set(void *target, const char *key, void *data)
  * vim:sw=8
  * vim:noexpandtab
  */
-

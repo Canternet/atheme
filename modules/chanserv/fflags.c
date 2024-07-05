@@ -1,47 +1,26 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 William Pitcock, et al.
  *
  * This file contains code for the CService FFLAGS functions.
- *
  */
 
-#include "atheme.h"
-#include "template.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/fflags", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_fflags = { "FFLAGS", N_("Forces a flags change on a channel."),
-                        PRIV_CHAN_ADMIN, 3, cs_cmd_fflags, { .path = "cservice/fflags" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_fflags);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_fflags);
-}
-
-/* FFLAGS <channel> <user> <flags> */
-static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
+// FFLAGS <channel> <user> <flags>
+static void
+cs_cmd_fflags(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *channel = parv[0];
 	const char *target = parv[1];
 	const char *flagstr = parv[2];
-	mychan_t *mc;
-	myentity_t *mt;
+	struct mychan *mc;
+	struct myentity *mt;
 	unsigned int addflags, removeflags;
-	chanacs_t *ca;
-	hook_channel_acl_req_t req;
+	struct chanacs *ca;
+	struct hook_channel_acl_req req;
 
 	if (parc < 3)
 	{
@@ -53,7 +32,7 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -62,7 +41,8 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 		flags_make_bitmasks(flagstr, &addflags, &removeflags);
 		if (addflags == 0 && removeflags == 0)
 		{
-			command_fail(si, fault_badparams, _("No valid flags given, use /%s%s HELP FLAGS for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp);
+			command_fail(si, fault_badparams, _("No valid flags given; use \2/msg %s HELP FLAGS\2 "
+			                                    "for a list"), chansvs.me->disp);
 			return;
 		}
 	}
@@ -71,11 +51,13 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 		addflags = get_template_flags(mc, flagstr);
 		if (addflags == 0)
 		{
-			/* Hack -- jilles */
+			// Hack -- jilles
 			if (*target == '+' || *target == '-' || *target == '=')
 				command_fail(si, fault_badparams, _("Usage: FFLAGS %s <target> <flags>"), mc->name);
 			else
-				command_fail(si, fault_badparams, _("Invalid template name given, use /%s%s TEMPLATE %s for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp, mc->name);
+				command_fail(si, fault_badparams, _("Invalid template name given; use \2/msg %s "
+				                                    "TEMPLATE %s\2 for a list"), chansvs.me->disp,
+				                                    mc->name);
 			return;
 		}
 		removeflags = ca_all & ~addflags;
@@ -85,16 +67,19 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (!(mt = myentity_find_ext(target)))
 		{
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 			return;
 		}
 		target = mt->name;
 
 		ca = chanacs_open(mc, mt, NULL, true, entity(si->smu));
 
-		/* XXX this should be more like flags.c */
+		// XXX this should be more like flags.c
 		if (removeflags & CA_FLAGS)
-			removeflags |= CA_FOUNDER, addflags &= ~CA_FOUNDER;
+		{
+			removeflags |= CA_FOUNDER;
+			addflags &= ~CA_FOUNDER;
+		}
 		else if (addflags & CA_FOUNDER)
 		{
 			if (!myentity_allow_foundership(mt))
@@ -104,7 +89,8 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 				return;
 			}
 
-			addflags |= CA_FLAGS, removeflags &= ~CA_FLAGS;
+			addflags |= CA_FLAGS;
+			removeflags &= ~CA_FLAGS;
 		}
 
 		if (is_founder(mc, mt) && removeflags & CA_FOUNDER && mychan_num_founders(mc) == 1)
@@ -116,9 +102,9 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 		req.ca = ca;
 		req.oldlevel = ca->level;
 
-		if (!chanacs_modify(ca, &addflags, &removeflags, ca_all))
+		if (!chanacs_modify(ca, &addflags, &removeflags, ca_all, si->smu))
 		{
-			/* this shouldn't happen */
+			// this shouldn't happen
 			command_fail(si, fault_noprivs, _("You are not allowed to set \2%s\2 on \2%s\2 in \2%s\2."), bitmask_to_flags2(addflags, removeflags), mt->name, mc->name);
 			chanacs_close(ca);
 			return;
@@ -142,9 +128,9 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 		req.ca = ca;
 		req.oldlevel = ca->level;
 
-		if (!chanacs_modify(ca, &addflags, &removeflags, ca_all))
+		if (!chanacs_modify(ca, &addflags, &removeflags, ca_all, si->smu))
 		{
-			/* this shouldn't happen */
+			// this shouldn't happen
 			command_fail(si, fault_noprivs, _("You are not allowed to set \2%s\2 on \2%s\2 in \2%s\2."), bitmask_to_flags2(addflags, removeflags), target, mc->name);
 			chanacs_close(ca);
 			return;
@@ -168,8 +154,27 @@ static void cs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 	verbose(mc, "\2%s\2 forced flags change \2%s\2 on \2%s\2.", get_source_name(si), flagstr, target);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_fflags = {
+	.name           = "FFLAGS",
+	.desc           = N_("Forces a flags change on a channel."),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_fflags,
+	.help           = { .path = "cservice/fflags" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_fflags);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_fflags);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/fflags", MODULE_UNLOAD_CAPABILITY_OK)

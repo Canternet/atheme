@@ -1,14 +1,17 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- *                and Trystan Scott Lee <trystan@nomadirc.net>
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 Trystan Scott Lee <trystan@nomadirc.net>
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * XMLRPC library header, hacked up for Atheme.
- *
  */
-#ifndef XMLRPC_H
-#define XMLRPC_H
 
-#include "atheme.h"
+#ifndef ATHEME_MOD_TRANSPORT_XMLRPC_XMLRPCLIB_H
+#define ATHEME_MOD_TRANSPORT_XMLRPC_XMLRPCLIB_H 1
+
+#include <atheme.h>
 
 #define stricmp strcasecmp
 
@@ -54,32 +57,26 @@
 
 typedef int (*XMLRPCMethodFunc)(void *userdata, int ac, char **av);
 
-E int xmlrpc_getlast_error(void);
-E void xmlrpc_process(char *buffer, void *userdata);
-E int xmlrpc_register_method(const char *name, XMLRPCMethodFunc func);
-E int xmlrpc_unregister_method(const char *method);
+int xmlrpc_getlast_error(void);
+void xmlrpc_process(char *buffer, void *userdata);
+int xmlrpc_register_method(const char *name, XMLRPCMethodFunc func);
+int xmlrpc_unregister_method(const char *method);
 
-E char *xmlrpc_array(int argc, ...);
-E char *xmlrpc_double(char *buf, double value);
-E char *xmlrpc_boolean(char *buf, int value);
-E char *xmlrpc_string(char *buf, const char *value);
-E char *xmlrpc_integer(char *buf, int value);
-E char *xmlrpc_time2date(char *buf, time_t t);
+char *xmlrpc_array(int argc, ...);
+char *xmlrpc_double(char *buf, double value);
+char *xmlrpc_boolean(char *buf, int value);
+char *xmlrpc_string(char *buf, const char *value);
+char *xmlrpc_integer(char *buf, int value);
+char *xmlrpc_time2date(char *buf, time_t t);
 
-E int xmlrpc_set_options(int type, const char *value);
-E void xmlrpc_set_buffer(char *(*func)(char *buffer, int len));
-E void xmlrpc_generic_error(int code, const char *string);
-E void xmlrpc_send(int argc, ...);
-E void xmlrpc_send_string(const char *value);
-E int xmlrpc_about(void *userdata, int ac, char **av);
-E void xmlrpc_char_encode(char *outbuffer, const char *s1);
-E char *xmlrpc_decode_string(char *buf);
-E char *xmlrpc_normalizeBuffer(const char *buf);
+int xmlrpc_set_options(int type, const char *value);
+void xmlrpc_set_buffer(char *(*func)(char *buffer, int len));
+void xmlrpc_generic_error(int code, const char *string);
+void xmlrpc_send(int argc, ...);
+void xmlrpc_send_string(const char *value);
+int xmlrpc_about(void *userdata, int ac, char **av);
+void xmlrpc_char_encode(char *outbuffer, const char *s1);
+char *xmlrpc_decode_string(char *buf);
+char *xmlrpc_normalizeBuffer(const char *buf);
 
-#endif
-
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+#endif /* !ATHEME_MOD_TRANSPORT_XMLRPC_XMLRPCLIB_H */

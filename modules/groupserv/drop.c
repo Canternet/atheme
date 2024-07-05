@@ -1,99 +1,152 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the GroupServ HELP command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/drop", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_drop(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_drop = { "DROP", N_("Drops a group registration."), AC_AUTHENTICATED, 2, gs_cmd_drop, { .path = "groupserv/drop" } };
-
-static void gs_cmd_drop(sourceinfo_t *si, int parc, char *parv[])
+static void
+gs_cmd_drop_func(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc, char *parv[])
 {
-	mygroup_t *mg;
-	char *name = parv[0];
-	char *key = parv[1];
-	char fullcmd[512];
-	char key0[80], key1[80];
+	const char *const name = parv[0];
+	const char *const key = parv[1];
 
-	if (!name)
+	if (! name)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "DROP");
-		command_fail(si, fault_needmoreparams, _("Syntax: DROP <!group>"));
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "DROP");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: DROP <!group>"));
 		return;
 	}
 
 	if (*name != '!')
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "DROP");
-		command_fail(si, fault_badparams, _("Syntax: DROP <!group>"));
+		(void) command_fail(si, fault_badparams, STR_INVALID_PARAMS, "DROP");
+		(void) command_fail(si, fault_badparams, _("Syntax: DROP <!group>"));
 		return;
 	}
 
-	if (!(mg = mygroup_find(name)))
+	struct mygroup *mg;
+
+	if (! (mg = mygroup_find(name)))
 	{
-		command_fail(si, fault_nosuch_target, _("Group \2%s\2 does not exist."), name);
+		(void) command_fail(si, fault_nosuch_target, _("Group \2%s\2 does not exist."), name);
 		return;
 	}
 
-	if (!groupacs_sourceinfo_has_flag(mg, si, GA_FOUNDER))
+	if (! groupacs_sourceinfo_has_flag(mg, si, GA_FOUNDER))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to execute this command."));
+		(void) command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
-	if (si->su != NULL)
+	if (si->su)
 	{
-		if (!key)
+		const char *const challenge = create_weak_challenge(si, entity(mg)->name);
+
+		if (! challenge)
 		{
-			create_challenge(si, entity(mg)->name, 0, key0);
-			snprintf(fullcmd, sizeof fullcmd, "/%s%s DROP %s %s",
-					(ircd->uses_rcommand == false) ? "msg " : "",
-					si->service->disp, entity(mg)->name, key0);
-			command_success_nodata(si, _("To avoid accidental use of this command, this operation has to be confirmed. Please confirm by replying with \2%s\2"),
-					fullcmd);
+			(void) command_fail(si, fault_internalerror, _("Failed to create challenge"));
 			return;
 		}
-		/* accept current and previous key */
-		create_challenge(si, entity(mg)->name, 0, key0);
-		create_challenge(si, entity(mg)->name, 1, key1);
-		if (strcmp(key, key0) && strcmp(key, key1))
+		if (! key)
 		{
-			command_fail(si, fault_badparams, _("Invalid key for \2%s\2."), "DROP");
+			(void) command_success_nodata(si, _("This is a friendly reminder that you are about to "
+			                                    "\2DESTROY\2 the group \2%s\2."), entity(mg)->name);
+
+			(void) command_success_nodata(si, _("To avoid accidental use of this command, this operation "
+			                                    "has to be confirmed. Please confirm by replying with "
+			                                    "\2/msg %s DROP %s %s\2"), si->service->disp,
+			                                    entity(mg)->name, challenge);
+			return;
+		}
+		if (strcmp(challenge, key) != 0)
+		{
+			(void) command_fail(si, fault_badparams, _("Invalid key for \2%s\2."), "DROP");
 			return;
 		}
 	}
 
-	logcommand(si, CMDLOG_REGISTER, "DROP: \2%s\2", entity(mg)->name);
-	remove_group_chanacs(mg);
-	hook_call_group_drop(mg);
-	object_unref(mg);
-	command_success_nodata(si, _("The group \2%s\2 has been dropped."), name);
-	return;
+	(void) logcommand(si, CMDLOG_REGISTER, "DROP: \2%s\2", entity(mg)->name);
+	(void) command_success_nodata(si, _("The group \2%s\2 has been dropped."), entity(mg)->name);
+
+	(void) remove_group_chanacs(mg);
+	(void) hook_call_group_drop(mg);
+	(void) atheme_object_unref(mg);
 }
 
-
-void _modinit(module_t *m)
+static void
+gs_cmd_fdrop_func(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc, char *parv[])
 {
-	use_groupserv_main_symbols(m);
+	const char *const name = parv[0];
 
-	service_named_bind_command("groupserv", &gs_drop);
+	if (! name)
+	{
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "DROP");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: DROP <!group>"));
+		return;
+	}
+
+	if (*name != '!')
+	{
+		(void) command_fail(si, fault_badparams, STR_INVALID_PARAMS, "DROP");
+		(void) command_fail(si, fault_badparams, _("Syntax: DROP <!group>"));
+		return;
+	}
+
+	struct mygroup *mg;
+
+	if (! (mg = mygroup_find(name)))
+	{
+		(void) command_fail(si, fault_nosuch_target, _("Group \2%s\2 does not exist."), name);
+		return;
+	}
+
+	(void) wallops("\2%s\2 dropped the group \2%s\2", get_oper_name(si), entity(mg)->name);
+	(void) logcommand(si, CMDLOG_ADMIN | LG_REGISTER, "FDROP: \2%s\2", entity(mg)->name);
+	(void) command_success_nodata(si, _("The group \2%s\2 has been dropped."), entity(mg)->name);
+
+	(void) remove_group_chanacs(mg);
+	(void) hook_call_group_drop(mg);
+	(void) atheme_object_unref(mg);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static struct command gs_cmd_drop = {
+	.name           = "DROP",
+	.desc           = N_("Drops a group registration."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &gs_cmd_drop_func,
+	.help           = { .path = "groupserv/drop" },
+};
+
+static struct command gs_cmd_fdrop = {
+	.name           = "FDROP",
+	.desc           = N_("Force drops a group registration."),
+	.access         = PRIV_GROUP_ADMIN,
+	.maxparc        = 1,
+	.cmd            = &gs_cmd_fdrop_func,
+	.help           = { .path = "groupserv/fdrop" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
-	service_named_unbind_command("groupserv", &gs_drop);
+	(void) use_groupserv_main_symbols(m);
+
+	(void) service_named_bind_command("groupserv", &gs_cmd_drop);
+	(void) service_named_bind_command("groupserv", &gs_cmd_fdrop);
 }
 
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_named_unbind_command("groupserv", &gs_cmd_drop);
+	(void) service_named_unbind_command("groupserv", &gs_cmd_fdrop);
+}
+
+SIMPLE_DECLARE_MODULE_V1("groupserv/drop", MODULE_UNLOAD_CAPABILITY_OK)

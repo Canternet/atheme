@@ -1,50 +1,25 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService OP functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanserv.h"
-
-DECLARE_MODULE_V1
-(
-	"chanserv/op", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_op(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_deop(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_op = { "OP", N_("Gives channel ops to a user."),
-                        AC_NONE, 2, cs_cmd_op, { .path = "cservice/op_voice" } };
-command_t cs_deop = { "DEOP", N_("Removes channel ops from a user."),
-                        AC_NONE, 2, cs_cmd_deop, { .path = "cservice/op_voice" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_op);
-        service_named_bind_command("chanserv", &cs_deop);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_op);
-	service_named_unbind_command("chanserv", &cs_deop);
-}
 
 static mowgli_list_t op_actions;
 
-static void cmd_op(sourceinfo_t *si, bool opping, int parc, char *parv[])
+static void
+cmd_op(struct sourceinfo *si, bool opping, int parc, char *parv[])
 {
 	char *chan = parv[0];
 	char *nick = parv[1];
-	mychan_t *mc;
-	user_t *tu;
-	chanuser_t *cu;
+	struct mychan *mc;
+	struct user *tu;
+	struct chanuser *cu;
 	char *nicks;
 	bool op;
 	mowgli_node_t *n;
@@ -52,19 +27,25 @@ static void cmd_op(sourceinfo_t *si, bool opping, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
-	nicks = (!nick ? strdup(si->su->nick) : strdup(nick));
+	if (!mc->chan)
+	{
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
+		return;
+	}
+
+	nicks = (!nick ? sstrdup(si->su->nick) : sstrdup(nick));
 	prefix_action_set_all(&op_actions, opping, nicks);
-	free(nicks);
+	sfree(nicks);
 
 	MOWGLI_LIST_FOREACH(n, op_actions.head)
 	{
@@ -72,7 +53,7 @@ static void cmd_op(sourceinfo_t *si, bool opping, int parc, char *parv[])
 		nick = act->nick;
 		op = act->en;
 
-		/* figure out who we're going to op */
+		// figure out who we're going to op
 		if (!(tu = user_find_named(nick)))
 		{
 			command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), nick);
@@ -81,7 +62,7 @@ static void cmd_op(sourceinfo_t *si, bool opping, int parc, char *parv[])
 
 		if (!chanacs_source_has_flag(mc, si, CA_OP) && (tu != si->su || !chanacs_source_has_flag(mc, si, CA_AUTOOP)))
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to (de)op \2%s\2 on \2%s\2."), nick, mc->name);
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			continue;
 		}
 
@@ -91,10 +72,10 @@ static void cmd_op(sourceinfo_t *si, bool opping, int parc, char *parv[])
 			continue;
 		}
 
-		/* SECURE check; we can skip this if deopping or sender == target, because we already verified */
+		// SECURE check; we can skip this if deopping or sender == target, because we already verified
 		if (op && (si->su != tu) && (mc->flags & MC_SECURE) && !chanacs_user_has_flag(mc, tu, CA_OP) && !chanacs_user_has_flag(mc, tu, CA_AUTOOP))
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			command_fail(si, fault_noprivs, _("\2%s\2 has the SECURE option enabled, and \2%s\2 does not have appropriate access."), mc->name, tu->nick);
 			continue;
 		}
@@ -106,24 +87,45 @@ static void cmd_op(sourceinfo_t *si, bool opping, int parc, char *parv[])
 			continue;
 		}
 
-		modestack_mode_param(chansvs.nick, mc->chan, op ? MTYPE_ADD : MTYPE_DEL, 'o', CLIENT_NAME(tu));
 		if (op)
+		{
+			modestack_mode_param(chansvs.nick, mc->chan, MTYPE_ADD, 'o', CLIENT_NAME(tu));
 			cu->modes |= CSTATUS_OP;
+
+			if (! si->c && tu != si->su)
+				change_notify(chansvs.nick, tu, "You have had operator (+o) status given to you on "
+				                                "\2%s\2 by \2%s\2", mc->name, get_source_name(si));
+
+			if (! si->su || ! chanuser_find(mc->chan, si->su))
+				command_success_nodata(si, _("\2%s\2 has had operator (+o) status given to them on "
+				                             "\2%s\2"), tu->nick, mc->name);
+
+			logcommand(si, CMDLOG_DO, "OP: \2%s!%s@%s\2 on \2%s\2", tu->nick, tu->user, tu->vhost,
+			                                                        mc->name);
+		}
 		else
+		{
+			modestack_mode_param(chansvs.nick, mc->chan, MTYPE_DEL, 'o', CLIENT_NAME(tu));
 			cu->modes &= ~CSTATUS_OP;
 
-		if (si->c == NULL && tu != si->su)
-			change_notify(chansvs.nick, tu, "You have been %sopped on %s by %s", op ? "" : "de", mc->name, get_source_name(si));
+			if (! si->c && tu != si->su)
+				change_notify(chansvs.nick, tu, "You have had operator (+o) status taken from you on "
+				                                "\2%s\2 by \2%s\2", mc->name, get_source_name(si));
 
-		logcommand(si, CMDLOG_DO, "%sOP: \2%s!%s@%s\2 on \2%s\2", op ? "" : "DE", tu->nick, tu->user, tu->vhost, mc->name);
-		if (si->su == NULL || !chanuser_find(mc->chan, si->su))
-			command_success_nodata(si, _("\2%s\2 has been %sopped on \2%s\2."), tu->nick, op ? "" : "de", mc->name);
+			if (! si->su || ! chanuser_find(mc->chan, si->su))
+				command_success_nodata(si, _("\2%s\2 has had operator (+o) status taken from them on "
+				                             "\2%s\2"), tu->nick, mc->name);
+
+			logcommand(si, CMDLOG_DO, "DEOP: \2%s!%s@%s\2 on \2%s\2", tu->nick, tu->user, tu->vhost,
+			                                                          mc->name);
+		}
 	}
 
 	prefix_action_clear(&op_actions);
 }
 
-static void cs_cmd_op(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_op(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (!parv[0])
 	{
@@ -135,7 +137,8 @@ static void cs_cmd_op(sourceinfo_t *si, int parc, char *parv[])
 	cmd_op(si, true, parc, parv);
 }
 
-static void cs_cmd_deop(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_deop(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (!parv[0])
 	{
@@ -147,8 +150,38 @@ static void cs_cmd_deop(sourceinfo_t *si, int parc, char *parv[])
 	cmd_op(si, false, parc, parv);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_op = {
+	.name           = "OP",
+	.desc           = N_("Gives channel ops to a user."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_op,
+	.help           = { .path = "cservice/op_voice" },
+};
+
+static struct command cs_deop = {
+	.name           = "DEOP",
+	.desc           = N_("Removes channel ops from a user."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_deop,
+	.help           = { .path = "cservice/op_voice" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_op);
+        service_named_bind_command("chanserv", &cs_deop);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_op);
+	service_named_unbind_command("chanserv", &cs_deop);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/op", MODULE_UNLOAD_CAPABILITY_OK)

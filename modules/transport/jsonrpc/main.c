@@ -1,111 +1,116 @@
 /*
- * Copyright (c) 2014 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2014 Atheme Project (http://atheme.org/)
  *
  * JSONRPC implementation
- *
  */
 
-#include "atheme.h"
-#include "httpd.h"
+#include <atheme.h>
 #include "jsonrpclib.h"
-#include "datastream.h"
-#include "authcookie.h"
 
-DECLARE_MODULE_V1
-(
-	"transport/jsonrpc", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_list_t *httpd_path_handlers = NULL;
+static mowgli_patricia_t *json_methods = NULL;
 
-static void handle_request(connection_t *cptr, void *requestbuf);
+void
+jsonrpc_register_method(const char *method_name, jsonrpc_method_fn method)
+{
+	mowgli_patricia_add(json_methods, method_name, method);
+}
 
-mowgli_list_t *httpd_path_handlers;
-static mowgli_patricia_t *json_methods;
+void
+jsonrpc_unregister_method(const char *method_name)
+{
+	mowgli_patricia_delete(json_methods, method_name);
+}
 
-static bool jsonrpcmethod_login(void *conn, mowgli_list_t *params, char *id);
-static bool jsonrpcmethod_logout(void *conn, mowgli_list_t *params, char *id);
-static bool jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id);
-static bool jsonrpcmethod_privset(void *conn, mowgli_list_t *params, char *id);
-static bool jsonrpcmethod_ison(void *conn, mowgli_list_t *params, char *id);
-static bool jsonrpcmethod_metadata(void *conn, mowgli_list_t *params, char *id);
+jsonrpc_method_fn
+get_json_method(const char *method_name)
+{
+	return mowgli_patricia_retrieve(json_methods, method_name);
+}
 
+static void
+jsonrpc_command_fail(struct sourceinfo *si, enum cmd_faultcode code, const char *message)
+{
+	struct connection *cptr;
+	struct httpddata *hd;
+	char *newmessage;
 
-static void jsonrpc_command_fail(sourceinfo_t *si, cmd_faultcode_t code, const char *message);
-static void jsonrpc_command_success_string(sourceinfo_t *si, const char *result, const char *message);
-static void jsonrpc_command_success_nodata(sourceinfo_t *si, const char *message);
+	cptr = si->connection;
+	hd = cptr->userdata;
+	if (hd->sent_reply)
+		return;
+	newmessage = jsonrpc_normalizeBuffer(message);
 
-struct sourceinfo_vtable jsonrpc_vtable = {
+	struct jsonrpc_sourceinfo *jsi = (struct jsonrpc_sourceinfo *)si;
+
+	jsonrpc_failure_string(cptr, code, newmessage, jsi->id);
+
+	sfree(newmessage);
+	hd->sent_reply = true;
+}
+
+static void
+jsonrpc_command_success_string(struct sourceinfo *si, const char *result, const char *message)
+{
+	struct connection *cptr;
+	struct httpddata *hd;
+
+	cptr = si->connection;
+	hd = cptr->userdata;
+	if (hd->sent_reply)
+		return;
+
+	struct jsonrpc_sourceinfo *jsi = (struct jsonrpc_sourceinfo *)si;
+
+	jsonrpc_success_string(cptr, result, jsi->id);
+	hd->sent_reply = true;
+}
+
+static void
+jsonrpc_command_success_nodata(struct sourceinfo *si, const char *message)
+{
+	struct connection *cptr;
+	struct httpddata *hd;
+	char *p;
+
+	char *newmessage = jsonrpc_normalizeBuffer(message);
+
+	cptr = si->connection;
+	hd = cptr->userdata;
+	if (hd->sent_reply)
+	{
+		sfree(newmessage);
+		return;
+	}
+	if (hd->replybuf != NULL)
+	{
+		hd->replybuf = srealloc(hd->replybuf, strlen(hd->replybuf) + strlen(newmessage) + 2);
+		p = hd->replybuf + strlen(hd->replybuf);
+		*p++ = '\n';
+	}
+	else
+	{
+		hd->replybuf = smalloc(strlen(newmessage) + 1);
+		p = hd->replybuf;
+	}
+
+	strcpy(p, newmessage);
+	sfree(newmessage);
+}
+
+static struct sourceinfo_vtable jsonrpc_vtable = {
 	.description        = "jsonrpc",
 	.cmd_fail           = jsonrpc_command_fail,
 	.cmd_success_string = jsonrpc_command_success_string,
 	.cmd_success_nodata = jsonrpc_command_success_nodata
 };
 
-path_handler_t handle_jsonrpc = { NULL, handle_request };
+// These taken from modules/transport/xmlrpc/main.c
 
-static void handle_request(connection_t *cptr, void *requestbuf)
-{
-
-	jsonrpc_process(requestbuf, cptr);
-
-	return;
-}
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, httpd_path_handlers, "misc/httpd", "httpd_path_handlers");
-
-	handle_jsonrpc.path = "/jsonrpc";
-	mowgli_node_add(&handle_jsonrpc, mowgli_node_create(), httpd_path_handlers);
-
-	json_methods = mowgli_patricia_create(strcasecanon);
-
-	jsonrpc_register_method("atheme.login", jsonrpcmethod_login);
-	jsonrpc_register_method("atheme.logout", jsonrpcmethod_logout);
-	jsonrpc_register_method("atheme.command", jsonrpcmethod_command);
-	
-	jsonrpc_register_method("atheme.privset", jsonrpcmethod_privset);
-	jsonrpc_register_method("atheme.ison", jsonrpcmethod_ison);
-	jsonrpc_register_method("atheme.metadata", jsonrpcmethod_metadata);
-
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	mowgli_node_t *n;
-
-	jsonrpc_unregister_method("atheme.login");
-	jsonrpc_unregister_method("atheme.logout");
-	jsonrpc_unregister_method("atheme.command");
-
-	jsonrpc_unregister_method("atheme.privset");
-	jsonrpc_unregister_method("atheme.ison");
-	jsonrpc_unregister_method("atheme.metadata");
-
-	if ((n = mowgli_node_find(&handle_jsonrpc, httpd_path_handlers)) != NULL)
-	{
-		mowgli_node_delete(n, httpd_path_handlers);
-		mowgli_node_free(n);
-	}
-}
-
-void jsonrpc_register_method(const char *method_name, jsonrpc_method_t method) {
-	mowgli_patricia_add(json_methods, method_name, method);
-}
-
-void jsonrpc_unregister_method(const char *method_name) {
-	mowgli_patricia_delete(json_methods, method_name);
-}
-
-jsonrpc_method_t get_json_method(const char *method_name) {
-	return mowgli_patricia_retrieve(json_methods, method_name);
-}
-
-/* These taken from modules/transport/xmlrpc/main.c */
-/*
- * atheme.login
+/* atheme.login
  *
  * Parameters:
  *       account name, password, source ip (optional)
@@ -118,14 +123,14 @@ jsonrpc_method_t get_json_method(const char *method_name) {
  *       default - success (authcookie)
  *
  * Side Effects:
- *       an authcookie ticket is created for the myuser_t.
+ *       an authcookie ticket is created for the struct myuser.
  *       the user's lastlogin is updated
  */
-
-static bool jsonrpcmethod_login(void *conn, mowgli_list_t *params, char *id)
+static bool
+jsonrpcmethod_login(void *conn, mowgli_list_t *params, char *id)
 {
-	myuser_t *mu;
-	authcookie_t *ac;
+	struct myuser *mu;
+	struct authcookie *ac;
 	char *sourceip, *accountname, *password;
 
 	size_t len = MOWGLI_LIST_LENGTH(params);
@@ -155,14 +160,14 @@ static bool jsonrpcmethod_login(void *conn, mowgli_list_t *params, char *id)
 
 	if (!verify_password(mu, password))
 	{
-		sourceinfo_t *si;
+		struct sourceinfo *si;
 
 		logcommand_external(nicksvs.me, "jsonrpc", conn, sourceip, NULL, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (bad password)", entity(mu)->name);
 		jsonrpc_failure_string(conn, fault_authfail, "The password is incorrect.", id);
 
 		si = sourceinfo_create();
 
-		jsonrpc_sourceinfo_t *jsi = (jsonrpc_sourceinfo_t *)si;
+		struct jsonrpc_sourceinfo *jsi = (struct jsonrpc_sourceinfo *)si;
 
 		si->service = NULL;
 		si->sourcedesc = sourceip;
@@ -175,7 +180,7 @@ static bool jsonrpcmethod_login(void *conn, mowgli_list_t *params, char *id)
 
 		bad_password(si, mu);
 
-		object_unref(si);
+		atheme_object_unref(si);
 
 		return false;
 	}
@@ -191,8 +196,7 @@ static bool jsonrpcmethod_login(void *conn, mowgli_list_t *params, char *id)
 	return true;
 }
 
-/*
- * atheme.logout
+/* atheme.logout
  *
  * JSON inputs:
  *       authcookie, and account name.
@@ -206,11 +210,11 @@ static bool jsonrpcmethod_login(void *conn, mowgli_list_t *params, char *id)
  * JSON Effects:
  *       an authcookie ticket is destroyed.
  */
-
-static bool jsonrpcmethod_logout(void *conn, mowgli_list_t *params, char *id)
+static bool
+jsonrpcmethod_logout(void *conn, mowgli_list_t *params, char *id)
 {
-	authcookie_t *ac;
-	myuser_t *mu;
+	struct authcookie *ac;
+	struct myuser *mu;
 	char *accountname;
 	char *cookie;
 
@@ -246,76 +250,7 @@ static bool jsonrpcmethod_logout(void *conn, mowgli_list_t *params, char *id)
 	return 0;
 }
 
-static void jsonrpc_command_fail(sourceinfo_t *si, cmd_faultcode_t code, const char *message)
-{
-	connection_t *cptr;
-	struct httpddata *hd;
-	char *newmessage;
-
-	cptr = si->connection;
-	hd = cptr->userdata;
-	if (hd->sent_reply)
-		return;
-	newmessage = jsonrpc_normalizeBuffer(message);
-
-	jsonrpc_sourceinfo_t *jsi = (jsonrpc_sourceinfo_t *)si;
-
-	jsonrpc_failure_string(cptr, code, newmessage, jsi->id);
-
-	free(newmessage);
-	hd->sent_reply = true;
-}
-
-
-static void jsonrpc_command_success_string(sourceinfo_t *si, const char *result, const char *message)
-{
-	connection_t *cptr;
-	struct httpddata *hd;
-
-	cptr = si->connection;
-	hd = cptr->userdata;
-	if (hd->sent_reply)
-		return;
-
-	jsonrpc_sourceinfo_t *jsi = (jsonrpc_sourceinfo_t *)si;
-
-	jsonrpc_success_string(cptr, result, jsi->id);
-	hd->sent_reply = true;
-}
-
-static void jsonrpc_command_success_nodata(sourceinfo_t *si, const char *message)
-{
-	connection_t *cptr;
-	struct httpddata *hd;
-	char *p;
-
-	char *newmessage = jsonrpc_normalizeBuffer(message);
-
-	cptr = si->connection;
-	hd = cptr->userdata;
-	if (hd->sent_reply)
-	{
-		free(newmessage);
-		return;
-	}
-	if (hd->replybuf != NULL)
-	{
-		hd->replybuf = srealloc(hd->replybuf, strlen(hd->replybuf) + strlen(newmessage) + 2);
-		p = hd->replybuf + strlen(hd->replybuf);
-		*p++ = '\n';
-	}
-	else
-	{
-		hd->replybuf = smalloc(strlen(newmessage) + 1);
-		p = hd->replybuf;
-	}
-
-	strcpy(p, newmessage);
-	free(newmessage);
-}
-
-/*
- * atheme.command
+/* atheme.command
  *
  * JSON inputs:
  *       authcookie, account name, source ip, service name, command name,
@@ -327,18 +262,18 @@ static void jsonrpc_command_success_nodata(sourceinfo_t *si, const char *message
  * JSON Effects:
  *       command is executed
  */
-
-static bool jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id)
+static bool
+jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id)
 {
-	myuser_t *mu;
-	service_t *svs;
-	command_t *cmd;
-	sourceinfo_t *si;
+	struct myuser *mu;
+	struct service *svs;
+	struct command *cmd;
+	struct sourceinfo *si;
 	int newparc;
 	char *newparv[20];
-	struct httpddata *hd = ((connection_t *)conn)->userdata;
+	struct httpddata *hd = ((struct connection *)conn)->userdata;
 
-	authcookie_t *ac;
+	struct authcookie *ac;
 	char *accountname, *cookie, *service, *command, *sourceip;
 
 	size_t len = MOWGLI_LIST_LENGTH(params);
@@ -385,7 +320,7 @@ static bool jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id)
 	else
 		mu = NULL;
 
-	/* try literal service name first, then user-configured nickname. */
+	// try literal service name first, then user-configured nickname.
 	svs = service_find(service);
 	if ((svs == NULL && (svs = service_find_nick(service)) == NULL) || svs->commands == NULL)
 	{
@@ -413,7 +348,7 @@ static bool jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id)
 
 	si = sourceinfo_create();
 
-	jsonrpc_sourceinfo_t *jsi = (jsonrpc_sourceinfo_t *)si;
+	struct jsonrpc_sourceinfo *jsi = (struct jsonrpc_sourceinfo *)si;
 
 	si->smu = mu;
 	si->service = svs;
@@ -427,7 +362,7 @@ static bool jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id)
 
 	command_exec(svs, si, cmd, newparc-5, newparv);
 
-	/* XXX: needs to be fixed up for restartable commands... */
+	// XXX: needs to be fixed up for restartable commands...
 	if (!hd->sent_reply)
 	{
 		if (hd->replybuf != NULL)
@@ -436,13 +371,12 @@ static bool jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id)
 			jsonrpc_failure_string(conn, fault_unimplemented, "Command did not return a result", id);
 	}
 
-	object_unref(si);
+	atheme_object_unref(si);
 
 	return 0;
 }
 
-/*
- * atheme.privset
+/* atheme.privset
  *
  * JSON inputs:
  *       authcookie, account name
@@ -451,10 +385,10 @@ static bool jsonrpcmethod_command(void *conn, mowgli_list_t *params, char *id)
  *       Privset for user, or error message
  *
 */
-
-static bool jsonrpcmethod_privset(void *conn, mowgli_list_t *params, char *id)
+static bool
+jsonrpcmethod_privset(void *conn, mowgli_list_t *params, char *id)
 {
-	myuser_t *mu;
+	struct myuser *mu;
 	mowgli_node_t *n;
 
 	char *param, *accountname, *cookie;
@@ -508,8 +442,7 @@ static bool jsonrpcmethod_privset(void *conn, mowgli_list_t *params, char *id)
 	return 0;
 }
 
-/*
- * atheme.ison
+/* atheme.ison
  *
  * JSON inputs:
  *       nickname
@@ -520,10 +453,10 @@ static bool jsonrpcmethod_privset(void *conn, mowgli_list_t *params, char *id)
  *       accountname: string: if nickname is authenticated, what entity they
  *       are authed to, else '*'
  */
-
-static bool jsonrpcmethod_ison(void *conn, mowgli_list_t *params, char *id)
+static bool
+jsonrpcmethod_ison(void *conn, mowgli_list_t *params, char *id)
 {
-	user_t *u;
+	struct user *u;
 
 	char *param, *user;
 	user = mowgli_node_nth_data(params, 0);
@@ -600,8 +533,7 @@ static bool jsonrpcmethod_ison(void *conn, mowgli_list_t *params, char *id)
 	return 0;
 }
 
-/*
- * atheme.metadata
+/* atheme.metadata
  *
  * JSON inputs:
  *       entity name, UID or channel name
@@ -610,11 +542,10 @@ static bool jsonrpcmethod_ison(void *conn, mowgli_list_t *params, char *id)
  * JSON outputs:
  *       metadata value
  */
-
-
-static bool jsonrpcmethod_metadata(void *conn, mowgli_list_t *params, char *id)
+static bool
+jsonrpcmethod_metadata(void *conn, mowgli_list_t *params, char *id)
 {
-	metadata_t *md;
+	struct metadata *md;
 
 	char *param, *name, *metadata;
 
@@ -643,7 +574,7 @@ static bool jsonrpcmethod_metadata(void *conn, mowgli_list_t *params, char *id)
 
 	if (*name == '#')
 	{
-		mychan_t *mc;
+		struct mychan *mc;
 
 		mc = mychan_find(name);
 		if (mc == NULL)
@@ -656,7 +587,7 @@ static bool jsonrpcmethod_metadata(void *conn, mowgli_list_t *params, char *id)
 	}
 	else
 	{
-		myentity_t *mt;
+		struct myentity *mt;
 
 		mt = myentity_find(name);
 		if (mt == NULL)
@@ -682,25 +613,82 @@ static bool jsonrpcmethod_metadata(void *conn, mowgli_list_t *params, char *id)
 	return 0;
 }
 
-void jsonrpc_send_data(void *conn, char *str) {
-	struct httpddata *hd = ((connection_t *) conn)->userdata;
+void
+jsonrpc_send_data(void *conn, char *str)
+{
+	struct httpddata *hd = ((struct connection *) conn)->userdata;
 
 	char buf[300];
 
 	size_t len = strlen(str);
 
-	snprintf(buf, sizeof buf, "HTTP/1.1 200 OK\r\n"
-			"%s"
-			"Server: Atheme/%s\r\n"
-			"Content-Type: application/json\r\n"
-			"Content-Length: %lu\r\n\r\n",
-			hd->connection_close ? "Connection: close\r\n" : "",
-			PACKAGE_VERSION, (unsigned long)len);
+	snprintf(buf, sizeof buf,
+	         "HTTP/1.1 200 OK\r\n"
+	         "Server: %s/%s\r\n"
+	         "Content-Type: application/json\r\n"
+	         "Content-Length: %zu\r\n"
+	         "%s"
+	         "\r\n",
+	         PACKAGE_TARNAME, PACKAGE_VERSION,
+	         len,
+	         hd->connection_close ? "Connection: close\r\n" : "");
 
-	sendq_add((connection_t *)conn, buf, strlen(buf));
-	sendq_add((connection_t *)conn, str, len);
+	sendq_add((struct connection *)conn, buf, strlen(buf));
+	sendq_add((struct connection *)conn, str, len);
 
 	if (hd->connection_close) {
-		sendq_add_eof((connection_t *) conn);
+		sendq_add_eof((struct connection *) conn);
 	}
 }
+
+static void
+handle_request(struct connection *cptr, void *requestbuf)
+{
+	jsonrpc_process(requestbuf, cptr);
+
+	return;
+}
+
+static struct path_handler handle_jsonrpc = { NULL, handle_request };
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, httpd_path_handlers, "misc/httpd", "httpd_path_handlers")
+
+	handle_jsonrpc.path = "/jsonrpc";
+	mowgli_node_add(&handle_jsonrpc, mowgli_node_create(), httpd_path_handlers);
+
+	json_methods = mowgli_patricia_create(strcasecanon);
+
+	jsonrpc_register_method("atheme.login", jsonrpcmethod_login);
+	jsonrpc_register_method("atheme.logout", jsonrpcmethod_logout);
+	jsonrpc_register_method("atheme.command", jsonrpcmethod_command);
+
+	jsonrpc_register_method("atheme.privset", jsonrpcmethod_privset);
+	jsonrpc_register_method("atheme.ison", jsonrpcmethod_ison);
+	jsonrpc_register_method("atheme.metadata", jsonrpcmethod_metadata);
+
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	mowgli_node_t *n;
+
+	jsonrpc_unregister_method("atheme.login");
+	jsonrpc_unregister_method("atheme.logout");
+	jsonrpc_unregister_method("atheme.command");
+
+	jsonrpc_unregister_method("atheme.privset");
+	jsonrpc_unregister_method("atheme.ison");
+	jsonrpc_unregister_method("atheme.metadata");
+
+	if ((n = mowgli_node_find(&handle_jsonrpc, httpd_path_handlers)) != NULL)
+	{
+		mowgli_node_delete(n, httpd_path_handlers);
+		mowgli_node_free(n);
+	}
+}
+
+SIMPLE_DECLARE_MODULE_V1("transport/jsonrpc", MODULE_UNLOAD_CAPABILITY_OK)

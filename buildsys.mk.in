@@ -1,33 +1,41 @@
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
 #
-#  atheme buildsys.mk
-#  Copyright (c) 2012 William Pitcock <nenolod@dereferenced.org>
-# 
-#  Copyright (c) 2007, 2008, 2009, 2010, 2011, 2012
-#  Jonathan Schleifer <js@webkeks.org>
+# Copyright (C) 2010-2012 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2010-2013 Jilles Tjoelker <jilles@stack.nl>
+# Copyright (C) 2011 Yoshiki Yazawa <yaz@honeyplanet.jp>
+# Copyright (C) 2011 Stephen Bennett <spb@exherbo.org>
+# Copyright (C) 2018-2019 Aaron M. D. Jones <me@aaronmdjones.net>
 #
-#  Based on buildsys.mk:
-#  https://webkeks.org/git/?p=buildsys.git
+# Based on buildsys.mk: <https://git.nil.im/buildsys.git/>
 #
-#  Permission to use, copy, modify, and/or distribute this software for any
-#  purpose with or without fee is hereby granted, provided that the above
-#  copyright notice and this permission notice is present in all copies.
+# Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012
+#   Jonathan Schleifer <js@heap.zone>
 #
-#  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-#  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-#  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-#  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-#  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-#  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-#  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-#  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-#  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-#  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-#  POSSIBILITY OF SUCH DAMAGE.
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice is present in all copies.
 #
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 
 #V=1
 PACKAGE_NAME = @PACKAGE_NAME@
+PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_VERSION = @PACKAGE_VERSION@
+PACKAGE_STRING = @PACKAGE_STRING@
+PACKAGE_BUGREPORT ?= @PACKAGE_BUGREPORT@
+PACKAGE_URL ?= @PACKAGE_URL@
+VENDOR_STRING ?= @VENDOR_STRING@
 AS = @AS@
 CC = @CC@
 CXX = @CXX@
@@ -37,7 +45,7 @@ ERLC = @ERLC@
 OBJC = @OBJC@
 OBJCXX = @OBJCXX@
 AR = @AR@
-LD = ${CC}
+LD = @CC@
 RANLIB = @RANLIB@
 PYTHON = @PYTHON@
 ASFLAGS = @ASFLAGS@
@@ -49,7 +57,6 @@ ERLCFLAGS = @ERLCFLAGS@
 OBJCFLAGS = @OBJCFLAGS@
 OBJCXXFLAGS = @OBJCXXFLAGS@
 LDFLAGS = @LDFLAGS@
-LDFLAGS_RPATH = @LDFLAGS_RPATH@
 LIBS = @LIBS@
 PYTHON_FLAGS = @PYTHON_FLAGS@
 PROG_IMPLIB_NEEDED = @PROG_IMPLIB_NEEDED@
@@ -78,13 +85,13 @@ prefix = @prefix@
 exec_prefix = @exec_prefix@
 bindir = @bindir@
 libdir = @libdir@
-plugindir ?= ${libdir}/${PACKAGE_NAME}
+plugindir ?= ${libdir}/${PACKAGE_TARNAME}
 datarootdir = @datarootdir@
 datadir = @datadir@
 includedir = @includedir@
-includesubdir ?= ${PACKAGE_NAME}
+includesubdir ?= ${PACKAGE_TARNAME}
 localedir = @localedir@
-localename ?= ${PACKAGE_NAME}
+localename ?= ${PACKAGE_TARNAME}
 mandir = @mandir@
 mansubdir ?= man1
 
@@ -530,7 +537,7 @@ install: ${SHARED_LIB} ${STATIC_LIB} ${STATIC_PIC_LIB} ${PLUGIN} ${PROG} install
 
 	for i in ${DATA}; do \
 		${INSTALL_STATUS}; \
-		if ${MKDIR_P} $$(dirname ${DESTDIR}${datadir}/${PACKAGE_NAME}/$$i) && ${INSTALL} -m 644 $$i ${DESTDIR}${datadir}/${PACKAGE_NAME}/$$i; then \
+		if ${MKDIR_P} $$(dirname ${DESTDIR}${datadir}/${PACKAGE_TARNAME}/$$i) && ${INSTALL} -m 644 $$i ${DESTDIR}${datadir}/${PACKAGE_TARNAME}/$$i; then \
 			${INSTALL_OK}; \
 		else \
 			${INSTALL_FAILED}; \
@@ -612,16 +619,16 @@ uninstall: uninstall-extra
 	-rmdir ${DESTDIR}${plugindir} >/dev/null 2>&1
 
 	for i in ${DATA}; do \
-		if test -f ${DESTDIR}${datadir}/${PACKAGE_NAME}/$$i; then \
-			if rm -f ${DESTDIR}${datadir}/${PACKAGE_NAME}/$$i; then \
+		if test -f ${DESTDIR}${datadir}/${PACKAGE_TARNAME}/$$i; then \
+			if rm -f ${DESTDIR}${datadir}/${PACKAGE_TARNAME}/$$i; then \
 				${DELETE_OK}; \
 			else \
 				${DELETE_FAILED}; \
 			fi \
 		fi; \
-		rmdir "$$(dirname ${DESTDIR}${datadir}/${PACKAGE_NAME}/$$i)" >/dev/null 2>&1 || true; \
+		rmdir "$$(dirname ${DESTDIR}${datadir}/${PACKAGE_TARNAME}/$$i)" >/dev/null 2>&1 || true; \
 	done
-	-rmdir ${DESTDIR}${datadir}/${PACKAGE_NAME} >/dev/null 2>&1
+	-rmdir ${DESTDIR}${datadir}/${PACKAGE_TARNAME} >/dev/null 2>&1
 
 	for i in ${PROG}; do \
 		if test -f ${DESTDIR}${bindir}/$$i; then \
@@ -711,7 +718,7 @@ DELETE_FAILED = exit $$?
 else
 
 QUIET = 
-LINK_STATUS = printf "Link: ${LD} $@ $$LDOBJS ${LDFLAGS} ${LIBS}\n"
+LINK_STATUS = printf "Link: ${LD} -o $@ $$LDOBJS ${LDFLAGS} ${LIBS}\n"
 LINK_OK = true
 LINK_FAILED = exit $$?
 INSTALL_STATUS = printf "Install: $$i\n"

@@ -1,33 +1,26 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * channels.c: Channel event and state tracking
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * channels.c: Channel event and state tracking
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
 mowgli_patricia_t *chanlist;
 
-mowgli_heap_t *chan_heap;
-mowgli_heap_t *chanuser_heap;
-mowgli_heap_t *chanban_heap;
+static mowgli_heap_t *chan_heap = NULL;
+static mowgli_heap_t *chanuser_heap = NULL;
+static mowgli_heap_t *chanban_heap = NULL;
 
 /*
  * init_channels()
@@ -43,11 +36,12 @@ mowgli_heap_t *chanban_heap;
  * Side Effects:
  *     - if the heaps or DTrees fail to initialize, the program will abort.
  */
-void init_channels(void)
+void
+init_channels(void)
 {
-	chan_heap = sharedheap_get(sizeof(channel_t));
-	chanuser_heap = sharedheap_get(sizeof(chanuser_t));
-	chanban_heap = sharedheap_get(sizeof(chanban_t));
+	chan_heap = sharedheap_get(sizeof(struct channel));
+	chanuser_heap = sharedheap_get(sizeof(struct chanuser));
+	chanban_heap = sharedheap_get(sizeof(struct chanban));
 
 	if (chan_heap == NULL || chanuser_heap == NULL || chanban_heap == NULL)
 	{
@@ -59,7 +53,7 @@ void init_channels(void)
 }
 
 /*
- * channel_add(const char *name, time_t ts, server_t *creator)
+ * channel_add(const char *name, time_t ts, struct server *creator)
  *
  * Channel object factory.
  *
@@ -80,10 +74,11 @@ void init_channels(void)
  *     - if the creator is me.me these actions must be performed by the
  *       caller (i.e. join()) after joining the service
  */
-channel_t *channel_add(const char *name, time_t ts, server_t *creator)
+struct channel *
+channel_add(const char *name, time_t ts, struct server *creator)
 {
-	channel_t *c;
-	mychan_t *mc;
+	struct channel *c;
+	struct mychan *mc;
 
 	if (!VALID_GLOBAL_CHANNEL_PFX(name))
 	{
@@ -110,7 +105,7 @@ channel_t *channel_add(const char *name, time_t ts, server_t *creator)
 	c->topic_setter = NULL;
 
 	if (ignore_mode_list_size != 0)
-		c->extmodes = scalloc(sizeof(char *), ignore_mode_list_size);
+		c->extmodes = scalloc(ignore_mode_list_size, sizeof(char *));
 
 	c->bans.head = NULL;
 	c->bans.tail = NULL;
@@ -133,7 +128,7 @@ channel_t *channel_add(const char *name, time_t ts, server_t *creator)
 }
 
 /*
- * channel_delete(channel_t *c)
+ * channel_delete(struct channel *c)
  *
  * Destroys a channel object and its children member objects.
  *
@@ -148,11 +143,12 @@ channel_t *channel_add(const char *name, time_t ts, server_t *creator)
  *     - a channel and all attached structures are destroyed
  *     - no protocol messages are sent for any remaining members
  */
-void channel_delete(channel_t *c)
+void
+channel_delete(struct channel *c)
 {
-	mychan_t *mc;
+	struct mychan *mc;
 	mowgli_node_t *n, *tn;
-	chanuser_t *cu;
+	struct chanuser *cu;
 
 	return_if_fail(c != NULL);
 
@@ -186,14 +182,10 @@ void channel_delete(channel_t *c)
 	clear_simple_modes(c);
 	chanban_clear(c);
 
-	if (c->extmodes != NULL)
-		free(c->extmodes);
-
-	free(c->name);
-	if (c->topic != NULL)
-		free(c->topic);
-	if (c->topic_setter != NULL)
-		free(c->topic_setter);
+	sfree(c->extmodes);
+	sfree(c->name);
+	sfree(c->topic);
+	sfree(c->topic_setter);
 
 	mowgli_heap_free(chan_heap, c);
 
@@ -201,7 +193,7 @@ void channel_delete(channel_t *c)
 }
 
 /*
- * chanban_add(channel_t *chan, const char *mask, int type)
+ * chanban_add(struct channel *chan, const char *mask, int type)
  *
  * Channel ban factory.
  *
@@ -217,9 +209,10 @@ void channel_delete(channel_t *c)
  * Side Effects:
  *     - the created channel ban object is added to the channel automatically.
  */
-chanban_t *chanban_add(channel_t *chan, const char *mask, int type)
+struct chanban *
+chanban_add(struct channel *chan, const char *mask, int type)
 {
-	chanban_t *c;
+	struct chanban *c;
 
 	return_val_if_fail(chan != NULL, NULL);
 	return_val_if_fail(mask != NULL, NULL);
@@ -253,7 +246,7 @@ chanban_t *chanban_add(channel_t *chan, const char *mask, int type)
 }
 
 /*
- * chanban_delete(chanban_t *c)
+ * chanban_delete(struct chanban *c)
  *
  * Destroys a channel ban.
  *
@@ -266,18 +259,19 @@ chanban_t *chanban_add(channel_t *chan, const char *mask, int type)
  * Side Effects:
  *     - the channel ban is automatically removed from the channel that owned it
  */
-void chanban_delete(chanban_t * c)
+void
+chanban_delete(struct chanban * c)
 {
 	return_if_fail(c != NULL);
 
 	mowgli_node_delete(&c->node, &c->chan->bans);
 
-	free(c->mask);
+	sfree(c->mask);
 	mowgli_heap_free(chanban_heap, c);
 }
 
 /*
- * chanban_find(channel_t *chan, const char *mask, int type)
+ * chanban_find(struct channel *chan, const char *mask, int type)
  *
  * Looks up a channel ban.
  *
@@ -293,9 +287,10 @@ void chanban_delete(chanban_t * c)
  * Side Effects:
  *     - none
  */
-chanban_t *chanban_find(channel_t *chan, const char *mask, int type)
+struct chanban *
+chanban_find(struct channel *chan, const char *mask, int type)
 {
-	chanban_t *c;
+	struct chanban *c;
 	mowgli_node_t *n;
 
 	return_val_if_fail(chan != NULL, NULL);
@@ -313,7 +308,7 @@ chanban_t *chanban_find(channel_t *chan, const char *mask, int type)
 }
 
 /*
- * chanuser_add(channel_t *chan, const char *nick)
+ * chanuser_add(struct channel *chan, const char *nick)
  *
  * Channel user factory.
  *
@@ -343,13 +338,14 @@ chanban_t *chanban_find(channel_t *chan, const char *mask, int type)
  * things. It worked fine for shrike, but the old code was restricted
  * to handling only @, @+ and + as prefixes.
  */
-chanuser_t *chanuser_add(channel_t *chan, const char *nick)
+struct chanuser *
+chanuser_add(struct channel *chan, const char *nick)
 {
-	user_t *u;
-	chanuser_t *cu, *tcu;
+	struct user *u;
+	struct chanuser *cu, *tcu;
 	unsigned int flags = 0;
 	int i = 0;
-	hook_channel_joinpart_t hdata;
+	struct hook_channel_joinpart hdata;
 
 	return_val_if_fail(chan != NULL, NULL);
 	return_val_if_fail(chan->name != NULL, NULL);
@@ -417,7 +413,7 @@ chanuser_t *chanuser_add(channel_t *chan, const char *nick)
 }
 
 /*
- * chanuser_delete(channel_t *chan, user_t *user)
+ * chanuser_delete(struct channel *chan, struct user *user)
  *
  * Destroys a channel user object.
  *
@@ -436,10 +432,11 @@ chanuser_t *chanuser_add(channel_t *chan, const char *nick)
  *     - if this empties the channel and the channel is not set permanent
  *       (ircd->perm_mode), channel_delete() is called (q.v.)
  */
-void chanuser_delete(channel_t *chan, user_t *user)
+void
+chanuser_delete(struct channel *chan, struct user *user)
 {
-	chanuser_t *cu;
-	hook_channel_joinpart_t hdata;
+	struct chanuser *cu;
+	struct hook_channel_joinpart hdata;
 
 	return_if_fail(chan != NULL);
 	return_if_fail(user != NULL);
@@ -452,7 +449,7 @@ void chanuser_delete(channel_t *chan, user_t *user)
 	hdata.cu = cu;
 	hook_call_channel_part(&hdata);
 
-	slog(LG_DEBUG, "chanuser_delete(): %s -> %s (%d)", cu->chan->name, cu->user->nick, cu->chan->nummembers - 1);
+	slog(LG_DEBUG, "chanuser_delete(): %s -> %s (%u)", cu->chan->name, cu->user->nick, cu->chan->nummembers - 1);
 
 	mowgli_node_delete(&cu->cnode, &chan->members);
 	mowgli_node_delete(&cu->unode, &user->channels);
@@ -475,7 +472,7 @@ void chanuser_delete(channel_t *chan, user_t *user)
 }
 
 /*
- * chanuser_find(channel_t *chan, user_t *user)
+ * chanuser_find(struct channel *chan, struct user *user)
  *
  * Looks up a channel user object.
  *
@@ -490,10 +487,11 @@ void chanuser_delete(channel_t *chan, user_t *user)
  * Side Effects:
  *     - none
  */
-chanuser_t *chanuser_find(channel_t *chan, user_t *user)
+struct chanuser *
+chanuser_find(struct channel *chan, struct user *user)
 {
 	mowgli_node_t *n;
-	chanuser_t *cu;
+	struct chanuser *cu;
 
 	return_val_if_fail(chan != NULL, NULL);
 	return_val_if_fail(user != NULL, NULL);
@@ -503,7 +501,7 @@ chanuser_t *chanuser_find(channel_t *chan, user_t *user)
 	{
 		MOWGLI_ITER_FOREACH(n, user->channels.head)
 		{
-			cu = (chanuser_t *)n->data;
+			cu = (struct chanuser *)n->data;
 
 			if (cu->chan == chan)
 				return cu;
@@ -513,7 +511,7 @@ chanuser_t *chanuser_find(channel_t *chan, user_t *user)
 	{
 		MOWGLI_ITER_FOREACH(n, chan->members.head)
 		{
-			cu = (chanuser_t *)n->data;
+			cu = (struct chanuser *)n->data;
 
 			if (cu->user == user)
 				return cu;

@@ -1,17 +1,22 @@
 /*
- * Copyright (c) 2010 William Pitcock <nenolod@atheme.org>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2010-2012 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Platform-agnostic database backend layer.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
-database_module_t *db_mod = NULL;
-mowgli_patricia_t *db_types = NULL;
+static mowgli_patricia_t *db_types = NULL;
 
-database_handle_t *
-db_open(const char *filename, database_transaction_t txn)
+const struct database_module *db_mod = NULL;
+
+struct database_handle *
+db_open(const char *filename, enum database_transaction txn)
 {
 	return_val_if_fail(db_mod != NULL, NULL);
 	return_val_if_fail(db_mod->db_open != NULL, NULL);
@@ -20,7 +25,7 @@ db_open(const char *filename, database_transaction_t txn)
 }
 
 void
-db_close(database_handle_t *db)
+db_close(struct database_handle *db)
 {
 	return_if_fail(db_mod != NULL);
 	return_if_fail(db_mod->db_close != NULL);
@@ -29,7 +34,7 @@ db_close(database_handle_t *db)
 }
 
 void
-db_parse(database_handle_t *db)
+db_parse(struct database_handle *db)
 {
 	return_if_fail(db_mod != NULL);
 	return_if_fail(db_mod->db_parse != NULL);
@@ -38,7 +43,7 @@ db_parse(database_handle_t *db)
 }
 
 bool
-db_read_next_row(database_handle_t *db)
+db_read_next_row(struct database_handle *db)
 {
 	return_val_if_fail(db != NULL, NULL);
 	return_val_if_fail(db->vt != NULL, NULL);
@@ -48,7 +53,7 @@ db_read_next_row(database_handle_t *db)
 }
 
 const char *
-db_read_word(database_handle_t *db)
+db_read_word(struct database_handle *db)
 {
 	return_val_if_fail(db != NULL, NULL);
 	return_val_if_fail(db->vt != NULL, NULL);
@@ -58,7 +63,7 @@ db_read_word(database_handle_t *db)
 }
 
 const char *
-db_read_str(database_handle_t *db)
+db_read_str(struct database_handle *db)
 {
 	return_val_if_fail(db != NULL, NULL);
 	return_val_if_fail(db->vt != NULL, NULL);
@@ -68,7 +73,7 @@ db_read_str(database_handle_t *db)
 }
 
 bool
-db_read_int(database_handle_t *db, int *r)
+db_read_int(struct database_handle *db, int *r)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -78,7 +83,7 @@ db_read_int(database_handle_t *db, int *r)
 }
 
 bool
-db_read_uint(database_handle_t *db, unsigned int *r)
+db_read_uint(struct database_handle *db, unsigned int *r)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -88,7 +93,7 @@ db_read_uint(database_handle_t *db, unsigned int *r)
 }
 
 bool
-db_read_time(database_handle_t *db, time_t *r)
+db_read_time(struct database_handle *db, time_t *r)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -98,12 +103,12 @@ db_read_time(database_handle_t *db, time_t *r)
 }
 
 const char *
-db_sread_word(database_handle_t *db)
+db_sread_word(struct database_handle *db)
 {
 	const char *w = db_read_word(db);
 	if (!w)
 	{
-		slog(LG_ERROR, "db-sread-word: needed word at file %s line %d token %d", db->file, db->line, db->token);
+		slog(LG_ERROR, "db-sread-word: needed word at file %s line %u token %u", db->file, db->line, db->token);
 		slog(LG_ERROR, "db-sread-word: exiting to avoid data loss");
 		exit(EXIT_FAILURE);
 	}
@@ -111,12 +116,12 @@ db_sread_word(database_handle_t *db)
 }
 
 const char *
-db_sread_str(database_handle_t *db)
+db_sread_str(struct database_handle *db)
 {
 	const char *w = db_read_str(db);
 	if (!w)
 	{
-		slog(LG_ERROR, "db-sread-multiword: needed multiword at file %s line %d token %d", db->file, db->line, db->token);
+		slog(LG_ERROR, "db-sread-multiword: needed multiword at file %s line %u token %u", db->file, db->line, db->token);
 		slog(LG_ERROR, "db-sread-multiword: exiting to avoid data loss");
 		exit(EXIT_FAILURE);
 	}
@@ -124,14 +129,14 @@ db_sread_str(database_handle_t *db)
 }
 
 int
-db_sread_int(database_handle_t *db)
+db_sread_int(struct database_handle *db)
 {
 	int r;
 	bool ok = db_read_int(db, &r);
 
 	if (!ok)
 	{
-		slog(LG_ERROR, "db-read-int: needed int at file %s line %d token %d", db->file, db->line, db->token);
+		slog(LG_ERROR, "db-read-int: needed int at file %s line %u token %u", db->file, db->line, db->token);
 		slog(LG_ERROR, "db-read-int: exiting to avoid data loss");
 		exit(EXIT_FAILURE);
 	}
@@ -139,14 +144,14 @@ db_sread_int(database_handle_t *db)
 }
 
 unsigned int
-db_sread_uint(database_handle_t *db)
+db_sread_uint(struct database_handle *db)
 {
 	unsigned int r;
 	bool ok = db_read_uint(db, &r);
 
 	if (!ok)
 	{
-		slog(LG_ERROR, "db-read-uint: needed int at file %s line %d token %d", db->file, db->line, db->token);
+		slog(LG_ERROR, "db-read-uint: needed int at file %s line %u token %u", db->file, db->line, db->token);
 		slog(LG_ERROR, "db-read-uint: exiting to avoid data loss");
 		exit(EXIT_FAILURE);
 	}
@@ -154,14 +159,14 @@ db_sread_uint(database_handle_t *db)
 }
 
 time_t
-db_sread_time(database_handle_t *db)
+db_sread_time(struct database_handle *db)
 {
 	time_t r;
 	bool ok = db_read_time(db, &r);
 
 	if (!ok)
 	{
-		slog(LG_ERROR, "db-read-time: needed int at file %s line %d token %d", db->file, db->line, db->token);
+		slog(LG_ERROR, "db-read-time: needed int at file %s line %u token %u", db->file, db->line, db->token);
 		slog(LG_ERROR, "db-read-time: exiting to avoid data loss");
 		exit(EXIT_FAILURE);
 	}
@@ -169,7 +174,7 @@ db_sread_time(database_handle_t *db)
 }
 
 bool
-db_start_row(database_handle_t *db, const char *type)
+db_start_row(struct database_handle *db, const char *type)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -179,7 +184,7 @@ db_start_row(database_handle_t *db, const char *type)
 }
 
 bool
-db_write_word(database_handle_t *db, const char *word)
+db_write_word(struct database_handle *db, const char *word)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -189,7 +194,7 @@ db_write_word(database_handle_t *db, const char *word)
 }
 
 bool
-db_write_str(database_handle_t *db, const char *str)
+db_write_str(struct database_handle *db, const char *str)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -199,7 +204,7 @@ db_write_str(database_handle_t *db, const char *str)
 }
 
 bool
-db_write_int(database_handle_t *db, int num)
+db_write_int(struct database_handle *db, int num)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -209,7 +214,7 @@ db_write_int(database_handle_t *db, int num)
 }
 
 bool
-db_write_uint(database_handle_t *db, unsigned int num)
+db_write_uint(struct database_handle *db, unsigned int num)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -219,7 +224,7 @@ db_write_uint(database_handle_t *db, unsigned int num)
 }
 
 bool
-db_write_time(database_handle_t *db, time_t tm)
+db_write_time(struct database_handle *db, time_t tm)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -229,7 +234,7 @@ db_write_time(database_handle_t *db, time_t tm)
 }
 
 bool
-db_commit_row(database_handle_t *db)
+db_commit_row(struct database_handle *db)
 {
 	return_val_if_fail(db != NULL, false);
 	return_val_if_fail(db->vt != NULL, false);
@@ -239,7 +244,7 @@ db_commit_row(database_handle_t *db)
 }
 
 void
-db_register_type_handler(const char *type, database_handler_f fun)
+db_register_type_handler(const char *type, database_handler_fn fun)
 {
 	return_if_fail(db_types != NULL);
 	return_if_fail(type != NULL);
@@ -258,9 +263,9 @@ db_unregister_type_handler(const char *type)
 }
 
 void
-db_process(database_handle_t *db, const char *type)
+db_process(struct database_handle *db, const char *type)
 {
-	database_handler_f fun;
+	database_handler_fn fun;
 
 	return_if_fail(db_types != NULL);
 	return_if_fail(db != NULL);
@@ -276,8 +281,8 @@ db_process(database_handle_t *db, const char *type)
 	fun(db, type);
 }
 
-bool
-db_write_format(database_handle_t *db, const char *fmt, ...)
+bool ATHEME_FATTR_PRINTF(2, 3)
+db_write_format(struct database_handle *db, const char *fmt, ...)
 {
 	va_list va;
 	char buf[BUFSIZE];

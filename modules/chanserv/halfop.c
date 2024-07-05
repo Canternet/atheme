@@ -1,57 +1,25 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService OP functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanserv.h"
-
-DECLARE_MODULE_V1
-(
-	"chanserv/halfop", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_halfop(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_dehalfop(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_halfop = { "HALFOP", N_("Gives channel halfops to a user."),
-                        AC_NONE, 2, cs_cmd_halfop, { .path = "cservice/halfop" } };
-command_t cs_dehalfop = { "DEHALFOP", N_("Removes channel halfops from a user."),
-                        AC_NONE, 2, cs_cmd_dehalfop, { .path = "cservice/halfop" } };
-
-void _modinit(module_t *m)
-{
-	if (ircd != NULL && !ircd->uses_halfops)
-	{
-		slog(LG_INFO, "Module %s requires halfop support, refusing to load.", m->name);
-		m->mflags = MODTYPE_FAIL;
-		return;
-	}
-
-        service_named_bind_command("chanserv", &cs_halfop);
-        service_named_bind_command("chanserv", &cs_dehalfop);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_halfop);
-	service_named_unbind_command("chanserv", &cs_dehalfop);
-}
 
 static mowgli_list_t halfop_actions;
 
-static void cmd_halfop(sourceinfo_t *si, bool halfopping, int parc, char *parv[])
+static void
+cmd_halfop(struct sourceinfo *si, bool halfopping, int parc, char *parv[])
 {
 	char *chan = parv[0];
 	char *nick = parv[1];
-	mychan_t *mc;
-	user_t *tu;
-	chanuser_t *cu;
+	struct mychan *mc;
+	struct user *tu;
+	struct chanuser *cu;
 	char *nicks;
 	bool halfop;
 	mowgli_node_t *n;
@@ -65,25 +33,31 @@ static void cmd_halfop(sourceinfo_t *si, bool halfopping, int parc, char *parv[]
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_HALFOP))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
-	nicks = (!nick ? strdup(si->su->nick) : strdup(nick));
+	if (!mc->chan)
+	{
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, chan);
+		return;
+	}
+
+	nicks = (!nick ? sstrdup(si->su->nick) : sstrdup(nick));
 	prefix_action_set_all(&halfop_actions, halfopping, nicks);
-	free(nicks);
+	sfree(nicks);
 
 	MOWGLI_LIST_FOREACH(n, halfop_actions.head)
 	{
@@ -91,7 +65,7 @@ static void cmd_halfop(sourceinfo_t *si, bool halfopping, int parc, char *parv[]
 		nick = act->nick;
 		halfop = act->en;
 
-		/* figure out who we're going to halfop */
+		// figure out who we're going to halfop
 		if (!(tu = user_find_named(nick)))
 		{
 			command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), nick);
@@ -101,10 +75,10 @@ static void cmd_halfop(sourceinfo_t *si, bool halfopping, int parc, char *parv[]
 		if (is_internal_client(tu))
 			continue;
 
-		/* SECURE check; we can skip this if deopping or sender == target, because we already verified */
+		// SECURE check; we can skip this if deopping or sender == target, because we already verified
 		if (halfop && (si->su != tu) && (mc->flags & MC_SECURE) && !chanacs_user_has_flag(mc, tu, CA_HALFOP) && !chanacs_user_has_flag(mc, tu, CA_AUTOHALFOP))
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			command_fail(si, fault_noprivs, _("\2%s\2 has the SECURE option enabled, and \2%s\2 does not have appropriate access."), mc->name, tu->nick);
 			continue;
 		}
@@ -116,24 +90,47 @@ static void cmd_halfop(sourceinfo_t *si, bool halfopping, int parc, char *parv[]
 			continue;
 		}
 
-		modestack_mode_param(chansvs.nick, mc->chan, halfop ? MTYPE_ADD : MTYPE_DEL, 'h', CLIENT_NAME(tu));
 		if (halfop)
+		{
+			modestack_mode_param(chansvs.nick, mc->chan, MTYPE_ADD, ircd->halfops_mchar[1], CLIENT_NAME(tu));
 			cu->modes |= ircd->halfops_mode;
+
+			if (! si->c && tu != si->su)
+				change_notify(chansvs.nick, tu, "You have had halfop (+%c) status given to you on "
+				                                "\2%s\2 by \2%s\2", ircd->halfops_mchar[1], mc->name,
+				                                get_source_name(si));
+
+			if (! si->su || ! chanuser_find(mc->chan, si->su))
+				command_success_nodata(si, _("\2%s\2 has had halfop (+%c) status given to them on "
+				                             "\2%s\2"), tu->nick, ircd->halfops_mchar[1], mc->name);
+
+			logcommand(si, CMDLOG_DO, "HALFOP: \2%s!%s@%s\2 on \2%s\2", tu->nick, tu->user, tu->vhost,
+			                                                            mc->name);
+		}
 		else
+		{
+			modestack_mode_param(chansvs.nick, mc->chan, MTYPE_DEL, ircd->halfops_mchar[1], CLIENT_NAME(tu));
 			cu->modes &= ~ircd->halfops_mode;
 
-		if (si->c == NULL && tu != si->su)
-			change_notify(chansvs.nick, tu, "You have been %shalfopped on %s by %s", halfop ? "" : "de", mc->name, get_source_name(si));
+			if (! si->c && tu != si->su)
+				change_notify(chansvs.nick, tu, "You have had halfop (+%c) status taken from you on "
+				                                "\2%s\2 by \2%s\2", ircd->halfops_mchar[1], mc->name,
+				                                get_source_name(si));
 
-		logcommand(si, CMDLOG_DO, "%sHALFOP: \2%s!%s@%s\2 on \2%s\2", halfop ? "" : "DE", tu->nick, tu->user, tu->vhost, mc->name);
-		if (si->su == NULL || !chanuser_find(mc->chan, si->su))
-			command_success_nodata(si, _("\2%s\2 has been %shalfopped on \2%s\2."), tu->nick, halfop ? "" : "de", mc->name);
+			if (! si->su || ! chanuser_find(mc->chan, si->su))
+				command_success_nodata(si, _("\2%s\2 has had halfop (+%c) status taken from them on "
+				                             "\2%s\2"), tu->nick, ircd->halfops_mchar[1], mc->name);
+
+			logcommand(si, CMDLOG_DO, "DEHALFOP: \2%s!%s@%s\2 on \2%s\2", tu->nick, tu->user, tu->vhost,
+			                                                              mc->name);
+		}
 	}
 
 	prefix_action_clear(&halfop_actions);
 }
 
-static void cs_cmd_halfop(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_halfop(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (!parv[0])
 	{
@@ -145,7 +142,8 @@ static void cs_cmd_halfop(sourceinfo_t *si, int parc, char *parv[])
 	cmd_halfop(si, true, parc, parv);
 }
 
-static void cs_cmd_dehalfop(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_dehalfop(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (!parv[0])
 	{
@@ -157,8 +155,56 @@ static void cs_cmd_dehalfop(sourceinfo_t *si, int parc, char *parv[])
 	cmd_halfop(si, false, parc, parv);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_halfop = {
+	.name           = "HALFOP",
+	.desc           = N_("Gives channel halfops to a user."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_halfop,
+	.help           = { .path = "cservice/halfop" },
+};
+
+static struct command cs_dehalfop = {
+	.name           = "DEHALFOP",
+	.desc           = N_("Removes channel halfops from a user."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_dehalfop,
+	.help           = { .path = "cservice/halfop" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	if (! ircd)
+	{
+		(void) slog(LG_ERROR, "Module %s must be loaded after an IRCd protocol module; refusing to load",
+		                      m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	if (! ircd->uses_halfops)
+	{
+		(void) slog(LG_ERROR, "Module %s requires IRCd channel halfop status support; refusing to load",
+		                      m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_halfop);
+        service_named_bind_command("chanserv", &cs_dehalfop);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_halfop);
+	service_named_unbind_command("chanserv", &cs_dehalfop);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/halfop", MODULE_UNLOAD_CAPABILITY_OK)

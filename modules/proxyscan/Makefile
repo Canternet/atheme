@@ -1,18 +1,19 @@
-# Copyright (c) 2003-2004 E. Will et al.
-# Rights to this code are documented in doc/LICENSE.
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
 #
-# This file contains build instructions.
-#
-#
-
-MODULE = proxyscan
-
-SRCS = main.c dnsbl.c
+# Copyright (C) 2012 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../extra.mk
+
+MODULE = proxyscan
+SRCS   =            \
+    dnsbl.c         \
+    main.c
+
 include ../../buildsys.mk
 include ../../buildsys.module.mk
 
-CPPFLAGS	+= -I../../include
-LIBS +=	-L../../libathemecore -lathemecore ${LDFLAGS_RPATH}
-
+CPPFLAGS += -I../../include
+LDFLAGS  += -L../../libathemecore
+LIBS     += -lathemecore

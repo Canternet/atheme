@@ -1,63 +1,47 @@
 /*
- * Copyright (c) 2010 Atheme Development Group, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2010 Atheme Project (http://atheme.org/), et al.
+ * Copyright (C) 2017 ChatLounge IRC Network Development Team
  *
  * This file contains code for OS INFO
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/info", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_info(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_info = { "INFO", N_("Shows some useful information about the current settings of services."), PRIV_SERVER_AUSPEX, 1, os_cmd_info, { .path = "oservice/info" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("operserv", &os_info);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_info);
-}
-
-static void os_cmd_info(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_info(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *tn, *n2;
 
 	logcommand(si, CMDLOG_GET, "INFO");
 
-	command_success_nodata(si, _("How often services writes changes to the database: %d minutes"), config_options.commit_interval / 60);
-	command_success_nodata(si, _("Default kline time: %d days"), config_options.kline_time / 86400);
-	command_success_nodata(si, _("Will services be sending WALLOPS/GLOBOPS about various things: %s"), config_options.silent ? "no" : "yes");
-	command_success_nodata(si, _("How many messages before a flood is triggered, (if 0, flood protection is disabled): %d"), config_options.flood_msgs);
-	command_success_nodata(si, _("How long before the flood counter resets: %d seconds"), config_options.flood_time);
-	command_success_nodata(si, _("Default maximum number of clones allowed: %d"), config_options.default_clone_allowed);
-	command_success_nodata(si, _("Number of commands used before ratelimiting starts, (if 0, ratelimiting is disabled): %d"), config_options.ratelimit_uses);
-	command_success_nodata(si, _("How long before ratelimiting counter resets, (if 0, ratelimiting is disabled): %d seconds"), config_options.ratelimit_period);
-	command_success_nodata(si, _("No nick ownership enabled: %s"), nicksvs.no_nick_ownership ? "yes" : "no");
-        command_success_nodata(si, _("Nickname expiration time: %d days"), nicksvs.expiry / 86400);
-	command_success_nodata(si, _("Nickname enforce expiry time: %d days"), nicksvs.enforce_expiry / 86400);
-	command_success_nodata(si, _("Default nickname enforce delay: %d seconds"), nicksvs.enforce_delay);
+	command_success_nodata(si, _("How often services writes changes to the database: %u minutes"), config_options.commit_interval / SECONDS_PER_MINUTE);
+	command_success_nodata(si, _("Default kline time: %u days"), config_options.kline_time / SECONDS_PER_DAY);
+	command_success_nodata(si, _("Will services be sending WALLOPS/GLOBOPS about various things: %s"), config_options.silent ? _("No") : _("Yes"));
+	command_success_nodata(si, _("How many messages before a flood is triggered, (if 0, flood protection is disabled): %u"), config_options.flood_msgs);
+	command_success_nodata(si, _("How long before the flood counter resets: %u seconds"), config_options.flood_time);
+	command_success_nodata(si, _("Default maximum number of clones allowed: %u"), config_options.default_clone_allowed);
+	command_success_nodata(si, _("Number of commands used before ratelimiting starts, (if 0, ratelimiting is disabled): %u"), config_options.ratelimit_uses);
+	command_success_nodata(si, _("How long before ratelimiting counter resets, (if 0, ratelimiting is disabled): %u seconds"), config_options.ratelimit_period);
+	command_success_nodata(si, _("No nick ownership enabled: %s"), nicksvs.no_nick_ownership ? _("Yes") : _("No"));
+	command_success_nodata(si, _("Nickname expiration time: %u days"), nicksvs.expiry / SECONDS_PER_DAY);
+	command_success_nodata(si, _("Nickname enforce expiry time: %u days"), nicksvs.enforce_expiry / SECONDS_PER_DAY);
+	command_success_nodata(si, _("Default nickname enforce delay: %u seconds"), nicksvs.enforce_delay);
 	command_success_nodata(si, _("Nickname enforce prefix: %s"), nicksvs.enforce_prefix);
-	command_success_nodata(si, _("Maximum number of logins allowed per username: %d"), me.maxlogins);
-	command_success_nodata(si, _("Maximum number of usernames that can be registered to one email address: %d"), me.maxusers);
+	command_success_nodata(si, _("Maximum number of logins allowed per username: %u"), me.maxlogins);
+	command_success_nodata(si, _("Maximum number of usernames that can be registered to one email address: %u"), me.maxusers);
 	if (!nicksvs.no_nick_ownership)
-		command_success_nodata(si, _("Maximum number of nicknames that one user can own: %d"), nicksvs.maxnicks);
-	command_success_nodata(si, _("Maximum number of channels that one user can own: %d"), chansvs.maxchans);
-        command_success_nodata(si, _("Channel expiration time: %d days"), chansvs.expiry / 86400);
+		command_success_nodata(si, _("Maximum number of nicknames that one user can own: %u"), nicksvs.maxnicks);
+	command_success_nodata(si, _("Maximum number of channels that one user can own: %u"), chansvs.maxchans);
+	command_success_nodata(si, _("Channel expiration time: %u days"), chansvs.expiry / SECONDS_PER_DAY);
 	if (chansvs.fantasy)
 		command_success_nodata(si, _("Default channel fantasy trigger: %s"), chansvs.trigger);
-	command_success_nodata(si, _("Maximum number of entries allowed in a channel access list (if 0, unlimited): %d"), chansvs.maxchanacs);
-	command_success_nodata(si, _("Maximum number of founders allowed per channel: %d"), chansvs.maxfounders);
+	command_success_nodata(si, _("Maximum number of entries allowed in a channel access list (if 0, unlimited): %u"), chansvs.maxchanacs);
+	command_success_nodata(si, _("Maximum number of founders allowed per channel: %u"), chansvs.maxfounders);
+	command_success_nodata(si, _("Show entity IDs to everyone: %s"),
+		config_options.show_entity_id ? _("Yes") : _("No"));
 
 	if (IS_TAINTED)
 	{
@@ -68,10 +52,10 @@ static void os_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 
 		MOWGLI_ITER_FOREACH(n, taint_list.head)
 		{
-			taint_reason_t *tr = n->data;
+			struct taint_reason *tr = n->data;
 
 			command_success_nodata(si, _("Taint Condition: %s"), tr->condition);
-			command_success_nodata(si, _("Taint Location: %s:%d"), tr->file, tr->line);
+			command_success_nodata(si, _("Taint Location: %s:%u"), tr->file, tr->line);
 			command_success_nodata(si, _("Taint Explanation: %s"), tr->buf);
 		}
 	}
@@ -89,8 +73,27 @@ static void os_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	hook_call_operserv_info(si);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_info = {
+	.name           = "INFO",
+	.desc           = N_("Shows some useful information about the current settings of services."),
+	.access         = PRIV_SERVER_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_info,
+	.help           = { .path = "oservice/info" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+        service_named_bind_command("operserv", &os_info);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_info);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/info", MODULE_UNLOAD_CAPABILITY_OK)

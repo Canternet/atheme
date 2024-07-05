@@ -1,39 +1,26 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * signal.c: Signal-handling routines.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2012 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2017-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * signal.c: Signal-handling routines.
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "conf.h"
+#include <atheme.h>
 #include "internal.h"
-#include <signal.h>
-
-#ifndef MOWGLI_OS_WIN
-# include <sys/wait.h>
-#endif
 
 static void childproc_check(void);
 
 static volatile sig_atomic_t got_sighup, got_sigint, got_sigterm, got_sigchld, got_sigusr2;
+
+static mowgli_list_t childproc_list;
 
 /*
  * A version of signal(2) that works more reliably across different
@@ -79,7 +66,7 @@ signal_usr2_handler(int signum)
 }
 
 /* XXX */
-static void
+static void ATHEME_FATTR_NORETURN
 signal_usr1_handler(int signum)
 {
 	int n;
@@ -99,7 +86,8 @@ signal_usr1_handler(int signum)
 	abort();
 }
 
-void init_signal_handlers(void)
+void
+init_signal_handlers(void)
 {
 #ifndef MOWGLI_OS_WIN
 #ifdef SIGHUP
@@ -132,7 +120,8 @@ void init_signal_handlers(void)
 #endif
 }
 
-void check_signals(void)
+void
+check_signals(void)
 {
 	/* rehash */
 	if (got_sighup)
@@ -140,21 +129,21 @@ void check_signals(void)
 		got_sighup = 0;
 		slog(LG_INFO, "sighandler(): got SIGHUP, rehashing \2%s\2", config_file);
 
-		wallops(_("Got SIGHUP; reloading \2%s\2."), config_file);
+		wallops("Got SIGHUP; reloading \2%s\2.", config_file);
 
 		if (db_save && !readonly)
 		{
 			slog(LG_INFO, "UPDATE: \2%s\2", "system console");
-			wallops(_("Updating database by request of \2%s\2."), "system console");
-			db_save(NULL);
+			wallops("Updating database by request of \2%s\2.", "system console");
+			db_save(NULL, DB_SAVE_BG_IMPORTANT);
 		}
 
 		slog(LG_INFO, "REHASH: \2%s\2", "system console");
-		wallops(_("Rehashing \2%s\2 by request of \2%s\2."), config_file, "system console");
+		wallops("Rehashing \2%s\2 by request of \2%s\2.", config_file, "system console");
 
 		/* reload the config, opening other logs besides the core log if needed. */
 		if (!conf_rehash())
-			wallops(_("REHASH of \2%s\2 failed. Please correct any errors in the file and try again."), config_file);
+			wallops("REHASH of \2%s\2 failed. Please correct any errors in the file and try again.", config_file);
 
 		return;
 	}
@@ -163,7 +152,7 @@ void check_signals(void)
 	if (got_sigint && (runflags & RF_LIVE))
 	{
 		got_sigint = 0;
-		wallops(_("Exiting on signal %d."), SIGINT);
+		wallops("Exiting on signal %d.", SIGINT);
 		if (chansvs.me != NULL && chansvs.me->me != NULL)
 			quit_sts(chansvs.me->me, "caught interrupt");
 		me.connected = false;
@@ -173,10 +162,10 @@ void check_signals(void)
 	else if (got_sigint && !(runflags & RF_LIVE))
 	{
 		got_sigint = 0;
-		wallops(_("Got SIGINT; restarting."));
+		wallops("Got SIGINT; restarting.");
 
 		slog(LG_INFO, "RESTART: \2%s\2", "system console");
-		wallops(_("Restarting by request of \2%s\2."), "system console");
+		wallops("Restarting by request of \2%s\2.", "system console");
 
 		runflags |= RF_RESTART;
 	}
@@ -184,7 +173,7 @@ void check_signals(void)
 	if (got_sigterm)
 	{
 		got_sigterm = 0;
-		wallops(_("Exiting on signal %d."), SIGTERM);
+		wallops("Exiting on signal %d.", SIGTERM);
 		slog(LG_INFO, "sighandler(): got SIGTERM; exiting...");
 		runflags |= RF_SHUTDOWN;
 	}
@@ -192,10 +181,10 @@ void check_signals(void)
 	if (got_sigusr2)
 	{
 		got_sigusr2 = 0;
-		wallops(_("Got SIGUSR2; restarting."));
+		wallops("Got SIGUSR2; restarting.");
 
 		slog(LG_INFO, "RESTART: \2%s\2", "system console");
-		wallops(_("Restarting by request of \2%s\2."), "system console");
+		wallops("Restarting by request of \2%s\2.", "system console");
 
 		runflags |= RF_RESTART;
 	}
@@ -206,8 +195,6 @@ void check_signals(void)
 		childproc_check();
 	}
 }
-
-mowgli_list_t childproc_list;
 
 struct childproc
 {
@@ -222,11 +209,10 @@ struct childproc
  * Will call cb(pid, status, data) after the process terminates
  * where status is the status from waitpid(2).
  */
-void childproc_add(pid_t pid, const char *desc, void (*cb)(pid_t pid, int status, void *data), void *data)
+void
+childproc_add(pid_t pid, const char *desc, void (*cb)(pid_t pid, int status, void *data), void *data)
 {
-	struct childproc *p;
-
-	p = smalloc(sizeof(*p));
+	struct childproc *const p = smalloc(sizeof *p);
 	p->pid = pid;
 	p->desc = sstrdup(desc);
 	p->cb = cb;
@@ -234,16 +220,18 @@ void childproc_add(pid_t pid, const char *desc, void (*cb)(pid_t pid, int status
 	mowgli_node_add(p, &p->node, &childproc_list);
 }
 
-static void childproc_free(struct childproc *p)
+static void
+childproc_free(struct childproc *p)
 {
-	free(p->desc);
-	free(p);
+	sfree(p->desc);
+	sfree(p);
 }
 
 /* Forgets about all child processes with the given callback.
  * Useful if the callback is in a module which is being unloaded.
  */
-void childproc_delete_all(void (*cb)(pid_t pid, int status, void *data))
+void
+childproc_delete_all(void (*cb)(pid_t pid, int status, void *data))
 {
 	mowgli_node_t *n, *tn;
 	struct childproc *p;
@@ -259,7 +247,8 @@ void childproc_delete_all(void (*cb)(pid_t pid, int status, void *data))
 	}
 }
 
-static void childproc_check(void)
+static void
+childproc_check(void)
 {
 #ifndef MOWGLI_OS_WIN
 	pid_t pid;

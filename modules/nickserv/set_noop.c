@@ -1,69 +1,36 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Prevents services from setting modes upon you automatically.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 #include "list_common.h"
 #include "list.h"
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_noop", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
-
-static void ns_cmd_set_noop(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_noop = { "NOOP", N_("Prevents services from setting modes upon you automatically."), AC_NONE, 1, ns_cmd_set_noop, { .path = "nickserv/set_noop" } };
-
-static bool has_noop(const mynick_t *mn, const void *arg)
+static bool
+has_noop(const struct mynick *mn, const void *arg)
 {
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 
 	return ( mu->flags & MU_NOOP ) == MU_NOOP;
 }
 
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_noop, *ns_set_cmdtree);
-
-	use_nslist_main_symbols(m);
-
-	static list_param_t noop;
-	noop.opttype = OPT_BOOL;
-	noop.is_match = has_noop;
-
-	list_register("noop", &noop);
-}
-
-
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_noop, *ns_set_cmdtree);
-
-	list_unregister("noop");
-}
-
-/* SET NOOP [ON|OFF] */
-static void ns_cmd_set_noop(sourceinfo_t *si, int parc, char *parv[])
+// SET NOOP [ON|OFF]
+static void
+ns_cmd_set_noop(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *params = parv[0];
 
 	if (!params)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "NOOP");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET NOOP");
 		return;
 	}
 
@@ -102,13 +69,42 @@ static void ns_cmd_set_noop(sourceinfo_t *si, int parc, char *parv[])
 
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "NOOP");
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET NOOP");
 		return;
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_set_noop = {
+	.name           = "NOOP",
+	.desc           = N_("Prevents services from setting modes upon you automatically."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_noop,
+	.help           = { .path = "nickserv/set_noop" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	use_nslist_main_symbols(m);
+
+	command_add(&ns_set_noop, *ns_set_cmdtree);
+
+	static struct list_param noop;
+	noop.opttype = OPT_BOOL;
+	noop.is_match = has_noop;
+
+	list_register("noop", &noop);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_noop, *ns_set_cmdtree);
+
+	list_unregister("noop");
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_noop", MODULE_UNLOAD_CAPABILITY_OK)

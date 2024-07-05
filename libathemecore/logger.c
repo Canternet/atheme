@@ -1,58 +1,54 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * logger.c: Logging routines
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2009 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2017-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * logger.c: Logging routines
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
-static logfile_t *log_file;
+static struct logfile *log_file;
 int log_force;
 
 static mowgli_list_t log_files = { NULL, NULL, 0 };
 
-/* private destructor function for logfile_t. */
-static void logfile_delete_file(void *vdata)
+/* private destructor function for struct logfile. */
+static void
+logfile_delete_file(void *vdata)
 {
-	logfile_t *lf = (logfile_t *) vdata;
+	struct logfile *lf = (struct logfile *) vdata;
 
 	logfile_unregister(lf);
 
 	fclose(lf->log_file);
-	free(lf->log_path);
+	sfree(lf->log_path);
 	metadata_delete_all(lf);
-	free(lf);
+	sfree(lf);
 }
 
-static void logfile_delete_channel(void *vdata)
+static void
+logfile_delete_channel(void *vdata)
 {
-	logfile_t *lf = (logfile_t *) vdata;
+	struct logfile *lf = (struct logfile *) vdata;
 
 	logfile_unregister(lf);
 
-	free(lf->log_path);
+	sfree(lf->log_path);
 	metadata_delete_all(lf);
-	free(lf);
+	sfree(lf);
 }
 
-static void logfile_join_channels(channel_t *c)
+static void
+logfile_join_channels(struct channel *c)
 {
 	mowgli_node_t *n;
 
@@ -60,7 +56,7 @@ static void logfile_join_channels(channel_t *c)
 
 	MOWGLI_ITER_FOREACH(n, log_files.head)
 	{
-		logfile_t *lf = n->data;
+		struct logfile *lf = n->data;
 
 		if (!irccasecmp(c->name, lf->log_path))
 		{
@@ -74,10 +70,11 @@ static void logfile_join_channels(channel_t *c)
 	}
 }
 
-static void logfile_join_service(service_t *svs)
+static void
+logfile_join_service(struct service *svs)
 {
 	mowgli_node_t *n;
-	channel_t *c;
+	struct channel *c;
 
 	return_if_fail(svs != NULL && svs->me != NULL);
 
@@ -87,7 +84,7 @@ static void logfile_join_service(service_t *svs)
 
 	MOWGLI_ITER_FOREACH(n, log_files.head)
 	{
-		logfile_t *lf = n->data;
+		struct logfile *lf = n->data;
 
 		if (!VALID_GLOBAL_CHANNEL_PFX(lf->log_path))
 			continue;
@@ -98,9 +95,10 @@ static void logfile_join_service(service_t *svs)
 	}
 }
 
-static void logfile_part_removed(void *unused)
+static void
+logfile_part_removed(void *unused)
 {
-	channel_t *c;
+	struct channel *c;
 	mowgli_patricia_iteration_state_t state;
 	mowgli_node_t *n;
 	bool valid;
@@ -112,7 +110,7 @@ static void logfile_part_removed(void *unused)
 		valid = false;
 		MOWGLI_ITER_FOREACH(n, log_files.head)
 		{
-			logfile_t *lf = n->data;
+			struct logfile *lf = n->data;
 
 			if (!irccasecmp(c->name, lf->log_path))
 			{
@@ -147,22 +145,39 @@ static const char *
 logfile_strip_control_codes(const char *buf)
 {
 	static char outbuf[BUFSIZE];
-	const char *in = buf;
 	char *out = outbuf;
 
-	for (; *in != '\0'; in++)
+	for (const char *in = buf; *in != '\0'; /* No action */)
 	{
 		if (*in > 31)
 		{
-			*out++ = *in;
-			continue;
+			*out++ = *in++;
 		}
 		else if (*in == 3)
 		{
+			/* mIRC colour codes have to be treated a bit specially.
+			 *
+			 * They are the character 0x03 followed by up to 2 decimal foreground digits.
+			 * This can optionally be followed by a comma and up to 2 more decimal background digits.
+			 *
+			 * We also have to gracefully handle the pathological cases where the input may be e.g.
+			 * "\003,\003data" or "\003,12data", without skipping over the start of data, but without
+			 * printing the 0x03 bytes or the comma, or background colour in the latter case.
+			 */
+
 			in++;
-			while (isdigit((unsigned char)*in))
+
+			for (size_t i = 0; i < 2 && isdigit((unsigned char) *in); i++, in++);
+
+			if (*in == ',')
+			{
 				in++;
+
+				for (size_t i = 0; i < 2 && isdigit((unsigned char) *in); i++, in++);
+			}
 		}
+		else
+			in++;
 	}
 
 	*out = '\0';
@@ -170,12 +185,12 @@ logfile_strip_control_codes(const char *buf)
 }
 
 /*
- * logfile_write(logfile_t *lf, const char *buf)
+ * logfile_write(struct logfile *lf, const char *buf)
  *
  * Writes an I/O stream to a static file.
  *
  * Inputs:
- *       - logfile_t representing the I/O stream.
+ *       - struct logfile representing the I/O stream.
  *       - data to write to the file
  *
  * Outputs:
@@ -184,31 +199,32 @@ logfile_strip_control_codes(const char *buf)
  * Side Effects:
  *       - none
  */
-static void logfile_write(logfile_t *lf, const char *buf)
+static void
+logfile_write(struct logfile *lf, const char *buf)
 {
 	char datetime[BUFSIZE];
 	time_t t;
-	struct tm tm;
+	struct tm *tm;
 
 	return_if_fail(lf != NULL);
 	return_if_fail(lf->log_file != NULL);
 	return_if_fail(buf != NULL);
 
 	time(&t);
-	tm = *localtime(&t);
-	strftime(datetime, sizeof datetime, "[%Y-%m-%d %H:%M:%S]", &tm);
+	tm = localtime(&t);
+	strftime(datetime, sizeof datetime, "[%Y-%m-%d %H:%M:%S]", tm);
 
 	fprintf((FILE *) lf->log_file, "%s %s\n", datetime, logfile_strip_control_codes(buf));
 	fflush((FILE *) lf->log_file);
 }
 
 /*
- * logfile_write_irc(logfile_t *lf, const char *buf)
+ * logfile_write_irc(struct logfile *lf, const char *buf)
  *
  * Writes an I/O stream to an IRC target.
  *
  * Inputs:
- *       - logfile_t representing the I/O stream.
+ *       - struct logfile representing the I/O stream.
  *       - data to write to the IRC target
  *
  * Outputs:
@@ -217,9 +233,10 @@ static void logfile_write(logfile_t *lf, const char *buf)
  * Side Effects:
  *       - none
  */
-static void logfile_write_irc(logfile_t *lf, const char *buf)
+static void
+logfile_write_irc(struct logfile *lf, const char *buf)
 {
-	channel_t *c;
+	struct channel *c;
 
 	return_if_fail(lf != NULL);
 	return_if_fail(lf->log_path != NULL);
@@ -232,13 +249,13 @@ static void logfile_write_irc(logfile_t *lf, const char *buf)
 	if (c != NULL && c->flags & CHAN_LOG)
 	{
 		size_t targetlen;
-		char targetbuf[NICKLEN];
-		service_t *svs = NULL;
+		char targetbuf[NICKLEN + 1];
+		struct service *svs = NULL;
 
 		memset(targetbuf, '\0', sizeof targetbuf);
 		targetlen = (strchr(buf, ' ') - buf);
 
-		if (targetlen < NICKLEN)
+		if (targetlen < sizeof targetbuf)
 		{
 			mowgli_strlcpy(targetbuf, buf, sizeof targetbuf);
 			targetbuf[targetlen] = '\0';
@@ -266,12 +283,12 @@ static void logfile_write_irc(logfile_t *lf, const char *buf)
 }
 
 /*
- * logfile_write_snotices(logfile_t *lf, const char *buf)
+ * logfile_write_snotices(struct logfile *lf, const char *buf)
  *
  * Writes an I/O stream to IRC snotes.
  *
  * Inputs:
- *       - logfile_t representing the I/O stream.
+ *       - struct logfile representing the I/O stream.
  *       - data to write to the IRC target
  *
  * Outputs:
@@ -280,9 +297,10 @@ static void logfile_write_irc(logfile_t *lf, const char *buf)
  * Side Effects:
  *       - none
  */
-static void logfile_write_snotices(logfile_t *lf, const char *buf)
+static void
+logfile_write_snotices(struct logfile *lf, const char *buf)
 {
-	channel_t *c;
+	struct channel *c;
 
 	return_if_fail(lf != NULL);
 	return_if_fail(lf->log_path != NULL);
@@ -295,12 +313,12 @@ static void logfile_write_snotices(logfile_t *lf, const char *buf)
 }
 
 /*
- * logfile_register(logfile_t *lf)
+ * logfile_register(struct logfile *lf)
  *
  * Registers a log I/O stream.
  *
  * Inputs:
- *       - logfile_t representing the I/O stream.
+ *       - struct logfile representing the I/O stream.
  *
  * Outputs:
  *       - none
@@ -308,18 +326,19 @@ static void logfile_write_snotices(logfile_t *lf, const char *buf)
  * Side Effects:
  *       - log_files is populated with the given object.
  */
-void logfile_register(logfile_t *lf)
+void
+logfile_register(struct logfile *lf)
 {
 	mowgli_node_add(lf, &lf->node, &log_files);
 }
 
 /*
- * logfile_unregister(logfile_t *lf)
+ * logfile_unregister(struct logfile *lf)
  *
  * Unregisters a log I/O stream.
  *
  * Inputs:
- *       - logfile_t representing the I/O stream.
+ *       - struct logfile representing the I/O stream.
  *
  * Outputs:
  *       - none
@@ -327,7 +346,8 @@ void logfile_register(logfile_t *lf)
  * Side Effects:
  *       - the given object is removed from log_files, but remains valid.
  */
-void logfile_unregister(logfile_t *lf)
+void
+logfile_unregister(struct logfile *lf)
 {
 	mowgli_node_delete(&lf->node, &log_files);
 }
@@ -342,21 +362,22 @@ void logfile_unregister(logfile_t *lf)
  *       - bitmask of events to log
  *
  * Outputs:
- *       - a logfile_t object describing how this logfile should be used
+ *       - a struct logfile object describing how this logfile should be used
  *
  * Side Effects:
- *       - log_files is populated with the newly created logfile_t.
+ *       - log_files is populated with the newly created struct logfile.
  */
-logfile_t *logfile_new(const char *path, unsigned int log_mask)
+struct logfile * ATHEME_FATTR_MALLOC_UNCHECKED
+logfile_new(const char *path, unsigned int log_mask)
 {
 	static bool hooked = false;
 	static time_t lastfail = 0;
-	channel_t *c;
-	logfile_t *lf = scalloc(sizeof(logfile_t), 1);
+	struct channel *c;
+	struct logfile *const lf = smalloc(sizeof *lf);
 
 	if (!strcasecmp(path, "!snotices") || !strcasecmp(path, "!wallops"))
 	{
-		object_init(object(lf), path, logfile_delete_channel);
+		atheme_object_init(atheme_object(lf), path, logfile_delete_channel);
 
 		lf->log_path = sstrdup(path);
 		lf->log_type = LOG_INTERACTIVE;
@@ -364,29 +385,56 @@ logfile_t *logfile_new(const char *path, unsigned int log_mask)
 	}
 	else if (!VALID_GLOBAL_CHANNEL_PFX(path))
 	{
-		object_init(object(lf), path, logfile_delete_file);
-		if ((lf->log_file = fopen(path, "a")) == NULL)
-		{
-			free(lf);
+		errno = 0;
 
-			if (me.connected && lastfail + 3600 < CURRTIME)
+#ifndef O_CLOEXEC
+		const bool cloexec = true;
+		const int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP);
+#else
+		bool cloexec = false;
+		int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, S_IRUSR | S_IWUSR | S_IRGRP);
+
+		if (fd == -1)
+		{
+			cloexec = true;
+			fd = open(path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP);
+		}
+#endif
+
+		if (fd == -1 || ! (lf->log_file = fdopen(fd, "a")))
+		{
+			if (me.connected && lastfail + SECONDS_PER_HOUR < CURRTIME)
 			{
 				lastfail = CURRTIME;
-				wallops(_("Could not open log file (%s), log entries will be missing!"), strerror(errno));
+				wallops("Could not open log file '%s' (%s), log entries will be missing!",
+				        path, strerror(errno));
 			}
 
+			sfree(lf);
 			return NULL;
 		}
+
 #ifdef FD_CLOEXEC
-		fcntl(fileno((FILE *)lf->log_file), F_SETFD, FD_CLOEXEC);
+		if (cloexec)
+		{
+			const int res = fcntl(fd, F_GETFD, NULL);
+
+			if (res == -1 || fcntl(fd, F_SETFD, res | FD_CLOEXEC) == -1)
+				wallops("Could not mark log file '%s' close-on-exec!", path);
+		}
+#else
+		(void) cloexec;
 #endif
+
+		atheme_object_init(atheme_object(lf), path, logfile_delete_file);
+
 		lf->log_path = sstrdup(path);
 		lf->log_type = LOG_NONINTERACTIVE;
 		lf->write_func = logfile_write;
 	}
 	else
 	{
-		object_init(object(lf), path, logfile_delete_channel);
+		atheme_object_init(atheme_object(lf), path, logfile_delete_channel);
 
 		lf->log_path = sstrdup(path);
 		lf->log_type = LOG_INTERACTIVE;
@@ -401,11 +449,8 @@ logfile_t *logfile_new(const char *path, unsigned int log_mask)
 		}
 		if (!hooked)
 		{
-			hook_add_event("channel_add");
 			hook_add_channel_add(logfile_join_channels);
-			hook_add_event("service_introduce");
 			hook_add_service_introduce(logfile_join_service);
-			hook_add_event("config_ready");
 			hook_add_config_ready(logfile_part_removed);
 			hooked = true;
 		}
@@ -433,7 +478,8 @@ logfile_t *logfile_new(const char *path, unsigned int log_mask)
  *       - the log_files list is populated with the master
  *         atheme.log reference.
  */
-void log_open(void)
+void
+log_open(void)
 {
 	log_file = logfile_new(log_path, LG_ERROR | LG_INFO | LG_CMD_ADMIN);
 }
@@ -450,14 +496,15 @@ void log_open(void)
  *       - none
  *
  * Side Effects:
- *       - logfile_t objects in the log_files list are destroyed.
+ *       - struct logfile objects in the log_files list are destroyed.
  */
-void log_shutdown(void)
+void
+log_shutdown(void)
 {
 	mowgli_node_t *n, *tn;
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, log_files.head)
-		object_unref(n->data);
+		atheme_object_unref(n->data);
 }
 
 /*
@@ -474,10 +521,11 @@ void log_shutdown(void)
  * Side Effects:
  *       - none
  */
-bool log_debug_enabled(void)
+bool
+log_debug_enabled(void)
 {
 	mowgli_node_t *n;
-	logfile_t *lf;
+	struct logfile *lf;
 
 	if (log_force)
 		return true;
@@ -504,7 +552,8 @@ bool log_debug_enabled(void)
  * Side Effects:
  *       - logging mask updated
  */
-void log_master_set_mask(unsigned int mask)
+void
+log_master_set_mask(unsigned int mask)
 {
 	/* couldn't be opened etc */
 	if (log_file == NULL)
@@ -522,16 +571,17 @@ void log_master_set_mask(unsigned int mask)
  *       - log mask
  *
  * Outputs:
- *       - logfile_t object pointer, guaranteed to be a file, not some
+ *       - struct logfile object pointer, guaranteed to be a file, not some
  *         other kind of log stream
  *
  * Side Effects:
  *       - none
  */
-logfile_t *logfile_find_mask(unsigned int log_mask)
+struct logfile *
+logfile_find_mask(unsigned int log_mask)
 {
 	mowgli_node_t *n;
-	logfile_t *lf;
+	struct logfile *lf;
 
 	MOWGLI_ITER_FOREACH(n, log_files.head)
 	{
@@ -552,54 +602,56 @@ logfile_t *logfile_find_mask(unsigned int log_mask)
 	return NULL;
 }
 
-static void vslog_ext(log_type_t type, unsigned int level, const char *fmt,
-		va_list args)
+static void ATHEME_FATTR_PRINTF(3, 0)
+vslog_ext(enum log_type type, unsigned int level, const char *fmt, va_list args)
 {
-	static bool in_slog = false;
-	char buf[BUFSIZE];
-	mowgli_node_t *n;
-	char datetime[BUFSIZE];
-	time_t t;
-	struct tm tm;
+	static bool in_vslog_ext = false;
 
-	if (in_slog)
+	// Detect infinite logging recursion
+	if (in_vslog_ext)
 		return;
-	in_slog = true;
 
-	vsnprintf(buf, BUFSIZE, fmt, args);
+	in_vslog_ext = true;
 
-	time(&t);
-	tm = *localtime(&t);
-	strftime(datetime, sizeof datetime, "[%Y-%m-%d %H:%M:%S]", &tm);
+	char buf[BUFSIZE];
+	(void) vsnprintf(buf, sizeof buf, fmt, args);
 
+	const mowgli_node_t *n;
 	MOWGLI_ITER_FOREACH(n, log_files.head)
 	{
-		logfile_t *lf = (logfile_t *) n->data;
+		struct logfile *const lf = n->data;
+
+		continue_if_fail(lf != NULL);
+		continue_if_fail(lf->write_func != NULL);
 
 		if (type != LOG_ANY && type != lf->log_type)
 			continue;
 		if ((lf != log_file || !log_force) && !(level & lf->log_mask))
 			continue;
 
-		return_if_fail(lf->write_func != NULL);
-
-		lf->write_func(lf, buf);
+		(void) lf->write_func(lf, buf);
 	}
 
-	/*
-	 * if the event is in the default loglevel, and we are starting, then
+	/* If the event is in the default loglevel, and we are starting, then
 	 * display it in the controlling terminal.
 	 */
 	if (type != LOG_INTERACTIVE && ((runflags & (RF_LIVE | RF_STARTING) &&
 		(log_file != NULL ? log_file->log_mask : LG_ERROR | LG_INFO) & level) ||
 		(runflags & RF_LIVE && log_force)))
-		fprintf(stderr, "%s %s\n", datetime, logfile_strip_control_codes(buf));
+	{
+		char datetime[BUFSIZE];
+		const time_t ts = time(NULL);
+		const struct tm *const tm = localtime(&ts);
 
-	in_slog = false;
+		(void) strftime(datetime, sizeof datetime, "[%Y-%m-%d %H:%M:%S]", tm);
+		(void) fprintf(stderr, "%s %s\n", datetime, logfile_strip_control_codes(buf));
+	}
+
+	in_vslog_ext = false;
 }
 
-static PRINTFLIKE(3, 4) void slog_ext(log_type_t type, unsigned int level,
-		const char *fmt, ...)
+static void ATHEME_FATTR_PRINTF(3, 4)
+slog_ext(enum log_type type, unsigned int level, const char *fmt, ...)
 {
 	va_list args;
 
@@ -613,7 +665,7 @@ static PRINTFLIKE(3, 4) void slog_ext(log_type_t type, unsigned int level,
  *
  * Handles the basic logging of log messages to the log files defined
  * in the configuration file. All I/O is handled here, and no longer
- * in the various sourceinfo_t log transforms.
+ * in the various struct sourceinfo log transforms.
  *
  * Inputs:
  *       - a bitmask of the various log categories this event qualifies to
@@ -626,7 +678,8 @@ static PRINTFLIKE(3, 4) void slog_ext(log_type_t type, unsigned int level,
  * Side Effects:
  *       - logfiles are updated depending on how they are configured.
  */
-void slog(unsigned int level, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(2, 3)
+slog(unsigned int level, const char *fmt, ...)
 {
 	va_list args;
 
@@ -635,100 +688,71 @@ void slog(unsigned int level, const char *fmt, ...)
 	va_end(args);
 }
 
-/*
- * logcommand(sourceinfo_t *si, int level, const char *fmt, ...)
- *
- * Logs usage of a command from a user or other source (RPC call) as
- * described by sourceinfo_t.
- *
- * Inputs:
- *       - sourceinfo_t object which describes the source of the command call
- *       - bitmask of log categories to log the command use to.
- *       - printf-style format string
- *       - (optional) additional parameters
- *
- * Outputs:
- *       - none
- *
- * Side Effects:
- *       - qualifying logfile_t objects in log_files are updated.
- */
-void logcommand(sourceinfo_t *si, int level, const char *fmt, ...)
+static const char *
+format_user(struct user *source, bool full)
 {
-	va_list args;
-	char lbuf[BUFSIZE];
-
-	va_start(args, fmt);
-	vsnprintf(lbuf, BUFSIZE, fmt, args);
-	va_end(args);
-	if (si->su != NULL)
-		logcommand_user(si->service, si->su, level, "%s", lbuf);
-	else
-		logcommand_external(si->service, si->v != NULL ? si->v->description : "unknown", si->connection, si->sourcedesc, si->smu, level, "%s", lbuf);
-}
-
-/*
- * logcommand_user(service_t *svs, user_t *source, int level, const char *fmt, ...)
- *
- * Logs usage of a command from a user as described by sourceinfo_t.
- *
- * Inputs:
- *       - service_t object which describes the service the command is attached to
- *       - user_t object which describes the source of the command call
- *       - bitmask of log categories to log the command use to.
- *       - printf-style format string
- *       - (optional) additional parameters
- *
- * Outputs:
- *       - none
- *
- * Side Effects:
- *       - qualifying logfile_t objects in log_files are updated.
- */
-void logcommand_user(service_t *svs, user_t *source, int level, const char *fmt, ...)
-{
-	va_list args;
-	char lbuf[BUFSIZE];
-	char accountbuf[NICKLEN * 5]; /* entity name len is NICKLEN * 4, plus another for the ID */
+	static char buf[BUFSIZE];
+	char accountbuf[(NICKLEN + 1) * 5]; /* entity name len is NICKLEN * 4, plus another for the ID */
 	bool showaccount;
-
-	va_start(args, fmt);
-	vsnprintf(lbuf, BUFSIZE, fmt, args);
-	va_end(args);
 
 	accountbuf[0] = '\0';
 	if (source->myuser != NULL)
 		snprintf(accountbuf, sizeof accountbuf, "%s/%s",
 				entity(source->myuser)->name, entity(source->myuser)->id);
+	showaccount = source->myuser == NULL || irccasecmp(entity(source->myuser)->name, source->nick);
 
-	slog_ext(LOG_NONINTERACTIVE, level, "%s %s:%s!%s@%s[%s] %s",
-			service_get_log_target(svs),
+	if(full)
+		snprintf(buf, sizeof buf, "%s:%s!%s@%s[%s]",
 			accountbuf,
 			source->nick, source->user, source->host,
-			source->ip != NULL ? source->ip : source->host,
-			lbuf);
-	showaccount = source->myuser == NULL || irccasecmp(entity(source->myuser)->name, source->nick);
-	slog_ext(LOG_INTERACTIVE, level, "%s %s%s%s%s %s",
-			service_get_log_target(svs),
+			source->ip != NULL ? source->ip : source->host);
+	else
+		snprintf(buf, sizeof buf, "%s%s%s%s",
 			source->nick,
 			showaccount ? " (" : "",
 			showaccount ? (source->myuser ? entity(source->myuser)->name : "") : "",
-			showaccount ? ")" : "",
-			lbuf);
+			showaccount ? ")" : "");
+	return buf;
+}
+
+static const char *
+format_external(const char *type, struct connection *source, const char *sourcedesc, struct myuser *mu, bool full)
+{
+	static char buf[BUFSIZE];
+
+	if(full)
+		snprintf(buf, sizeof buf, "%s:%s(%s)[%s]",
+			mu != NULL ? entity(mu)->name : "",
+			type,
+			source != NULL ? source->name : "<noconn>",
+			sourcedesc != NULL ? sourcedesc : "<unknown>");
+	else
+		snprintf(buf, sizeof buf, "<%s>%s",
+			type,
+			mu != NULL ? entity(mu)->name : "");
+	return buf;
+}
+
+static const char *
+format_sourceinfo(struct sourceinfo *si, bool full)
+{
+	if(si->v != NULL && si->v->format != NULL)
+		return si->v->format(si, full);
+
+	if(si->su != NULL)
+		return format_user(si->su, full);
+	else
+		return format_external(si->v != NULL ? si->v->description : "unknown", si->connection, si->sourcedesc, si->smu, full);
 }
 
 /*
- * logcommand_external(service_t *svs, const char *type, connection_t *source,
- *       const char *sourcedesc, myuser_t *login, int level, const char *fmt, ...)
+ * logcommand(struct sourceinfo *si, int level, const char *fmt, ...)
  *
- * Logs usage of a command from an RPC call as described by sourceinfo_t.
+ * Logs usage of a command from a user or other source (RPC call) as
+ * described by struct sourceinfo.
  *
  * Inputs:
- *       - service_t object which describes the service the command is attached to
- *       - string which describes the type of RPC call
- *       - connection_t which describes the socket source of the RPC call
- *       - string which describes the socket source of the RPC call
- *       - myuser_t which describes the services account used for the RPC call
+ *       - struct sourceinfo object which describes the source of the command call
  *       - bitmask of log categories to log the command use to.
  *       - printf-style format string
  *       - (optional) additional parameters
@@ -737,9 +761,47 @@ void logcommand_user(service_t *svs, user_t *source, int level, const char *fmt,
  *       - none
  *
  * Side Effects:
- *       - qualifying logfile_t objects in log_files are updated.
+ *       - qualifying struct logfile objects in log_files are updated.
  */
-void logcommand_external(service_t *svs, const char *type, connection_t *source, const char *sourcedesc, myuser_t *mu, int level, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(3, 4)
+logcommand(struct sourceinfo *si, int level, const char *fmt, ...)
+{
+	va_list args;
+	char lbuf[BUFSIZE];
+
+	va_start(args, fmt);
+	vsnprintf(lbuf, BUFSIZE, fmt, args);
+	va_end(args);
+	slog_ext(LOG_NONINTERACTIVE, level, "%s %s %s",
+			service_get_log_target(si->service),
+			format_sourceinfo(si, true),
+			lbuf);
+	slog_ext(LOG_INTERACTIVE, level, "%s %s %s",
+			service_get_log_target(si->service),
+			format_sourceinfo(si, false),
+			lbuf);
+}
+
+/*
+ * logcommand_user(struct service *svs, struct user *source, int level, const char *fmt, ...)
+ *
+ * Logs usage of a command from a user as described by struct sourceinfo.
+ *
+ * Inputs:
+ *       - struct service object which describes the service the command is attached to
+ *       - struct user object which describes the source of the command call
+ *       - bitmask of log categories to log the command use to.
+ *       - printf-style format string
+ *       - (optional) additional parameters
+ *
+ * Outputs:
+ *       - none
+ *
+ * Side Effects:
+ *       - qualifying struct logfile objects in log_files are updated.
+ */
+void ATHEME_FATTR_PRINTF(4, 5)
+logcommand_user(struct service *svs, struct user *source, int level, const char *fmt, ...)
 {
 	va_list args;
 	char lbuf[BUFSIZE];
@@ -748,37 +810,76 @@ void logcommand_external(service_t *svs, const char *type, connection_t *source,
 	vsnprintf(lbuf, BUFSIZE, fmt, args);
 	va_end(args);
 
-	slog_ext(LOG_NONINTERACTIVE, level, "%s %s:%s(%s)[%s] %s",
+	slog_ext(LOG_NONINTERACTIVE, level, "%s %s %s",
 			service_get_log_target(svs),
-			mu != NULL ? entity(mu)->name : "",
-			type,
-			source != NULL ? source->hbuf : "<noconn>",
-			sourcedesc != NULL ? sourcedesc : "<unknown>",
+			format_user(source, true),
 			lbuf);
-	slog_ext(LOG_INTERACTIVE, level, "%s <%s>%s %s",
+	slog_ext(LOG_INTERACTIVE, level, "%s %s %s",
 			service_get_log_target(svs),
-			type,
-			mu != NULL ? entity(mu)->name : "",
+			format_user(source, false),
 			lbuf);
 }
 
 /*
- * logaudit_denycmd(sourceinfo_t *si, command_t *cmd, const char *userlevel)
+ * logcommand_external(struct service *svs, const char *type, struct connection *source,
+ *       const char *sourcedesc, struct myuser *login, int level, const char *fmt, ...)
+ *
+ * Logs usage of a command from an RPC call as described by struct sourceinfo.
+ *
+ * Inputs:
+ *       - struct service object which describes the service the command is attached to
+ *       - string which describes the type of RPC call
+ *       - struct connection which describes the socket source of the RPC call
+ *       - string which describes the socket source of the RPC call
+ *       - struct myuser which describes the services account used for the RPC call
+ *       - bitmask of log categories to log the command use to.
+ *       - printf-style format string
+ *       - (optional) additional parameters
+ *
+ * Outputs:
+ *       - none
+ *
+ * Side Effects:
+ *       - qualifying struct logfile objects in log_files are updated.
+ */
+void ATHEME_FATTR_PRINTF(7, 8)
+logcommand_external(struct service *svs, const char *type, struct connection *source, const char *sourcedesc, struct myuser *mu, int level, const char *fmt, ...)
+{
+	va_list args;
+	char lbuf[BUFSIZE];
+
+	va_start(args, fmt);
+	vsnprintf(lbuf, BUFSIZE, fmt, args);
+	va_end(args);
+
+	slog_ext(LOG_NONINTERACTIVE, level, "%s %s %s",
+			service_get_log_target(svs),
+			format_external(type, source, sourcedesc, mu, true),
+			lbuf);
+	slog_ext(LOG_INTERACTIVE, level, "%s %s %s",
+			service_get_log_target(svs),
+			format_external(type, source, sourcedesc, mu, false),
+			lbuf);
+}
+
+/*
+ * logaudit_denycmd(struct sourceinfo *si, struct command *cmd, const char *userlevel)
  *
  * Logs a command access denial for auditing.
  *
  * Inputs:
- *       - sourceinfo_t object that was denied
- *       - command_t object that was denied
+ *       - struct sourceinfo object that was denied
+ *       - struct command object that was denied
  *       - optional userlevel (if none, will be NULL)
  *
  * Outputs:
  *       - nothing
  *
  * Side Effects:
- *       - qualifying logfile_t objects in log_files are updated
+ *       - qualifying struct logfile objects in log_files are updated
  */
-void logaudit_denycmd(sourceinfo_t *si, command_t *cmd, const char *userlevel)
+void
+logaudit_denycmd(struct sourceinfo *si, struct command *cmd, const char *userlevel)
 {
 	slog_ext(LOG_NONINTERACTIVE, LG_DENYCMD, "DENYCMD: [%s] was denied execution of [%s], need privileges [%s %s]",
 		 get_source_security_label(si), cmd->name, cmd->access, userlevel != NULL ? userlevel : "");

@@ -1,31 +1,26 @@
-/* search.c - rpgserv SEARCH command
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+ *
+ * search.c - rpgserv SEARCH command
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "prettyprint.h"
 
-DECLARE_MODULE_V1
-(
-	"rpgserv/search", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void rs_cmd_search(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t rs_search = { "SEARCH", N_("Search for games based on specific criteria."),
-                      AC_NONE, 20, rs_cmd_search, { .path = "rpgserv/search" } };
-
-static void rs_cmd_search(sourceinfo_t *si, int parc, char *parv[])
+static void
+rs_cmd_search(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_patricia_iteration_state_t state;
-	mychan_t *mc;
+	struct mychan *mc;
 	unsigned int listed = 0;
 
 	MOWGLI_PATRICIA_FOREACH(mc, &state, mclist)
 	{
 		unsigned int i, j;
-		metadata_t *md;
+		struct metadata *md;
 
 		static const char *mdkeys[] = {
 			"private:rpgserv:genre", "private:rpgserv:period", "private:rpgserv:ruleset",
@@ -71,18 +66,36 @@ __matched:
 		command_success_nodata(si, _("System: %s"), rs_prettyprint_keywords(md, system_keys, system_names, ARRAY_SIZE(system_keys)));
 	}
 
-	command_success_nodata(si, _("\2%d\2 channels met your criteria."), listed);
+	command_success_nodata(si, ngettext(N_("\2%u\2 channel met your criteria."),
+	                                    N_("\2%u\2 channels met your criteria."),
+	                                    listed), listed);
+
 	command_success_nodata(si, _("For more information on a specific channel, use \2/msg %s INFO <channel>\2."), si->service->disp);
 
 	logcommand(si, CMDLOG_GET, "RPGSERV:SEARCH");
 }
 
-void _modinit(module_t *m)
+static struct command rs_search = {
+	.name           = "SEARCH",
+	.desc           = N_("Search for games based on specific criteria."),
+	.access         = AC_NONE,
+	.maxparc        = 20,
+	.cmd            = &rs_cmd_search,
+	.help           = { .path = "rpgserv/search" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "rpgserv/main")
+
 	service_named_bind_command("rpgserv", &rs_search);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("rpgserv", &rs_search);
 }
+
+SIMPLE_DECLARE_MODULE_V1("rpgserv/search", MODULE_UNLOAD_CAPABILITY_OK)

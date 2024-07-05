@@ -1,46 +1,26 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Copyright (c) 2014 Zohlai Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Sets the public key (for SASL ECDSA-NIST256p-CHALLENGE) of a user.
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
+ * Copyright (C) 2014 Zohlai Development Group
  *
+ * Sets the public key (for SASL ECDSA-NIST256P-CHALLENGE) of a user.
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_pubkey", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Zohlai Development Group"
-);
+#ifdef HAVE_LIBCRYPTO_ECDSA
 
-mowgli_patricia_t **ns_set_cmdtree;
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-static void ns_cmd_set_pubkey(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_pubkey = { "PUBKEY", N_("Changes your ECDSA-NIST256p-CHALLENGE public key."), AC_NONE, 1, ns_cmd_set_pubkey, { .path = "nickserv/set_pubkey" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_pubkey, *ns_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_pubkey, *ns_set_cmdtree);
-}
-
-/* SET PUBKEY <key> */
-static void ns_cmd_set_pubkey(sourceinfo_t *si, int parc, char *parv[])
+// SET PUBKEY <key>
+static void
+ns_cmd_set_pubkey(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *newkey = parv[0];
-	metadata_t *md;
+	struct metadata *md;
 
 	if (!newkey)
 	{
@@ -48,13 +28,13 @@ static void ns_cmd_set_pubkey(sourceinfo_t *si, int parc, char *parv[])
 
 		if (!md)
 		{
-			command_fail(si, fault_nosuch_target, _("Public key was not set"));
+			command_fail(si, fault_nochange, _("Your public key was not set."));
 			return;
 		}
 
 		metadata_delete(si->smu, "private:pubkey");
 		logcommand(si, CMDLOG_SET, "SET:PUBKEY:REMOVE");
-		command_success_nodata(si, _("Public key entry has been deleted."));
+		command_success_nodata(si, _("Your public key entry has been deleted."));
 		return;
 	}
 
@@ -71,8 +51,45 @@ static void ns_cmd_set_pubkey(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_set_pubkey = {
+	.name           = "PUBKEY",
+	.desc           = N_("Changes your ECDSA-NIST256P-CHALLENGE public key."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_pubkey,
+	.help           = { .path = "nickserv/set_pubkey" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	command_add(&ns_set_pubkey, *ns_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_pubkey, *ns_set_cmdtree);
+}
+
+#else /* HAVE_LIBCRYPTO_ECDSA */
+
+static void
+mod_init(struct module *const restrict m)
+{
+	(void) slog(LG_ERROR, "Module %s requires OpenSSL ECDSA support, refusing to load.", m->name);
+
+	m->mflags |= MODFLAG_FAIL;
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	// Nothing To Do
+}
+
+#endif /* !HAVE_LIBCRYPTO_ECDSA */
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_pubkey", MODULE_UNLOAD_CAPABILITY_OK)

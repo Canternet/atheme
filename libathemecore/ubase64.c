@@ -1,27 +1,19 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * ubase64.c: ircu base64 routines.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2012 Atheme Project (http://atheme.org/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * ubase64.c: ircu base64 routines.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
 /*
  * base64touint() written 01/20/06 by jilles, for getting IP addresses.
@@ -48,7 +40,8 @@ __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __,
 __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __ };
 #undef __
 
-const char *uinttobase64(char *buf, uint64_t v, int64_t count)
+const char *
+uinttobase64(char *buf, uint64_t v, int64_t count)
 {
 	buf[count] = '\0';
 
@@ -61,7 +54,8 @@ const char *uinttobase64(char *buf, uint64_t v, int64_t count)
 	return buf;
 }
 
-unsigned int base64touint(const char *buf)
+unsigned int
+base64touint(const char *buf)
 {
 	int bits;
 	unsigned int v = 0;
@@ -72,7 +66,8 @@ unsigned int base64touint(const char *buf)
 	return v;
 }
 
-void decode_p10_ip(const char *b64, char ipstring[HOSTIPLEN])
+void
+decode_p10_ip(const char *b64, char ipstring[HOSTIPLEN + 1])
 {
 	struct in_addr ip;
 	char buf[4];
@@ -84,7 +79,7 @@ void decode_p10_ip(const char *b64, char ipstring[HOSTIPLEN])
 	if (len == 6)
 	{
 		ip.s_addr = ntohl(base64touint(b64));
-		if (!inet_ntop(AF_INET, &ip, ipstring, HOSTIPLEN))
+		if (!inet_ntop(AF_INET, &ip, ipstring, HOSTIPLEN + 1))
 			ipstring[0] = '\0';
 	}
 	else if (len == 24 || (len < 24 && strchr(b64, '_')))
@@ -97,7 +92,7 @@ void decode_p10_ip(const char *b64, char ipstring[HOSTIPLEN])
 			if (b64[i] == '_')
 			{
 				i++;
-				if (j >= HOSTIPLEN - 2)
+				if (j > HOSTIPLEN - 2)
 					break;
 				if (j == 0)
 					ipstring[j++] = '0';
@@ -107,7 +102,7 @@ void decode_p10_ip(const char *b64, char ipstring[HOSTIPLEN])
 			}
 			else
 			{
-				if (j >= HOSTIPLEN - 5)
+				if (j > HOSTIPLEN - 5)
 					break;
 				if (j != 0)
 					ipstring[j++] = ':';

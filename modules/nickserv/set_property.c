@@ -1,52 +1,31 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Manipulates metadata entries associated with an account.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_property", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
-
-static void ns_cmd_set_property(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_property = { "PROPERTY", N_("Manipulates metadata entries associated with an account."), AC_NONE, 2, ns_cmd_set_property, { .path = "nickserv/set_property" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_property, *ns_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_property, *ns_set_cmdtree);
-}
-
-/* SET PROPERTY <property> [value] */
-static void ns_cmd_set_property(sourceinfo_t *si, int parc, char *parv[])
+// SET PROPERTY <property> [value]
+static void
+ns_cmd_set_property(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *property = strtok(parv[0], " ");
 	char *value = strtok(NULL, "");
 	unsigned int count;
 	mowgli_patricia_iteration_state_t state;
-	metadata_t *md;
-	hook_metadata_change_t mdchange;
+	struct metadata *md;
+	struct hook_metadata_change mdchange;
 
 	if (!property)
 	{
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET PROPERTY");
 		command_fail(si, fault_needmoreparams, _("Syntax: SET PROPERTY <property> [value]"));
 		return;
 	}
@@ -82,7 +61,7 @@ static void ns_cmd_set_property(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	count = 0;
-	MOWGLI_PATRICIA_FOREACH(md, &state, object(si->smu)->metadata)
+	MOWGLI_PATRICIA_FOREACH(md, &state, atheme_object(si->smu)->metadata)
 	{
 		if (strncmp(md->name, "private:", 8))
 			count++;
@@ -112,8 +91,27 @@ static void ns_cmd_set_property(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("Metadata entry \2%s\2 added."), property);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_set_property = {
+	.name           = "PROPERTY",
+	.desc           = N_("Manipulates metadata entries associated with an account."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_set_property,
+	.help           = { .path = "nickserv/set_property" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	command_add(&ns_set_property, *ns_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_property, *ns_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_property", MODULE_UNLOAD_CAPABILITY_OK)

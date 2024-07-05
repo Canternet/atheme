@@ -1,32 +1,31 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * users.c: User management.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2015-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * users.c: User management.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
-mowgli_heap_t *user_heap;
+static mowgli_heap_t *user_heap = NULL;
 
 mowgli_patricia_t *userlist;
 mowgli_patricia_t *uidlist;
+
+static void
+user_delete_cb(void *const restrict user)
+{
+	(void) user_delete(user, NULL);
+}
 
 /*
  * init_users()
@@ -42,9 +41,10 @@ mowgli_patricia_t *uidlist;
  * Side Effects:
  *     - the users heap and DTree are initialized.
  */
-void init_users(void)
+void
+init_users(void)
 {
-	user_heap = sharedheap_get(sizeof(user_t));
+	user_heap = sharedheap_get(sizeof(struct user));
 
 	if (user_heap == NULL)
 	{
@@ -58,7 +58,7 @@ void init_users(void)
 
 /*
  * user_add(const char *nick, const char *user, const char *host, const char *vhost, const char *ip,
- *          const char *uid, const char *gecos, server_t *server, time_t ts);
+ *          const char *uid, const char *gecos, struct server *server, time_t ts);
  *
  * User object factory.
  *
@@ -81,12 +81,13 @@ void init_users(void)
  *     - if successful, a user is created and added to the users DTree.
  *     - if unsuccessful, a kill has been sent if necessary
  */
-user_t *user_add(const char *nick, const char *user, const char *host,
+struct user *
+user_add(const char *nick, const char *user, const char *host,
 	const char *vhost, const char *ip, const char *uid, const char *gecos,
-	server_t *server, time_t ts)
+	struct server *server, time_t ts)
 {
-	user_t *u, *u2;
-	hook_user_nick_t hdata;
+	struct user *u, *u2;
+	struct hook_user_nick hdata;
 
 	slog(LG_DEBUG, "user_add(): %s (%s@%s) -> %s", nick, user, host, server->name);
 
@@ -151,7 +152,7 @@ user_t *user_add(const char *nick, const char *user, const char *host,
 	}
 
 	u = mowgli_heap_alloc(user_heap);
-	object_init(object(u), nick, (destructor_t) user_delete);
+	atheme_object_init(atheme_object(u), nick, &user_delete_cb);
 
 	if (uid != NULL)
 	{
@@ -187,7 +188,7 @@ user_t *user_add(const char *nick, const char *user, const char *host,
 }
 
 /*
- * user_delete(user_t *u, const char *comment)
+ * user_delete(struct user *u, const char *comment)
  *
  * Destroys a user object and deletes the object from the users DTree.
  *
@@ -201,12 +202,13 @@ user_t *user_add(const char *nick, const char *user, const char *host,
  * Side Effects:
  *     - on success, a user is deleted from the users DTree.
  */
-void user_delete(user_t *u, const char *comment)
+void
+user_delete(struct user *u, const char *comment)
 {
 	mowgli_node_t *n, *tn;
-	chanuser_t *cu;
-	mynick_t *mn;
-	char oldnick[NICKLEN];
+	struct chanuser *cu;
+	struct mynick *mn;
+	char oldnick[NICKLEN + 1];
 	bool doenforcer = false;
 
 	return_if_fail(u != NULL);
@@ -223,8 +225,7 @@ void user_delete(user_t *u, const char *comment)
 
 	slog(LG_DEBUG, "user_delete(): removing user: %s -> %s (%s)", u->nick, u->server->name, comment);
 
-	hook_call_user_delete_info((&(hook_user_delete_t){ .u = u,
-				.comment = comment}));
+	hook_call_user_delete_info((&(struct hook_user_delete_info){.u = u, .comment = comment}));
 	hook_call_user_delete(u);
 
 	u->server->users--;
@@ -233,13 +234,12 @@ void user_delete(user_t *u, const char *comment)
 	if (u->flags & UF_INVIS)
 		u->server->invis--;
 
-	if (u->certfp != NULL)
-		free(u->certfp);
+	sfree(u->certfp);
 
 	/* remove the user from each channel */
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, u->channels.head)
 	{
-		cu = (chanuser_t *)n->data;
+		cu = (struct chanuser *)n->data;
 
 		chanuser_delete(cu->chan, u);
 	}
@@ -301,9 +301,10 @@ void user_delete(user_t *u, const char *comment)
  * Side Effects:
  *     - none
  */
-user_t *user_find(const char *nick)
+struct user *
+user_find(const char *nick)
 {
-	user_t *u;
+	struct user *u;
 
 	return_val_if_fail(nick != NULL, NULL);
 
@@ -320,7 +321,7 @@ user_t *user_find(const char *nick)
 	if (u != NULL)
 	{
 		if (ircd->uses_p10)
-			wallops(_("user_find(): found user %s by nick!"), nick);
+			wallops("user_find(): found user %s by nick!", nick);
 		return u;
 	}
 
@@ -342,13 +343,14 @@ user_t *user_find(const char *nick)
  * Side Effects:
  *     - none
  */
-user_t *user_find_named(const char *nick)
+struct user *
+user_find_named(const char *nick)
 {
 	return mowgli_patricia_retrieve(userlist, nick);
 }
 
 /*
- * user_changeuid(user_t *u, const char *uid)
+ * user_changeuid(struct user *u, const char *uid)
  *
  * Changes a user object's UID.
  *
@@ -362,7 +364,8 @@ user_t *user_find_named(const char *nick)
  * Side Effects:
  *     - a user object's UID is changed.
  */
-void user_changeuid(user_t *u, const char *uid)
+void
+user_changeuid(struct user *u, const char *uid)
 {
 	return_if_fail(u != NULL);
 
@@ -377,7 +380,7 @@ void user_changeuid(user_t *u, const char *uid)
 }
 
 /*
- * user_changenick(user_t *u, const char *uid)
+ * user_changenick(struct user *u, const char *uid)
  *
  * Changes a user object's nick and TS.
  *
@@ -393,13 +396,14 @@ void user_changeuid(user_t *u, const char *uid)
  *     - a user object's nick and TS is changed.
  *     - in event of a collision or a decision by a hook, the user may be killed
  */
-bool user_changenick(user_t *u, const char *nick, time_t ts)
+bool
+user_changenick(struct user *u, const char *nick, time_t ts)
 {
-	mynick_t *mn;
-	user_t *u2;
-	char oldnick[NICKLEN];
+	struct mynick *mn;
+	struct user *u2;
+	char oldnick[NICKLEN + 1];
 	bool doenforcer = false;
-	hook_user_nick_t hdata;
+	struct hook_user_nick hdata;
 
 	return_val_if_fail(u != NULL, false);
 	return_val_if_fail(nick != NULL, false);
@@ -509,7 +513,7 @@ bool user_changenick(user_t *u, const char *nick, time_t ts)
 }
 
 /*
- * user_mode(user_t *user, const char *modes)
+ * user_mode(struct user *user, const char *modes)
  *
  * Changes a user object's modes.
  *
@@ -526,7 +530,8 @@ bool user_changenick(user_t *u, const char *nick, time_t ts)
  * Bugs:
  *     - this routine only tracks +i and +o usermode changes.
  */
-void user_mode(user_t *user, const char *modes)
+void
+user_mode(struct user *user, const char *modes)
 {
 	int dir = MTYPE_ADD;
 	bool was_ircop, was_invis;
@@ -587,7 +592,7 @@ void user_mode(user_t *user, const char *modes)
 }
 
 /*
- * user_sethost(user_t *source, user_t *target, const char *host)
+ * user_sethost(struct user *source, struct user *target, const char *host)
  *
  * Sets a new virtual host on a user.
  *
@@ -602,7 +607,8 @@ void user_mode(user_t *user, const char *modes)
  * Side Effects:
  *     - virtual host is set
  */
-void user_sethost(user_t *source, user_t *target, stringref host)
+void
+user_sethost(struct user *source, struct user *target, stringref host)
 {
 	return_if_fail(source != NULL);
 	return_if_fail(target != NULL);
@@ -621,7 +627,8 @@ void user_sethost(user_t *source, user_t *target, stringref host)
 	hook_call_user_sethost(target);
 }
 
-const char *user_get_umodestr(user_t *u)
+const char *
+user_get_umodestr(struct user *u)
 {
 	static char result[34];
 	int iter;
@@ -638,7 +645,8 @@ const char *user_get_umodestr(user_t *u)
 	return result;
 }
 
-bool user_is_channel_banned(user_t *u, char ban_type)
+struct chanuser *
+find_user_banned_channel(struct user *const restrict u, const char ban_type)
 {
 	mowgli_node_t *n;
 
@@ -647,7 +655,7 @@ bool user_is_channel_banned(user_t *u, char ban_type)
 
 	MOWGLI_ITER_FOREACH(n, u->channels.head)
 	{
-		chanuser_t *cu = n->data;
+		struct chanuser *cu = n->data;
 
 		/* Assume that any prefix modes allow changing nicks even while banned */
 		if (cu->modes != 0)
@@ -656,13 +664,13 @@ bool user_is_channel_banned(user_t *u, char ban_type)
 		if (next_matching_ban(cu->chan, u, ban_type, cu->chan->bans.head) != NULL)
 		{
 			if (ircd->except_mchar == '\0' || next_matching_ban(cu->chan, u, ircd->except_mchar, cu->chan->bans.head) == NULL)
-				return true;
+				return cu;
 			else
 				continue;
 		}
 	}
 
-	return false;
+	return NULL;
 }
 
 /* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs

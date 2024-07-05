@@ -1,46 +1,68 @@
 /*
- * Copyright (c) 2006-2010 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006-2016 Atheme Project (http://atheme.org/)
  *
  * Changes and shows nickname CertFP authentication lists.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/cert", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_cert(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_cert = { "CERT", N_("Changes and shows your nickname CertFP authentication list."), AC_NONE, 2, ns_cmd_cert, { .path = "nickserv/cert" } };
-
-void _modinit(module_t *m)
+static void
+ns_cmd_cert(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("nickserv", &ns_cert);
-
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_cert);
-}
-
-static void ns_cmd_cert(sourceinfo_t *si, int parc, char *parv[])
-{
-	myuser_t *mu;
-	mowgli_node_t *n;
+	struct myuser *mu;
+	mowgli_node_t *n, *tn;
 	char *mcfp;
-	mycertfp_t *cert;
+	struct mycertfp *cert;
 
 	if (parc < 1)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "CERT");
-		command_fail(si, fault_needmoreparams, _("Syntax: CERT ADD|DEL|LIST [fingerprint]"));
+		command_fail(si, fault_needmoreparams, _("Syntax: CERT ADD|DEL|LIST|CLEAR [fingerprint]"));
+		return;
+	}
+
+	if (!strcasecmp(parv[0], "CLEAR"))
+	{
+		if (parc < 2)
+		{
+			mu = si->smu;
+			if (mu == NULL)
+			{
+				command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
+				return;
+			}
+		}
+		else
+		{
+			if (!has_priv(si, PRIV_USER_ADMIN))
+			{
+				command_fail(si, fault_noprivs, _("You are not authorized to use the target argument."));
+				return;
+			}
+
+			if (!(mu = myuser_find_ext(parv[1])))
+			{
+				command_fail(si, fault_badparams, STR_IS_NOT_REGISTERED, parv[1]);
+				return;
+			}
+		}
+
+		if (mu != si->smu)
+			logcommand(si, CMDLOG_ADMIN, "CERT:CLEAR: \2%s\2", entity(mu)->name);
+		else
+			logcommand(si, CMDLOG_SET, "CERT:CLEAR");
+
+		command_success_nodata(si, _("Clearing all fingerprints for \2%s\2:"), entity(mu)->name);
+
+		MOWGLI_ITER_FOREACH_SAFE(n, tn, mu->cert_fingerprints.head)
+		{
+			mycertfp_delete((struct mycertfp *) n->data);
+		}
+
+		command_success_nodata(si, _("All fingerprints for \2%s\2 have been removed."), entity(mu)->name);
 		return;
 	}
 
@@ -51,7 +73,7 @@ static void ns_cmd_cert(sourceinfo_t *si, int parc, char *parv[])
 			mu = si->smu;
 			if (mu == NULL)
 			{
-				command_fail(si, fault_noprivs, _("You are not logged in."));
+				command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 				return;
 			}
 		}
@@ -65,7 +87,7 @@ static void ns_cmd_cert(sourceinfo_t *si, int parc, char *parv[])
 
 			if (!(mu = myuser_find_ext(parv[1])))
 			{
-				command_fail(si, fault_badparams, _("\2%s\2 is not registered."), parv[1]);
+				command_fail(si, fault_badparams, STR_IS_NOT_REGISTERED, parv[1]);
 				return;
 			}
 		}
@@ -79,7 +101,7 @@ static void ns_cmd_cert(sourceinfo_t *si, int parc, char *parv[])
 
 		MOWGLI_ITER_FOREACH(n, mu->cert_fingerprints.head)
 		{
-			mcfp = ((mycertfp_t*)n->data)->certfp;
+			mcfp = ((struct mycertfp *) n->data)->certfp;
 			command_success_nodata(si, "- %s", mcfp);
 		}
 
@@ -106,27 +128,38 @@ static void ns_cmd_cert(sourceinfo_t *si, int parc, char *parv[])
 
 		if (mu == NULL)
 		{
-			command_fail(si, fault_noprivs, _("You are not logged in."));
+			command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 			return;
 		}
 
-		cert = mycertfp_find(mcfp);
+		struct hook_user_certfp hdata = {
+			.si = si,
+			.mu = mu,
+		};
+		mowgli_strlcpy(hdata.certfp, mcfp, sizeof hdata.certfp);
+		hook_call_user_certfp_add(&hdata);
+
+		if (!hdata.certfp[0])
+			return;
+
+		cert = mycertfp_find(hdata.certfp);
 		if (cert == NULL)
 			;
 		else if (cert->mu == mu)
 		{
-			command_fail(si, fault_nochange, _("Fingerprint \2%s\2 is already on your fingerprint list."), mcfp);
+			command_fail(si, fault_nochange, _("Fingerprint \2%s\2 is already on your fingerprint list."), hdata.certfp);
 			return;
 		}
 		else
 		{
-			command_fail(si, fault_nochange, _("Fingerprint \2%s\2 is already on another user's fingerprint list."), mcfp);
+			command_fail(si, fault_nochange, _("Fingerprint \2%s\2 is already on another user's fingerprint list."), hdata.certfp);
 			return;
 		}
-		if (mycertfp_add(mu, mcfp))
+
+		if (mycertfp_add(mu, hdata.certfp, false))
 		{
-			command_success_nodata(si, _("Added fingerprint \2%s\2 to your fingerprint list."), mcfp);
-			logcommand(si, CMDLOG_SET, "CERT:ADD: \2%s\2", mcfp);
+			command_success_nodata(si, _("Added fingerprint \2%s\2 to your fingerprint list."), hdata.certfp);
+			logcommand(si, CMDLOG_SET, "CERT:ADD: \2%s\2", hdata.certfp);
 		}
 		else
 			command_fail(si, fault_toomany, _("Your fingerprint list is full."));
@@ -142,29 +175,60 @@ static void ns_cmd_cert(sourceinfo_t *si, int parc, char *parv[])
 		mu = si->smu;
 		if (mu == NULL)
 		{
-			command_fail(si, fault_noprivs, _("You are not logged in."));
+			command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 			return;
 		}
+
+		struct hook_user_certfp hdata = {
+			.si = si,
+			.mu = mu,
+		};
+		mowgli_strlcpy(hdata.certfp, parv[1], sizeof hdata.certfp);
+		hook_call_user_certfp_del(&hdata);
+
 		cert = mycertfp_find(parv[1]);
+		if (cert == NULL && strcasecmp(parv[1], hdata.certfp))
+			cert = mycertfp_find(hdata.certfp);
+
 		if (cert == NULL || cert->mu != mu)
 		{
 			command_fail(si, fault_nochange, _("Fingerprint \2%s\2 is not on your fingerprint list."), parv[1]);
 			return;
 		}
-		command_success_nodata(si, _("Deleted fingerprint \2%s\2 from your fingerprint list."), parv[1]);
-		logcommand(si, CMDLOG_SET, "CERT:DEL: \2%s\2", parv[1]);
+
+		command_success_nodata(si, _("Deleted fingerprint \2%s\2 from your fingerprint list."), cert->certfp);
+		logcommand(si, CMDLOG_SET, "CERT:DEL: \2%s\2", cert->certfp);
 		mycertfp_delete(cert);
 	}
 	else
 	{
 		command_fail(si, fault_needmoreparams, STR_INVALID_PARAMS, "CERT");
-		command_fail(si, fault_needmoreparams, _("Syntax: CERT ADD|DEL|LIST [fingerprint]"));
+		command_fail(si, fault_needmoreparams, _("Syntax: CERT ADD|DEL|LIST|CLEAR [fingerprint]"));
 		return;
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_cert = {
+	.name           = "CERT",
+	.desc           = N_("Changes and shows your nickname CertFP authentication list."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_cert,
+	.help           = { .path = "nickserv/cert" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	service_named_bind_command("nickserv", &ns_cert);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_cert);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/cert", MODULE_UNLOAD_CAPABILITY_OK)

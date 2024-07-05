@@ -1,51 +1,24 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Prevent a bot from being assigned by non IRC operators.
- *
  */
 
-#include "atheme.h"
-#include "botserv.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"botserv/set_private", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static struct botserv_main_symbols *bs_main_syms = NULL;
+static mowgli_patricia_t **bs_set_cmdtree = NULL;
 
-mowgli_patricia_t **bs_set_cmdtree;
-
-fn_botserv_bot_find *botserv_bot_find;
-mowgli_list_t *bs_bots;
-
-static void bs_cmd_set_private(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t bs_set_private = { "PRIVATE", N_("Prevent a bot from being assigned by non IRC operators."), PRIV_CHAN_ADMIN, 2, bs_cmd_set_private, { .path = "botserv/set_private" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, bs_set_cmdtree, "botserv/set_core", "bs_set_cmdtree");
-
-	MODULE_TRY_REQUEST_SYMBOL(m, bs_bots, "botserv/main", "bs_bots");
-	MODULE_TRY_REQUEST_SYMBOL(m, botserv_bot_find, "botserv/main", "botserv_bot_find");
-
-	command_add(&bs_set_private, *bs_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&bs_set_private, *bs_set_cmdtree);
-}
-
-static void bs_cmd_set_private(sourceinfo_t *si, int parc, char *parv[])
+static void
+bs_cmd_set_private(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *botserv = parv[0];
 	char *option = parv[1];
-	botserv_bot_t *bot;
+	struct botserv_bot *bot;
 
 	if (parc < 2 || !botserv || !option)
 	{
@@ -54,7 +27,7 @@ static void bs_cmd_set_private(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	bot = botserv_bot_find(botserv);
+	bot = bs_main_syms->bot_find(botserv);
 	if (!bot)
 	{
 		command_fail(si, fault_nosuch_target, _("\2%s\2 is not a bot."), botserv);
@@ -63,13 +36,13 @@ static void bs_cmd_set_private(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!si->smu)
 	{
-		command_fail(si, fault_noprivs, _("You are not logged in."));
+		command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 		return;
 	}
 
 	if (!has_priv(si, PRIV_CHAN_ADMIN))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -77,13 +50,13 @@ static void bs_cmd_set_private(sourceinfo_t *si, int parc, char *parv[])
 	{
 		bot->private = true;
 		logcommand(si, CMDLOG_SET, "SET:PRIVATE:ON: \2%s\2", bot->nick);
-		command_success_nodata(si, _("Private mode of bot %s is now \2ON\2."), bot->nick);
+		command_success_nodata(si, _("Private mode of bot \2%s\2 is now \2ON\2."), bot->nick);
 	}
 	else if(!irccasecmp(option, "OFF"))
 	{
 		bot->private = false;
 		logcommand(si, CMDLOG_SET, "SET:PRIVATE:OFF: \2%s\2", bot->nick);
-		command_success_nodata(si, _("Private mode of bot %s is now \2OFF\2."), bot->nick);
+		command_success_nodata(si, _("Private mode of bot \2%s\2 is now \2OFF\2."), bot->nick);
 	}
 	else
 	{
@@ -92,8 +65,28 @@ static void bs_cmd_set_private(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command bs_set_private = {
+	.name           = "PRIVATE",
+	.desc           = N_("Prevent a bot from being assigned by non IRC operators."),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 2,
+	.cmd            = &bs_cmd_set_private,
+	.help           = { .path = "botserv/set_private" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, bs_main_syms, "botserv/main", "botserv_main_symbols")
+	MODULE_TRY_REQUEST_SYMBOL(m, bs_set_cmdtree, "botserv/set_core", "bs_set_cmdtree")
+
+	command_add(&bs_set_private, *bs_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&bs_set_private, *bs_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("botserv/set_private", MODULE_UNLOAD_CAPABILITY_OK)

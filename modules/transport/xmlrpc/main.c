@@ -1,79 +1,56 @@
 /*
- * Copyright (c) 2005-2006 Jilles Tjoelker et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2014 Jilles Tjoelker, et al.
  *
  * New xmlrpc implementation
- *
  */
 
-#include "atheme.h"
-#include "httpd.h"
+#include <atheme.h>
 #include "xmlrpclib.h"
-#include "datastream.h"
-#include "authcookie.h"
 
-DECLARE_MODULE_V1
-(
-	"transport/xmlrpc", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void handle_request(connection_t *cptr, void *requestbuf);
-
-path_handler_t handle_xmlrpc = { NULL, handle_request };
-
-struct
-{
+static struct {
 	char *path;
 } xmlrpc_config;
 
-connection_t *current_cptr; /* XXX: Hack: src/xmlrpc.c requires us to do this */
+static struct connection *current_cptr = NULL; // XXX: Hack: src/xmlrpc.c requires us to do this
 
-mowgli_list_t *httpd_path_handlers;
+static mowgli_list_t *httpd_path_handlers = NULL;
 
-static void xmlrpc_command_fail(sourceinfo_t *si, cmd_faultcode_t code, const char *message);
-static void xmlrpc_command_success_nodata(sourceinfo_t *si, const char *message);
-static void xmlrpc_command_success_string(sourceinfo_t *si, const char *result, const char *message);
+// Configuration
+static mowgli_list_t conf_xmlrpc_table;
 
-static int xmlrpcmethod_login(void *conn, int parc, char *parv[]);
-static int xmlrpcmethod_logout(void *conn, int parc, char *parv[]);
-static int xmlrpcmethod_command(void *conn, int parc, char *parv[]);
-static int xmlrpcmethod_privset(void *conn, int parc, char *parv[]);
-static int xmlrpcmethod_ison(void *conn, int parc, char *parv[]);
-static int xmlrpcmethod_metadata(void *conn, int parc, char *parv[]);
-
-/* Configuration */
-mowgli_list_t conf_xmlrpc_table;
-
-struct sourceinfo_vtable xmlrpc_vtable = {
-	.description = "xmlrpc",
-	.cmd_fail = xmlrpc_command_fail,
-	.cmd_success_nodata = xmlrpc_command_success_nodata,
-	.cmd_success_string = xmlrpc_command_success_string
-};
-
-static char *dump_buffer(char *buf, int length)
+static char *
+dump_buffer(char *buf, int length)
 {
 	struct httpddata *hd;
 	char buf1[300];
 
 	hd = current_cptr->userdata;
-	snprintf(buf1, sizeof buf1, "HTTP/1.1 200 OK\r\n"
-			"%s"
-			"Server: Atheme/%s\r\n"
-			"Content-Type: text/xml\r\n"
-			"Content-Length: %d\r\n\r\n",
-			hd->connection_close ? "Connection: close\r\n" : "",
-			PACKAGE_VERSION, length);
+
+	snprintf(buf1, sizeof buf1,
+	         "HTTP/1.1 200 OK\r\n"
+	         "Server: %s/%s\r\n"
+	         "Content-Type: text/xml\r\n"
+	         "Content-Length: %d\r\n"
+	         "%s"
+	         "\r\n",
+	         PACKAGE_TARNAME, PACKAGE_VERSION,
+	         length,
+	         hd->connection_close ? "Connection: close\r\n" : "");
+
 	sendq_add(current_cptr, buf1, strlen(buf1));
 	sendq_add(current_cptr, buf, length);
+
 	if (hd->connection_close)
 		sendq_add_eof(current_cptr);
+
 	return buf;
 }
 
-static void handle_request(connection_t *cptr, void *requestbuf)
+static void
+handle_request(struct connection *cptr, void *requestbuf)
 {
 	current_cptr = cptr;
 	xmlrpc_process(requestbuf, cptr);
@@ -82,7 +59,10 @@ static void handle_request(connection_t *cptr, void *requestbuf)
 	return;
 }
 
-static void xmlrpc_config_ready(void *vptr)
+static struct path_handler handle_xmlrpc = { NULL, handle_request };
+
+static void
+xmlrpc_config_ready(void *vptr)
 {
 	/* Note: handle_xmlrpc.path may point to freed memory between
 	 * reading the config and here.
@@ -100,56 +80,10 @@ static void xmlrpc_config_ready(void *vptr)
 		slog(LG_ERROR, "xmlrpc_config_ready(): xmlrpc {} block missing or invalid");
 }
 
-void _modinit(module_t *m)
+static void
+xmlrpc_command_fail(struct sourceinfo *si, enum cmd_faultcode code, const char *message)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, httpd_path_handlers, "misc/httpd", "httpd_path_handlers");
-
-	hook_add_event("config_ready");
-	hook_add_config_ready(xmlrpc_config_ready);
-
-	xmlrpc_config.path = sstrdup("/xmlrpc");
-
-	add_subblock_top_conf("XMLRPC", &conf_xmlrpc_table);
-	add_dupstr_conf_item("PATH", &conf_xmlrpc_table, 0, &xmlrpc_config.path, NULL);
-
-	xmlrpc_set_buffer(dump_buffer);
-	xmlrpc_set_options(XMLRPC_HTTP_HEADER, XMLRPC_OFF);
-	xmlrpc_register_method("atheme.login", xmlrpcmethod_login);
-	xmlrpc_register_method("atheme.logout", xmlrpcmethod_logout);
-	xmlrpc_register_method("atheme.command", xmlrpcmethod_command);
-	xmlrpc_register_method("atheme.privset", xmlrpcmethod_privset);
-	xmlrpc_register_method("atheme.ison", xmlrpcmethod_ison);
-	xmlrpc_register_method("atheme.metadata", xmlrpcmethod_metadata);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	mowgli_node_t *n;
-
-	xmlrpc_unregister_method("atheme.login");
-	xmlrpc_unregister_method("atheme.logout");
-	xmlrpc_unregister_method("atheme.command");
-	xmlrpc_unregister_method("atheme.privset");
-	xmlrpc_unregister_method("atheme.ison");
-	xmlrpc_unregister_method("atheme.metadata");
-
-	if ((n = mowgli_node_find(&handle_xmlrpc, httpd_path_handlers)) != NULL)
-	{
-		mowgli_node_delete(n, httpd_path_handlers);
-		mowgli_node_free(n);
-	}
-
-	del_conf_item("PATH", &conf_xmlrpc_table);
-	del_top_conf("XMLRPC");
-
-	free(xmlrpc_config.path);
-
-	hook_del_config_ready(xmlrpc_config_ready);
-}
-
-static void xmlrpc_command_fail(sourceinfo_t *si, cmd_faultcode_t code, const char *message)
-{
-	connection_t *cptr;
+	struct connection *cptr;
 	struct httpddata *hd;
 	char *newmessage;
 
@@ -159,13 +93,14 @@ static void xmlrpc_command_fail(sourceinfo_t *si, cmd_faultcode_t code, const ch
 		return;
 	newmessage = xmlrpc_normalizeBuffer(message);
 	xmlrpc_generic_error(code, newmessage);
-	free(newmessage);
+	sfree(newmessage);
 	hd->sent_reply = true;
 }
 
-static void xmlrpc_command_success_nodata(sourceinfo_t *si, const char *message)
+static void
+xmlrpc_command_success_nodata(struct sourceinfo *si, const char *message)
 {
-	connection_t *cptr;
+	struct connection *cptr;
 	struct httpddata *hd;
 	char *newmessage;
 	char *p;
@@ -176,7 +111,7 @@ static void xmlrpc_command_success_nodata(sourceinfo_t *si, const char *message)
 	hd = cptr->userdata;
 	if (hd->sent_reply)
 	{
-		free(newmessage);
+		sfree(newmessage);
 		return;
 	}
 	if (hd->replybuf != NULL)
@@ -191,12 +126,13 @@ static void xmlrpc_command_success_nodata(sourceinfo_t *si, const char *message)
 		p = hd->replybuf;
 	}
         strcpy(p, newmessage);
-	free(newmessage);
+	sfree(newmessage);
 }
 
-static void xmlrpc_command_success_string(sourceinfo_t *si, const char *result, const char *message)
+static void
+xmlrpc_command_success_string(struct sourceinfo *si, const char *result, const char *message)
 {
-	connection_t *cptr;
+	struct connection *cptr;
 	struct httpddata *hd;
 
 	cptr = si->connection;
@@ -207,9 +143,16 @@ static void xmlrpc_command_success_string(sourceinfo_t *si, const char *result, 
 	hd->sent_reply = true;
 }
 
-/* These taken from the old modules/xmlrpc/account.c */
-/*
- * atheme.login
+static struct sourceinfo_vtable xmlrpc_vtable = {
+	.description = "xmlrpc",
+	.cmd_fail = xmlrpc_command_fail,
+	.cmd_success_nodata = xmlrpc_command_success_nodata,
+	.cmd_success_string = xmlrpc_command_success_string
+};
+
+// These taken from the old modules/xmlrpc/account.c
+
+/* atheme.login
  *
  * XML Inputs:
  *       account name, password, source ip (optional)
@@ -222,13 +165,14 @@ static void xmlrpc_command_success_string(sourceinfo_t *si, const char *result, 
  *       default - success (authcookie)
  *
  * Side Effects:
- *       an authcookie ticket is created for the myuser_t.
+ *       an authcookie ticket is created for the struct myuser.
  *       the user's lastlogin is updated
  */
-static int xmlrpcmethod_login(void *conn, int parc, char *parv[])
+static int
+xmlrpcmethod_login(void *conn, int parc, char *parv[])
 {
-	myuser_t *mu;
-	authcookie_t *ac;
+	struct myuser *mu;
+	struct authcookie *ac;
 	const char *sourceip;
 
 	if (parc < 2)
@@ -254,7 +198,7 @@ static int xmlrpcmethod_login(void *conn, int parc, char *parv[])
 
 	if (!verify_password(mu, parv[1]))
 	{
-		sourceinfo_t *si;
+		struct sourceinfo *si;
 
 		logcommand_external(nicksvs.me, "xmlrpc", conn, sourceip, NULL, CMDLOG_LOGIN, "failed LOGIN to \2%s\2 (bad password)", entity(mu)->name);
 		xmlrpc_generic_error(fault_authfail, "The password is not valid for this account.");
@@ -268,7 +212,7 @@ static int xmlrpcmethod_login(void *conn, int parc, char *parv[])
 
 		bad_password(si, mu);
 
-		object_unref(si);
+		atheme_object_unref(si);
 
 		return 0;
 	}
@@ -284,8 +228,7 @@ static int xmlrpcmethod_login(void *conn, int parc, char *parv[])
 	return 0;
 }
 
-/*
- * atheme.logout
+/* atheme.logout
  *
  * XML inputs:
  *       authcookie, and account name.
@@ -299,10 +242,11 @@ static int xmlrpcmethod_login(void *conn, int parc, char *parv[])
  * Side Effects:
  *       an authcookie ticket is destroyed.
  */
-static int xmlrpcmethod_logout(void *conn, int parc, char *parv[])
+static int
+xmlrpcmethod_logout(void *conn, int parc, char *parv[])
 {
-	authcookie_t *ac;
-	myuser_t *mu;
+	struct authcookie *ac;
+	struct myuser *mu;
 
 	if (parc < 2)
 	{
@@ -332,8 +276,7 @@ static int xmlrpcmethod_logout(void *conn, int parc, char *parv[])
 	return 0;
 }
 
-/*
- * atheme.command
+/* atheme.command
  *
  * XML inputs:
  *       authcookie, account name, source ip, service name, command name,
@@ -345,20 +288,21 @@ static int xmlrpcmethod_logout(void *conn, int parc, char *parv[])
  * Side Effects:
  *       command is executed
  */
-static int xmlrpcmethod_command(void *conn, int parc, char *parv[])
+static int
+xmlrpcmethod_command(void *conn, int parc, char *parv[])
 {
-	myuser_t *mu;
-	service_t *svs;
-	command_t *cmd;
-	sourceinfo_t *si;
+	struct myuser *mu;
+	struct service *svs;
+	struct command *cmd;
+	struct sourceinfo *si;
 	int newparc;
 	char *newparv[20];
-	struct httpddata *hd = ((connection_t *)conn)->userdata;
+	struct httpddata *hd = ((struct connection *)conn)->userdata;
 	int i;
 
 	for (i = 0; i < parc; i++)
 	{
-		if (*parv[i] == '\0' || strchr(parv[i], '\r') || strchr(parv[i], '\n'))
+		if ((i >= 2 && *parv[i] == '\0') || strchr(parv[i], '\r') || strchr(parv[i], '\n'))
 		{
 			xmlrpc_generic_error(fault_badparams, "Invalid parameters.");
 			return 0;
@@ -371,7 +315,7 @@ static int xmlrpcmethod_command(void *conn, int parc, char *parv[])
 		return 0;
 	}
 
-	if (*parv[1] != '\0' && strlen(parv[0]) > 1)
+	if (*parv[0] && *parv[1])
 	{
 		if ((mu = myuser_find(parv[1])) == NULL)
 		{
@@ -388,7 +332,7 @@ static int xmlrpcmethod_command(void *conn, int parc, char *parv[])
 	else
 		mu = NULL;
 
-	/* try literal service name first, then user-configured nickname. */
+	// try literal service name first, then user-configured nickname.
 	svs = service_find(parv[3]);
 	if ((svs == NULL && (svs = service_find_nick(parv[3])) == NULL) || svs->commands == NULL)
 	{
@@ -419,7 +363,7 @@ static int xmlrpcmethod_command(void *conn, int parc, char *parv[])
 	si->force_language = language_find("en");
 	command_exec(svs, si, cmd, newparc, newparv);
 
-	/* XXX: needs to be fixed up for restartable commands... */
+	// XXX: needs to be fixed up for restartable commands...
 	if (!hd->sent_reply)
 	{
 		if (hd->replybuf != NULL)
@@ -428,13 +372,12 @@ static int xmlrpcmethod_command(void *conn, int parc, char *parv[])
 			xmlrpc_generic_error(fault_unimplemented, "Command did not return a result.");
 	}
 
-	object_unref(si);
+	atheme_object_unref(si);
 
 	return 0;
 }
 
-/*
- * atheme.privset
+/* atheme.privset
  *
  * XML inputs:
  *       authcookie, account name, source ip
@@ -445,9 +388,10 @@ static int xmlrpcmethod_command(void *conn, int parc, char *parv[])
  * Side Effects:
  *       command is executed
  */
-static int xmlrpcmethod_privset(void *conn, int parc, char *parv[])
+static int
+xmlrpcmethod_privset(void *conn, int parc, char *parv[])
 {
-	myuser_t *mu;
+	struct myuser *mu;
 	int i;
 
 	for (i = 0; i < parc; i++)
@@ -484,7 +428,7 @@ static int xmlrpcmethod_privset(void *conn, int parc, char *parv[])
 
 	if (mu == NULL || !is_soper(mu))
 	{
-		/* no privileges */
+		// no privileges
 		xmlrpc_send_string("");
 		return 0;
 	}
@@ -493,8 +437,7 @@ static int xmlrpcmethod_privset(void *conn, int parc, char *parv[])
 	return 0;
 }
 
-/*
- * atheme.ison
+/* atheme.ison
  *
  * XML inputs:
  *       nickname
@@ -504,9 +447,10 @@ static int xmlrpcmethod_privset(void *conn, int parc, char *parv[])
  *       string: if nickname is authenticated, what entity they are authed to,
  *       else '*'
  */
-static int xmlrpcmethod_ison(void *conn, int parc, char *parv[])
+static int
+xmlrpcmethod_ison(void *conn, int parc, char *parv[])
 {
-	user_t *u;
+	struct user *u;
 	int i;
 	char buf[XMLRPC_BUFSIZE], buf2[XMLRPC_BUFSIZE];
 
@@ -541,8 +485,7 @@ static int xmlrpcmethod_ison(void *conn, int parc, char *parv[])
 	return 0;
 }
 
-/*
- * atheme.metadata
+/* atheme.metadata
  *
  * XML inputs:
  *       entity name, UID or channel name
@@ -552,9 +495,10 @@ static int xmlrpcmethod_ison(void *conn, int parc, char *parv[])
  * XML outputs:
  *       string: metadata value
  */
-static int xmlrpcmethod_metadata(void *conn, int parc, char *parv[])
+static int
+xmlrpcmethod_metadata(void *conn, int parc, char *parv[])
 {
-	metadata_t *md;
+	struct metadata *md;
 	int i;
 	char buf[XMLRPC_BUFSIZE];
 
@@ -575,7 +519,7 @@ static int xmlrpcmethod_metadata(void *conn, int parc, char *parv[])
 
 	if (*parv[0] == '#')
 	{
-		mychan_t *mc;
+		struct mychan *mc;
 
 		mc = mychan_find(parv[0]);
 		if (mc == NULL)
@@ -588,7 +532,7 @@ static int xmlrpcmethod_metadata(void *conn, int parc, char *parv[])
 	}
 	else
 	{
-		myentity_t *mt;
+		struct myentity *mt;
 
 		mt = myentity_find(parv[0]);
 		if (mt == NULL)
@@ -615,5 +559,52 @@ static int xmlrpcmethod_metadata(void *conn, int parc, char *parv[])
 	return 0;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs ts=8 sw=8 noexpandtab
- */
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, httpd_path_handlers, "misc/httpd", "httpd_path_handlers")
+
+	hook_add_config_ready(xmlrpc_config_ready);
+
+	xmlrpc_config.path = sstrdup("/xmlrpc");
+
+	add_subblock_top_conf("XMLRPC", &conf_xmlrpc_table);
+	add_dupstr_conf_item("PATH", &conf_xmlrpc_table, 0, &xmlrpc_config.path, NULL);
+
+	xmlrpc_set_buffer(dump_buffer);
+	xmlrpc_set_options(XMLRPC_HTTP_HEADER, XMLRPC_OFF);
+	xmlrpc_register_method("atheme.login", xmlrpcmethod_login);
+	xmlrpc_register_method("atheme.logout", xmlrpcmethod_logout);
+	xmlrpc_register_method("atheme.command", xmlrpcmethod_command);
+	xmlrpc_register_method("atheme.privset", xmlrpcmethod_privset);
+	xmlrpc_register_method("atheme.ison", xmlrpcmethod_ison);
+	xmlrpc_register_method("atheme.metadata", xmlrpcmethod_metadata);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	mowgli_node_t *n;
+
+	xmlrpc_unregister_method("atheme.login");
+	xmlrpc_unregister_method("atheme.logout");
+	xmlrpc_unregister_method("atheme.command");
+	xmlrpc_unregister_method("atheme.privset");
+	xmlrpc_unregister_method("atheme.ison");
+	xmlrpc_unregister_method("atheme.metadata");
+
+	if ((n = mowgli_node_find(&handle_xmlrpc, httpd_path_handlers)) != NULL)
+	{
+		mowgli_node_delete(n, httpd_path_handlers);
+		mowgli_node_free(n);
+	}
+
+	del_conf_item("PATH", &conf_xmlrpc_table);
+	del_top_conf("XMLRPC");
+
+	sfree(xmlrpc_config.path);
+
+	hook_del_config_ready(xmlrpc_config_ready);
+}
+
+SIMPLE_DECLARE_MODULE_V1("transport/xmlrpc", MODULE_UNLOAD_CAPABILITY_OK)

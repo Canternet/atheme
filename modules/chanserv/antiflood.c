@@ -1,108 +1,104 @@
 /*
- * Copyright (c) 2013 William Pitcock <nenolod@dereferenced.org>.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2013 William Pitcock <nenolod@dereferenced.org>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "atheme.h"
-
-DECLARE_MODULE_V1
-(
-	"chanserv/antiflood", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org/>"
-);
-
-static int antiflood_msg_time = 60;
-static int antiflood_msg_count = 10;
+#include <atheme.h>
 
 #define METADATA_KEY_ENFORCE_METHOD	"private:antiflood:enforce-method"
 
-typedef enum {
+enum antiflood_enforce_method
+{
 	ANTIFLOOD_ENFORCE_QUIET = 0,
 	ANTIFLOOD_ENFORCE_KICKBAN,
 	ANTIFLOOD_ENFORCE_KLINE,
-	ANTIFLOOD_ENFORCE_COUNT
-} antiflood_enforce_method_t;
+};
 
-static antiflood_enforce_method_t antiflood_enforce_method = ANTIFLOOD_ENFORCE_QUIET;
-
-typedef enum {
+enum mqueue_enforce_strategy
+{
 	MQ_ENFORCE_NONE = 0,
 	MQ_ENFORCE_MSG,
 	MQ_ENFORCE_LINE,
-} mqueue_enforce_strategy_t;
+};
 
-typedef struct {
+struct antiflood_enforce_method_impl
+{
+	void (*enforce)(struct user *, struct channel *);
+	void (*unenforce)(struct channel *);
+};
+
+struct flood_message_queue
+{
 	char *name;
 	size_t max;
 	time_t last_used;
 	mowgli_list_t entries;
-} mqueue_t;
+};
 
-typedef struct {
+struct flood_message
+{
 	stringref source;
 	char *message;
 	time_t time;
 	mowgli_node_t node;
-} msg_t;
+};
+
+static struct chanban *(*place_quietmask)(struct channel *, int, const char *) = NULL;
+
+static enum antiflood_enforce_method antiflood_enforce_method = ANTIFLOOD_ENFORCE_QUIET;
 
 static mowgli_heap_t *msg_heap = NULL;
+static mowgli_heap_t *mqueue_heap = NULL;
+static mowgli_patricia_t *mqueue_trie = NULL;
+static mowgli_patricia_t **cs_set_cmdtree = NULL;
+static mowgli_eventloop_timer_t *mqueue_gc_timer = NULL;
+static mowgli_eventloop_timer_t *antiflood_unenforce_timer = NULL;
+
+static time_t antiflood_msg_time = SECONDS_PER_MINUTE;
+static size_t antiflood_msg_count = 10;
 
 static void
-msg_destroy(msg_t *msg, mqueue_t *mq)
+msg_destroy(struct flood_message *mesg, struct flood_message_queue *mq)
 {
-	free(msg->message);
-	strshare_unref(msg->source);
-	mowgli_node_delete(&msg->node, &mq->entries);
+	sfree(mesg->message);
+	strshare_unref(mesg->source);
+	mowgli_node_delete(&mesg->node, &mq->entries);
 
-	mowgli_heap_free(msg_heap, msg);
+	mowgli_heap_free(msg_heap, mesg);
 }
 
-static msg_t *
-msg_create(mqueue_t *mq, user_t *u, const char *message)
+static struct flood_message *
+msg_create(struct flood_message_queue *mq, struct user *u, const char *message)
 {
-	msg_t *msg;
+	struct flood_message *mesg;
 
-	msg = mowgli_heap_alloc(msg_heap);
-	msg->message = sstrdup(message);
-	msg->time = CURRTIME;
-	msg->source = u->uid != NULL ? strshare_ref(u->uid) : strshare_ref(u->nick);
+	mesg = mowgli_heap_alloc(msg_heap);
+	mesg->message = sstrdup(message);
+	mesg->time = CURRTIME;
+	mesg->source = u->uid != NULL ? strshare_ref(u->uid) : strshare_ref(u->nick);
 
 	if (MOWGLI_LIST_LENGTH(&mq->entries) > mq->max)
 	{
-		msg_t *head_msg = mq->entries.head->data;
-		msg_destroy(head_msg, mq);
+		struct flood_message *head_mesg = mq->entries.head->data;
+		msg_destroy(head_mesg, mq);
 	}
 
-	mowgli_node_add(msg, &msg->node, &mq->entries);
+	mowgli_node_add(mesg, &mesg->node, &mq->entries);
 	mq->last_used = CURRTIME;
 
-	return msg;
+	return mesg;
 }
 
-static mowgli_patricia_t *mqueue_trie = NULL;
-static mowgli_heap_t *mqueue_heap = NULL;
-static mowgli_eventloop_timer_t *mqueue_gc_timer = NULL;
-
-static mqueue_t *
+static struct flood_message_queue *
 mqueue_create(const char *name)
 {
-	mqueue_t *mq;
+	struct flood_message_queue *mq;
 
 	mq = mowgli_heap_alloc(mqueue_heap);
 	mq->name = sstrdup(name);
@@ -115,25 +111,25 @@ mqueue_create(const char *name)
 }
 
 static void
-mqueue_free(mqueue_t *mq)
+mqueue_free(struct flood_message_queue *mq)
 {
 	mowgli_node_t *n, *tn;
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, mq->entries.head)
 	{
-		msg_t *msg = n->data;
+		struct flood_message *mesg = n->data;
 
-		msg_destroy(msg, mq);
+		msg_destroy(mesg, mq);
 	}
 
-	free(mq->name);
+	sfree(mq->name);
 	mowgli_heap_free(mqueue_heap, mq);
 }
 
-static mqueue_t *
-mqueue_get(mychan_t *mc)
+static struct flood_message_queue *
+mqueue_get(struct mychan *mc)
 {
-	mqueue_t *mq;
+	struct flood_message_queue *mq;
 
 	mq = mowgli_patricia_retrieve(mqueue_trie, mc->name);
 	if (mq == NULL)
@@ -143,7 +139,7 @@ mqueue_get(mychan_t *mc)
 }
 
 static void
-mqueue_destroy(mqueue_t *mq)
+mqueue_destroy(struct flood_message_queue *mq)
 {
 	mowgli_patricia_delete(mqueue_trie, mq->name);
 
@@ -153,7 +149,7 @@ mqueue_destroy(mqueue_t *mq)
 static void
 mqueue_trie_destroy_cb(const char *key, void *data, void *privdata)
 {
-	mqueue_t *mq = data;
+	struct flood_message_queue *mq = data;
 
 	mqueue_free(mq);
 }
@@ -162,19 +158,19 @@ static void
 mqueue_gc(void *unused)
 {
 	mowgli_patricia_iteration_state_t iter;
-	mqueue_t *mq;
+	struct flood_message_queue *mq;
 
 	MOWGLI_PATRICIA_FOREACH(mq, &iter, mqueue_trie)
 	{
-		if ((mq->last_used + 3600) < CURRTIME)
+		if ((mq->last_used + SECONDS_PER_HOUR) < CURRTIME)
 			mqueue_destroy(mq);
 	}
 }
 
-static mqueue_enforce_strategy_t
-mqueue_should_enforce(mqueue_t *mq)
+static enum mqueue_enforce_strategy
+mqueue_should_enforce(struct flood_message_queue *mq)
 {
-	msg_t *oldest, *newest;
+	struct flood_message *oldest, *newest;
 	time_t age_delta;
 
 	if (MOWGLI_LIST_LENGTH(&mq->entries) < mq->max)
@@ -196,17 +192,17 @@ mqueue_should_enforce(mqueue_t *mq)
 
 		MOWGLI_ITER_FOREACH(n, mq->entries.head)
 		{
-			msg_t *msg = n->data;
+			struct flood_message *mesg = n->data;
 
-			if (!strcasecmp(msg->message, newest->message))
+			if (!strcasecmp(mesg->message, newest->message))
 				msg_matches++;
 
-			if (msg->source == newest->source)
+			if (mesg->source == newest->source)
 			{
 				usr_matches++;
 
 				if (!usr_first_seen)
-					usr_first_seen = msg->time;
+					usr_first_seen = mesg->time;
 			}
 		}
 
@@ -221,11 +217,9 @@ mqueue_should_enforce(mqueue_t *mq)
 	return MQ_ENFORCE_NONE;
 }
 
-static chanban_t *(*place_quietmask)(channel_t *c, int dir, const char *hostbuf) = NULL;
-
-/* this requires `chanserv/quiet` to be loaded. */
+// this requires `chanserv/quiet` to be loaded.
 static void
-antiflood_enforce_quiet(user_t *u, channel_t *c)
+antiflood_enforce_quiet(struct user *u, struct channel *c)
 {
 	char hostbuf[BUFSIZE];
 
@@ -234,7 +228,7 @@ antiflood_enforce_quiet(user_t *u, channel_t *c)
 
 	if (place_quietmask != NULL)
 	{
-		chanban_t *cb;
+		struct chanban *cb;
 
 		cb = place_quietmask(c, MTYPE_ADD, hostbuf);
 		if (cb != NULL)
@@ -244,13 +238,13 @@ antiflood_enforce_quiet(user_t *u, channel_t *c)
 }
 
 static void
-antiflood_unenforce_banlike(channel_t *c)
+antiflood_unenforce_banlike(struct channel *c)
 {
 	mowgli_node_t *n, *tn;
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, c->bans.head)
 	{
-		chanban_t *cb = n->data;
+		struct chanban *cb = n->data;
 
 		if (!(cb->flags & CBAN_ANTIFLOOD))
 			continue;
@@ -261,15 +255,15 @@ antiflood_unenforce_banlike(channel_t *c)
 }
 
 static void
-antiflood_enforce_kickban(user_t *u, channel_t *c)
+antiflood_enforce_kickban(struct user *u, struct channel *c)
 {
-	chanban_t *cb;
+	struct chanban *cb;
 
 	ban(chansvs.me->me, c, u);
 	remove_ban_exceptions(chansvs.me->me, c, u);
 	try_kick(chansvs.me->me, c, u, "Flooding");
 
-	/* poison tail */
+	// poison tail
 	if (c->bans.tail != NULL)
 	{
 		cb = c->bans.tail->data;
@@ -284,27 +278,22 @@ antiflood_enforce_kickban(user_t *u, channel_t *c)
 }
 
 static void
-antiflood_enforce_kline(user_t *u, channel_t *c)
+antiflood_enforce_kline(struct user *u, struct channel *c)
 {
-	kline_add_user(u, "Flooding", 86400, chansvs.nick);
+	kline_add_user(u, "Flooding", SECONDS_PER_DAY, chansvs.nick);
 	slog(LG_INFO, "ANTIFLOOD:ENFORCE:AKILL: \2%s!%s@%s\2 from \2%s\2", u->nick, u->user, u->vhost, c->name);
 }
 
-typedef struct {
-	void (*enforce)(user_t *u, channel_t *c);
-	void (*unenforce)(channel_t *c);
-} antiflood_enforce_method_impl_t;
-
-static antiflood_enforce_method_impl_t antiflood_enforce_methods[ANTIFLOOD_ENFORCE_COUNT] = {
-	[ANTIFLOOD_ENFORCE_QUIET]   = { &antiflood_enforce_quiet, &antiflood_unenforce_banlike },
-	[ANTIFLOOD_ENFORCE_KICKBAN] = { &antiflood_enforce_kickban, &antiflood_unenforce_banlike },
-	[ANTIFLOOD_ENFORCE_KLINE]   = { &antiflood_enforce_kline },
-};
-
-static inline antiflood_enforce_method_impl_t *
-antiflood_enforce_method_impl_get(mychan_t *mc)
+static inline const struct antiflood_enforce_method_impl *
+antiflood_enforce_method_impl_get(struct mychan *mc)
 {
-	metadata_t *md;
+	static const struct antiflood_enforce_method_impl antiflood_enforce_methods[] = {
+		[ANTIFLOOD_ENFORCE_QUIET]   = { &antiflood_enforce_quiet, &antiflood_unenforce_banlike },
+		[ANTIFLOOD_ENFORCE_KICKBAN] = { &antiflood_enforce_kickban, &antiflood_unenforce_banlike },
+		[ANTIFLOOD_ENFORCE_KLINE]   = { &antiflood_enforce_kline, NULL },
+	};
+
+	struct metadata *md;
 
 	md = metadata_find(mc, METADATA_KEY_ENFORCE_METHOD);
 	if (md != NULL)
@@ -324,11 +313,11 @@ static void
 antiflood_unenforce_timer_cb(void *unused)
 {
 	mowgli_patricia_iteration_state_t state;
-	mychan_t *mc;
+	struct mychan *mc;
 
 	MOWGLI_PATRICIA_FOREACH(mc, &state, mclist)
 	{
-		antiflood_enforce_method_impl_t *enf = antiflood_enforce_method_impl_get(mc);
+		const struct antiflood_enforce_method_impl *enf = antiflood_enforce_method_impl_get(mc);
 
 		if (mc->chan == NULL)
 			continue;
@@ -338,15 +327,12 @@ antiflood_unenforce_timer_cb(void *unused)
 	}
 }
 
-static mowgli_eventloop_timer_t *antiflood_unenforce_timer = NULL;
-
 static void
-on_channel_message(hook_cmessage_data_t *data)
+on_channel_message(struct hook_channel_message *data)
 {
-	chanuser_t *cu;
-	mychan_t *mc;
-	mqueue_t *mq;
-	msg_t *msg;
+	struct chanuser *cu;
+	struct mychan *mc;
+	struct flood_message_queue *mq;
 
 	return_if_fail(data != NULL);
 	return_if_fail(data->msg != NULL);
@@ -364,19 +350,19 @@ on_channel_message(hook_cmessage_data_t *data)
 	mq = mqueue_get(mc);
 	return_if_fail(mq != NULL);
 
-	msg = msg_create(mq, data->u, data->msg);
+	msg_create(mq, data->u, data->msg);
 
-	/* never enforce against any user who has special CSTATUS flags. */
+	// never enforce against any user who has special CSTATUS flags.
 	if (cu->modes)
 		return;
 
-	/* do not enforce unless enforcement is specifically enabled */
+	// do not enforce unless enforcement is specifically enabled
 	if (!(mc->flags & MC_ANTIFLOOD))
 		return;
 
 	if (mqueue_should_enforce(mq) != MQ_ENFORCE_NONE)
 	{
-		antiflood_enforce_method_impl_t *enf = antiflood_enforce_method_impl_get(mc);
+		const struct antiflood_enforce_method_impl *enf = antiflood_enforce_method_impl_get(mc);
 
 		if (enf == NULL || enf->enforce == NULL)
 			return;
@@ -386,9 +372,9 @@ on_channel_message(hook_cmessage_data_t *data)
 }
 
 static void
-on_channel_drop(mychan_t *mc)
+on_channel_drop(struct mychan *mc)
 {
-	mqueue_t *mq;
+	struct flood_message_queue *mq;
 
 	mq = mqueue_get(mc);
 	return_if_fail(mq != NULL);
@@ -397,13 +383,13 @@ on_channel_drop(mychan_t *mc)
 }
 
 static void
-cs_set_cmd_antiflood(sourceinfo_t *si, int parc, char *parv[])
+cs_set_cmd_antiflood(struct sourceinfo *si, int parc, char *parv[])
 {
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (!(mc = mychan_find(parv[0])))
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), parv[0]);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, parv[0]);
 		return;
 	}
 
@@ -411,7 +397,7 @@ cs_set_cmd_antiflood(sourceinfo_t *si, int parc, char *parv[])
 	   oper-specific settings (i.e. AKILL action) */
 	if (!chanacs_source_has_flag(mc, si, CA_SET) && !has_priv(si, PRIV_CHAN_ADMIN))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this command."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -475,18 +461,11 @@ cs_set_cmd_antiflood(sourceinfo_t *si, int parc, char *parv[])
 		}
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this command."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
 }
-
-static command_t cs_set_antiflood = {
-	"ANTIFLOOD", N_("Set anti-flood action"), AC_NONE, 2,
-	cs_set_cmd_antiflood, { .path = "cservice/set_antiflood" }
-};
-
-mowgli_patricia_t **cs_set_cmdtree;
 
 static int
 c_ci_antiflood_enforce_method(mowgli_config_file_entry_t *ce)
@@ -507,10 +486,20 @@ c_ci_antiflood_enforce_method(mowgli_config_file_entry_t *ce)
 	return 0;
 }
 
-void
-_modinit(module_t *m)
+static struct command cs_set_antiflood = {
+	.name           = "ANTIFLOOD",
+	.desc           = N_("Set anti-flood action"),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_set_cmd_antiflood,
+	.help           = { .path = "cservice/set_antiflood" },
+};
+
+static void
+mod_init(struct module *m)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, cs_set_cmdtree, "chanserv/set_core", "cs_set_cmdtree");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+	MODULE_TRY_REQUEST_SYMBOL(m, cs_set_cmdtree, "chanserv/set_core", "cs_set_cmdtree")
 
 	/* attempt to pull in the place_quietmask() routine from chanserv/quiet,
 	   we don't see it as a hardfail because we can run without QUIET support. */
@@ -521,27 +510,24 @@ _modinit(module_t *m)
 			antiflood_enforce_method = ANTIFLOOD_ENFORCE_KICKBAN;
 	}
 
-	hook_add_event("channel_message");
 	hook_add_channel_message(on_channel_message);
-
-	hook_add_event("channel_drop");
 	hook_add_channel_drop(on_channel_drop);
 
-	msg_heap = sharedheap_get(sizeof(msg_t));
+	msg_heap = sharedheap_get(sizeof(struct flood_message));
 
-	mqueue_heap = sharedheap_get(sizeof(mqueue_t));
+	mqueue_heap = sharedheap_get(sizeof(struct flood_message_queue));
 	mqueue_trie = mowgli_patricia_create(irccasecanon);
-	mqueue_gc_timer = mowgli_timer_add(base_eventloop, "mqueue_gc", mqueue_gc, NULL, 300);
+	mqueue_gc_timer = mowgli_timer_add(base_eventloop, "mqueue_gc", mqueue_gc, NULL, 5 * SECONDS_PER_MINUTE);
 
-	antiflood_unenforce_timer = mowgli_timer_add(base_eventloop, "antiflood_unenforce", antiflood_unenforce_timer_cb, NULL, 3600);
+	antiflood_unenforce_timer = mowgli_timer_add(base_eventloop, "antiflood_unenforce", antiflood_unenforce_timer_cb, NULL, SECONDS_PER_HOUR);
 
 	command_add(&cs_set_antiflood, *cs_set_cmdtree);
 
 	add_conf_item("ANTIFLOOD_ENFORCE_METHOD", &chansvs.me->conf_table, c_ci_antiflood_enforce_method);
 }
 
-void
-_moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	command_delete(&cs_set_antiflood, *cs_set_cmdtree);
 
@@ -555,8 +541,4 @@ _moddeinit(module_unload_intent_t intent)
 	del_conf_item("ANTIFLOOD_ENFORCE_METHOD", &chansvs.me->conf_table);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("chanserv/antiflood", MODULE_UNLOAD_CAPABILITY_OK)

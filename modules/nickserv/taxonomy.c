@@ -1,41 +1,22 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * Lists object properties via their metadata table.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/taxonomy", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_taxonomy = { "TAXONOMY", N_("Displays a user's metadata."), AC_NONE, 1, ns_cmd_taxonomy, { .path = "nickserv/taxonomy" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("nickserv", &ns_taxonomy);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_taxonomy);
-}
-
-static void ns_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_taxonomy(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *target = parv[0];
-	myuser_t *mu;
+	struct myuser *mu;
 	mowgli_patricia_iteration_state_t state;
 	bool isoper;
-	metadata_t *md;
+	struct metadata *md;
 
 	if (!target && si->smu)
 		target = entity(si->smu)->name;
@@ -48,7 +29,7 @@ static void ns_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!(mu = myuser_find_ext(target)))
 	{
-		command_fail(si, fault_badparams, _("\2%s\2 is not registered."), target);
+		command_fail(si, fault_badparams, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
 
@@ -60,7 +41,7 @@ static void ns_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
 
 	command_success_nodata(si, _("Taxonomy for \2%s\2:"), entity(mu)->name);
 
-	MOWGLI_PATRICIA_FOREACH(md, &state, object(mu)->metadata)
+	MOWGLI_PATRICIA_FOREACH(md, &state, atheme_object(mu)->metadata)
 	{
 		if (!strncmp(md->name, "private:", 8) && !isoper)
 			continue;
@@ -71,8 +52,27 @@ static void ns_cmd_taxonomy(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("End of \2%s\2 taxonomy."), entity(mu)->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_taxonomy = {
+	.name           = "TAXONOMY",
+	.desc           = N_("Displays a user's metadata."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_taxonomy,
+	.help           = { .path = "nickserv/taxonomy" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	service_named_bind_command("nickserv", &ns_taxonomy);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_taxonomy);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/taxonomy", MODULE_UNLOAD_CAPABILITY_OK)

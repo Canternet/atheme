@@ -1,37 +1,17 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005-2006 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality which implements the OService INJECT command.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/inject", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_inject(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_inject = { "INJECT", N_("Fakes data from the uplink (debugging tool)."), PRIV_ADMIN, 1, os_cmd_inject, { .path = "oservice/inject" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("operserv", &os_inject);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_inject);
-}
-
-static void os_cmd_inject(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_inject(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *inject;
 	static bool injecting = false;
@@ -49,9 +29,7 @@ static void os_cmd_inject(sourceinfo_t *si, int parc, char *parv[])
 
 	logcommand(si, CMDLOG_ADMIN, "INJECT: \2%s\2", inject);
 
-	/* looks like someone INJECT'd an INJECT command.
-	 * this is probably a bad thing.
-	 */
+	// looks like someone INJECT'd an INJECT command. this is probably a bad thing.
 	if (injecting)
 	{
 		command_fail(si, fault_noprivs, _("You cannot inject an INJECT command."));
@@ -63,8 +41,27 @@ static void os_cmd_inject(sourceinfo_t *si, int parc, char *parv[])
 	injecting = false;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_inject = {
+	.name           = "INJECT",
+	.desc           = N_("Fakes data from the uplink (debugging tool)."),
+	.access         = PRIV_ADMIN,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_inject,
+	.help           = { .path = "oservice/inject" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+        service_named_bind_command("operserv", &os_inject);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_inject);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/inject", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,31 +1,22 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the GroupServ HELP command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/fflags", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_fflags = { "FFLAGS", N_("Forces a flag change on a user in a group."), PRIV_GROUP_ADMIN, 3, gs_cmd_fflags, { .path = "groupserv/fflags" } };
-
-static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
+static void
+gs_cmd_fflags(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
-	mygroup_t *mg;
-	myentity_t *mt;
-	groupacs_t *ga;
+	struct mygroup *mg;
+	struct myentity *mt;
+	struct groupacs *ga;
 	unsigned int flags = 0;
 
 	if (!parv[0] || !parv[1] || !parv[2])
@@ -43,7 +34,7 @@ static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 
         if (si->smu == NULL)
 	{
-		command_fail(si, fault_noprivs, _("You are not logged in."));
+		command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 		return;
 	}
 
@@ -88,7 +79,7 @@ static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (MOWGLI_LIST_LENGTH(&mg->acs) > gs_config->maxgroupacs && (!(mg->flags & MG_ACSNOLIMIT)))
 		{
-			command_fail(si, fault_toomany, _("Group %s access list is full."), entity(mg)->name);
+			command_fail(si, fault_toomany, _("Group \2%s\2 access list is full."), entity(mg)->name);
 			return;
 		}
 		ga = groupacs_add(mg, mt, flags);
@@ -96,31 +87,43 @@ static void gs_cmd_fflags(sourceinfo_t *si, int parc, char *parv[])
 
 	MOWGLI_ITER_FOREACH(n, entity(mg)->chanacs.head)
 	{
-		chanacs_t *ca = n->data;
+		struct chanacs *ca = n->data;
 
 		verbose(ca->mychan, "\2%s\2 now has flags \2%s\2 in the group \2%s\2 which communally has \2%s\2 on \2%s\2.",
 			mt->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name,
 			bitmask_to_flags(ca->level), ca->mychan->name);
 
-		hook_call_channel_acl_change(&(hook_channel_acl_req_t){ .ca = ca });
+		hook_call_channel_acl_change(&(struct hook_channel_acl_req){ .ca = ca });
 	}
 
 	command_success_nodata(si, _("\2%s\2 now has flags \2%s\2 on \2%s\2."), mt->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name);
 
-	/* XXX */
+	// XXX
 	wallops("\2%s\2 is modifying flags(\2%s\2) for \2%s\2 on \2%s\2", get_oper_name(si), gflags_tostr(ga_flags, ga->flags), mt->name, entity(mg)->name);
 	logcommand(si, CMDLOG_ADMIN, "FFLAGS: \2%s\2 now has flags \2%s\2 on \2%s\2", mt->name, gflags_tostr(ga_flags,  ga->flags), entity(mg)->name);
 }
 
-void _modinit(module_t *m)
+static struct command gs_fflags = {
+	.name           = "FFLAGS",
+	.desc           = N_("Forces a flag change on a user in a group."),
+	.access         = PRIV_GROUP_ADMIN,
+	.maxparc        = 3,
+	.cmd            = &gs_cmd_fflags,
+	.help           = { .path = "groupserv/fflags" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
 	use_groupserv_main_symbols(m);
 
 	service_named_bind_command("groupserv", &gs_fflags);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("groupserv", &gs_fflags);
 }
 
+SIMPLE_DECLARE_MODULE_V1("groupserv/fflags", MODULE_UNLOAD_CAPABILITY_OK)

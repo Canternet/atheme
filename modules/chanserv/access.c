@@ -1,224 +1,125 @@
 /*
- * Copyright (c) 2010 - 2011 William Pitcock <nenolod@atheme.org>.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2010-2011 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * ACCESS command implementation for ChanServ.
  */
 
-#include "atheme.h"
-#include "template.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/access", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_access(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_help_access(sourceinfo_t *si, const char *subcmd);
-
-command_t cs_access = { "ACCESS", N_("Manage channel access."),
-                        AC_NONE, 3, cs_cmd_access, { .func = cs_help_access } };
-
-static void cs_cmd_role(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_help_role(sourceinfo_t *si, const char *subcmd);
-
-command_t cs_role =  { "ROLE", N_("Manage channel roles."),
-                        AC_NONE, 3, cs_cmd_role, { .func = cs_help_role } };
-
-static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_access_list = { "LIST", N_("List channel access entries."),
-                             AC_NONE, 1, cs_cmd_access_list, { .path = "cservice/access_list" } };
-
-static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_access_info = { "INFO", N_("Display information on an access list entry."),
-                             AC_NONE, 2, cs_cmd_access_info, { .path = "cservice/access_info" } };
-
-static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_access_del =  { "DEL", N_("Delete an access list entry."),
-                             AC_NONE, 2, cs_cmd_access_del, { .path = "cservice/access_del" } };
-
-static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_access_add =  { "ADD", N_("Add an access list entry."),
-                             AC_NONE, 3, cs_cmd_access_add, { .path = "cservice/access_add" } };
-
-static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_access_set =  { "SET", N_("Update an access list entry."),
-                             AC_NONE, 3, cs_cmd_access_set, { .path = "cservice/access_set" } };
-
-static void cs_cmd_role_list(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_role_list = { "LIST", N_("List available roles."),
-                            AC_NONE, 1, cs_cmd_role_list, { .path = "cservice/role_list" } };
-
-static void cs_cmd_role_add(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_role_add =  { "ADD", N_("Add a role."),
-                            AC_NONE, 20, cs_cmd_role_add, { .path = "cservice/role_add" } };
-
-static void cs_cmd_role_set(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_role_set =  { "SET", N_("Change flags on a role."),
-                            AC_NONE, 20, cs_cmd_role_set, { .path = "cservice/role_set" } };
-
-static void cs_cmd_role_del(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_role_del =  { "DEL", N_("Delete a role."),
-                            AC_NONE, 2, cs_cmd_role_del, { .path = "cservice/role_del" } };
-
-mowgli_patricia_t *cs_access_cmds;
-mowgli_patricia_t *cs_role_cmds;
-
-void _modinit(module_t *m)
+struct channel_template
 {
-	service_named_bind_command("chanserv", &cs_access);
-	service_named_bind_command("chanserv", &cs_role);
+	char name[400];
+	unsigned int level;
+	mowgli_node_t node;
+};
 
-	cs_access_cmds = mowgli_patricia_create(strcasecanon);
-	cs_role_cmds  = mowgli_patricia_create(strcasecanon);
-
-	command_add(&cs_access_list, cs_access_cmds);
-	command_add(&cs_access_info, cs_access_cmds);
-	command_add(&cs_access_del, cs_access_cmds);
-	command_add(&cs_access_add, cs_access_cmds);
-	command_add(&cs_access_set, cs_access_cmds);
-
-	command_add(&cs_role_list, cs_role_cmds);
-	command_add(&cs_role_add, cs_role_cmds);
-	command_add(&cs_role_set, cs_role_cmds);
-	command_add(&cs_role_del, cs_role_cmds);
-}
-
-void _moddeinit(module_unload_intent_t intent)
+struct channel_template_iter
 {
-	service_named_unbind_command("chanserv", &cs_access);
-	service_named_unbind_command("chanserv", &cs_role);
+	struct mychan *mc;
+	mowgli_list_t *l;
+};
 
-	mowgli_patricia_destroy(cs_access_cmds, NULL, NULL);
-	mowgli_patricia_destroy(cs_role_cmds, NULL, NULL);
-}
+static mowgli_patricia_t *cs_access_cmds = NULL;
+static mowgli_patricia_t *cs_role_cmds = NULL;
 
-static void cs_help_access(sourceinfo_t *si, const char *subcmd)
+static void
+cs_help_wrapper(struct sourceinfo *const restrict si, const char *const restrict subcmd,
+                const char *const restrict cmdname, mowgli_patricia_t *const restrict cmdlist)
 {
-	if (!subcmd)
+	if (subcmd)
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), chansvs.me->disp);
-		command_success_nodata(si, _("Help for \2ACCESS\2:"));
-		command_success_nodata(si, " ");
-		command_help(si, cs_access_cmds);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more information, use \2/msg %s HELP ACCESS \37command\37\2."), chansvs.me->disp);
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
+		(void) help_display_as_subcmd(si, chansvs.me, cmdname, subcmd, cmdlist);
+		return;
 	}
-	else
-		help_display(si, si->service, subcmd, cs_access_cmds);
+
+	(void) help_display_prefix(si, chansvs.me);
+	(void) command_success_nodata(si, _("Help for \2%s\2:"), cmdname);
+	(void) help_display_newline(si);
+	(void) command_help(si, cmdlist);
+	(void) help_display_moreinfo(si, chansvs.me, cmdname);
+	(void) help_display_suffix(si);
 }
 
-static void cs_help_role(sourceinfo_t *si, const char *subcmd)
+static void
+cs_cmd_wrapper(struct sourceinfo *const restrict si, const int parc, char **const restrict parv,
+               const char *const restrict cmdname, mowgli_patricia_t *const restrict cmdlist)
 {
-	if (!subcmd)
-	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), chansvs.me->disp);
-		command_success_nodata(si, _("Help for \2ROLE\2:"));
-		command_success_nodata(si, " ");
-		command_help(si, cs_role_cmds);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more information, use \2/msg %s HELP ROLE \37command\37\2."), chansvs.me->disp);
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
-	}
-	else
-		help_display(si, si->service, subcmd, cs_role_cmds);
-}
-
-static void cs_cmd_access(sourceinfo_t *si, int parc, char *parv[])
-{
-	char *chan;
-	char *cmd;
-	command_t *c;
-	char buf[BUFSIZE];
-
 	if (parc < 2)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "ACCESS");
-		command_fail(si, fault_needmoreparams, _("Syntax: ACCESS <#channel> <command> [parameters]"));
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, cmdname);
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: %s <#channel> <command> [parameters]"),
+		                    cmdname);
 		return;
 	}
+
+	char *subcmd;
+	char *target;
 
 	if (parv[0][0] == '#')
-		chan = parv[0], cmd = parv[1];
+	{
+		subcmd = parv[1];
+		target = parv[0];
+	}
 	else if (parv[1][0] == '#')
-		cmd = parv[0], chan = parv[1];
+	{
+		subcmd = parv[0];
+		target = parv[1];
+	}
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "ACCESS");
-		command_fail(si, fault_badparams, _("Syntax: ACCESS <#channel> <command> [parameters]"));
+		(void) command_fail(si, fault_badparams, STR_INVALID_PARAMS, cmdname);
+		(void) command_fail(si, fault_badparams, _("Syntax: %s <#channel> <command> [parameters]"), cmdname);
 		return;
 	}
 
-	c = command_find(cs_access_cmds, cmd);
-	if (c == NULL)
+	const struct command *const cmd = command_find(cmdlist, subcmd);
+
+	if (! cmd)
 	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", chansvs.me->disp);
+		(void) help_display_invalid(si, chansvs.me, cmdname);
 		return;
 	}
 
-	if (parc > 2)
-		snprintf(buf, BUFSIZE, "%s %s", chan, parv[2]);
-	else
-		mowgli_strlcpy(buf, chan, BUFSIZE);
-
-	command_exec_split(si->service, si, c->name, buf, cs_access_cmds);
-}
-
-static void cs_cmd_role(sourceinfo_t *si, int parc, char *parv[])
-{
-	char *chan;
-	char *cmd;
-	command_t *c;
 	char buf[BUFSIZE];
 
-	if (parc < 2)
-	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "ROLE");
-		command_fail(si, fault_needmoreparams, _("Syntax: ROLE <#channel> <command> [parameters]"));
-		return;
-	}
-
-	if (parv[0][0] == '#')
-		chan = parv[0], cmd = parv[1];
-	else if (parv[1][0] == '#')
-		cmd = parv[0], chan = parv[1];
-	else
-	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "ROLE");
-		command_fail(si, fault_badparams, _("Syntax: ROLE <#channel> <command> [parameters]"));
-		return;
-	}
-
-	c = command_find(cs_role_cmds, cmd);
-	if (c == NULL)
-	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", chansvs.me->disp);
-		return;
-	}
-
 	if (parc > 2)
-		snprintf(buf, BUFSIZE, "%s %s", chan, parv[2]);
+		(void) snprintf(buf, sizeof buf, "%s %s", target, parv[2]);
 	else
-		mowgli_strlcpy(buf, chan, BUFSIZE);
+		(void) mowgli_strlcpy(buf, target, sizeof buf);
 
-	command_exec_split(si->service, si, c->name, buf, cs_role_cmds);
+	(void) command_exec_split(chansvs.me, si, cmd->name, buf, cmdlist);
 }
 
-/***********************************************************************************************/
+static void
+cs_help_access(struct sourceinfo *const restrict si, const char *const restrict subcmd)
+{
+	(void) cs_help_wrapper(si, subcmd, "ACCESS", cs_access_cmds);
+}
 
-static inline unsigned int count_bits(unsigned int bits)
+static void
+cs_help_role(struct sourceinfo *const restrict si, const char *const restrict subcmd)
+{
+	(void) cs_help_wrapper(si, subcmd, "ROLE", cs_role_cmds);
+}
+
+static void
+cs_cmd_access(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
+{
+	(void) cs_cmd_wrapper(si, parc, parv, "ACCESS", cs_access_cmds);
+}
+
+static void
+cs_cmd_role(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
+{
+	(void) cs_cmd_wrapper(si, parc, parv, "ROLE", cs_role_cmds);
+}
+
+static inline unsigned int
+count_bits(unsigned int bits)
 {
 	unsigned int i = 1, count = 0;
 
@@ -231,26 +132,17 @@ static inline unsigned int count_bits(unsigned int bits)
 	return count;
 }
 
-typedef struct {
-	char name[400];
-	unsigned int level;
-	mowgli_node_t node;
-} template_t;
-
-typedef struct {
-	mychan_t *mc;
-	mowgli_list_t *l;
-} template_iter_t;
-
-static int compare_template_nodes(mowgli_node_t *a, mowgli_node_t *b, void *opaque)
+static int
+compare_template_nodes(mowgli_node_t *a, mowgli_node_t *b, void *opaque)
 {
-	template_t *ta = a->data;
-	template_t *tb = b->data;
+	struct channel_template *ta = a->data;
+	struct channel_template *tb = b->data;
 
 	return count_bits(ta->level) - count_bits(tb->level);
 }
 
-static template_t *find_template(mowgli_list_t *l, const char *key)
+static struct channel_template *
+find_template(mowgli_list_t *l, const char *key)
 {
 	mowgli_node_t *iter;
 
@@ -259,7 +151,7 @@ static template_t *find_template(mowgli_list_t *l, const char *key)
 
 	MOWGLI_ITER_FOREACH(iter, l->head)
 	{
-		template_t *t = iter->data;
+		struct channel_template *t = iter->data;
 
 		if (!strcasecmp(t->name, key))
 			return t;
@@ -268,11 +160,12 @@ static template_t *find_template(mowgli_list_t *l, const char *key)
 	return NULL;
 }
 
-static int append_global_template(const char *key, void *data, void *privdata)
+static int
+append_global_template(const char *key, void *data, void *privdata)
 {
-	template_t *t;
-	template_iter_t *ti = privdata;
-	default_template_t *def_t = data;
+	struct channel_template *t;
+	struct channel_template_iter *ti = privdata;
+	struct default_template *def_t = data;
 	unsigned int vopflags;
 
 	if (!chansvs.hide_xop)
@@ -286,7 +179,7 @@ static int append_global_template(const char *key, void *data, void *privdata)
 	if ((t = find_template(ti->l, key)) != NULL)
 		return 0;
 
-	t = smalloc(sizeof(template_t));
+	t = smalloc(sizeof *t);
 	mowgli_strlcpy(t->name, key, sizeof(t->name));
 	t->level = get_template_flags(ti->mc, key);
 	mowgli_node_add(t, &t->node, ti->l);
@@ -294,16 +187,17 @@ static int append_global_template(const char *key, void *data, void *privdata)
         return 0;
 }
 
-static mowgli_list_t *build_template_list(mychan_t *mc)
+static mowgli_list_t *
+build_template_list(struct mychan *mc)
 {
 	const char *p, *q, *r;
 	char *s;
 	char ss[40];
 	static char flagname[400];
-	metadata_t *md;
+	struct metadata *md;
 	mowgli_list_t *l;
-	template_t *t;
-	template_iter_t ti;
+	struct channel_template *t;
+	struct channel_template_iter ti;
 
 	l = mowgli_list_create();
 
@@ -334,7 +228,7 @@ static mowgli_list_t *build_template_list(mychan_t *mc)
 			if (s != NULL)
 				*s = '\0';
 
-			t = smalloc(sizeof(template_t));
+			t = smalloc(sizeof *t);
 			mowgli_strlcpy(t->name, flagname, sizeof(t->name));
 			t->level = flags_to_bitmask(ss, 0);
 			mowgli_node_add(t, &t->node, l);
@@ -349,13 +243,14 @@ static mowgli_list_t *build_template_list(mychan_t *mc)
 
 	mowgli_list_sort(l, compare_template_nodes, NULL);
 
-	/* reverse the list so that we go from highest flags to lowest. */
+	// reverse the list so that we go from highest flags to lowest.
 	mowgli_list_reverse(l);
 
 	return l;
 }
 
-static void free_template_list(mowgli_list_t *l)
+static void
+free_template_list(mowgli_list_t *l)
 {
 	mowgli_node_t *n, *tn;
 
@@ -363,15 +258,14 @@ static void free_template_list(mowgli_list_t *l)
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, l->head)
 	{
-		template_t *t = n->data;
+		struct channel_template *t = n->data;
 
 		mowgli_node_delete(&t->node, l);
-		free(t);
+		sfree(t);
 	}
 }
 
-/*
- * get_template_name()
+/* get_template_name()
  *
  * this was, by far, one of the most complicated functions in Atheme.
  * it was also one of the most bloated fuzzy bitmask matchers that i have
@@ -390,19 +284,20 @@ static void free_template_list(mowgli_list_t *l)
  *
  * but now we just return an exact template name or <Custom>.
  */
-static const char *get_template_name(mychan_t *mc, unsigned int level)
+static const char *
+get_template_name(struct mychan *mc, unsigned int level)
 {
 	mowgli_list_t *l;
 	mowgli_node_t *n;
 	static char flagname[400];
-	template_t *exact_t = NULL;
+	struct channel_template *exact_t = NULL;
 
 	l = build_template_list(mc);
 
-	/* find exact_t, lesser_t and greater_t */
+	// find exact_t, lesser_t and greater_t
 	MOWGLI_ITER_FOREACH(n, l->head)
 	{
-		template_t *t = n->data;
+		struct channel_template *t = n->data;
 
 		if (t->level == level)
 			exact_t = t;
@@ -418,12 +313,11 @@ static const char *get_template_name(mychan_t *mc, unsigned int level)
 	return flagname;
 }
 
-/*
- * Update a role entry and synchronize the changes with the access list.
- */
-static void update_role_entry(sourceinfo_t *si, mychan_t *mc, const char *role, unsigned int flags)
+// Update a role entry and synchronize the changes with the access list.
+static void
+update_role_entry(struct sourceinfo *si, struct mychan *mc, const char *role, unsigned int flags)
 {
-	metadata_t *md;
+	struct metadata *md;
 	size_t l;
 	char *p, *q, *r;
 	char ss[40], newstr[400];
@@ -431,9 +325,9 @@ static void update_role_entry(sourceinfo_t *si, mychan_t *mc, const char *role, 
 	unsigned int oldflags;
 	char *flagstr;
 	mowgli_node_t *n, *tn;
-	chanacs_t *ca;
-	int changes = 0;
-	hook_channel_acl_req_t req;
+	struct chanacs *ca;
+	unsigned int changes = 0;
+	struct hook_channel_acl_req req;
 
 	flagstr = bitmask_to_flags2(flags, 0);
 	oldflags = get_template_flags(mc, role);
@@ -469,7 +363,7 @@ static void update_role_entry(sourceinfo_t *si, mychan_t *mc, const char *role, 
 						mowgli_strlcpy(newstr, r != NULL ? r + 1 : "", sizeof newstr);
 					else
 					{
-						/* otherwise, zap the space before it */
+						// otherwise, zap the space before it
 						p--;
 						mowgli_strlcpy(newstr + (p - md->value), r != NULL ? r : "", sizeof newstr - (p - md->value));
 					}
@@ -515,7 +409,7 @@ static void update_role_entry(sourceinfo_t *si, mychan_t *mc, const char *role, 
 			if (ca->level != oldflags)
 				continue;
 
-			/* don't change foundership status. */
+			// don't change foundership status.
 			if ((oldflags ^ flags) & CA_FOUNDER)
 				continue;
 
@@ -523,7 +417,7 @@ static void update_role_entry(sourceinfo_t *si, mychan_t *mc, const char *role, 
 			req.oldlevel = ca->level;
 
 			changes++;
-			chanacs_modify_simple(ca, flags, ~flags);
+			chanacs_modify_simple(ca, flags, ~flags, si->smu);
 
 			req.newlevel = ca->level;
 
@@ -532,13 +426,16 @@ static void update_role_entry(sourceinfo_t *si, mychan_t *mc, const char *role, 
 		}
 	}
 
-	logcommand(si, CMDLOG_SET, "ROLE:MOD: \2%s\2 \2%s\2 !\2%s\2 (\2%d\2 changes)", mc->name, role, flagstr, changes);
+	logcommand(si, CMDLOG_SET, "ROLE:MOD: \2%s\2 \2%s\2 !\2%s\2 (\2%u\2 changes)", mc->name, role, flagstr, changes);
 
 	if (changes > 0)
-		command_success_nodata(si, _("%d access entries updated accordingly."), changes);
+		command_success_nodata(si, ngettext(N_("%u access entry updated accordingly."),
+		                                    N_("%u access entries updated accordingly."),
+		                                    changes), changes);
 }
 
-static unsigned int xflag_apply_batch(unsigned int in, int parc, char *parv[])
+static unsigned int
+xflag_apply_batch(unsigned int in, int parc, char *parv[])
 {
 	unsigned int out;
 	int i;
@@ -550,10 +447,7 @@ static unsigned int xflag_apply_batch(unsigned int in, int parc, char *parv[])
 	return out;
 }
 
-/***********************************************************************************************/
-
-/*
- * Syntax: ACCESS #channel LIST
+/* Syntax: ACCESS #channel LIST
  *
  * Output:
  *
@@ -562,11 +456,12 @@ static unsigned int xflag_apply_batch(unsigned int in, int parc, char *parv[])
  * 1     nenolod                founder
  * 2     jdhore                 channel-staffer
  */
-static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_access_list(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanacs_t *ca;
+	struct chanacs *ca;
 	mowgli_node_t *n;
-	mychan_t *mc;
+	struct mychan *mc;
 	const char *channel = parv[0];
 	bool operoverride = false;
 	unsigned int i = 1;
@@ -574,7 +469,7 @@ static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -584,13 +479,19 @@ static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[])
 			operoverride = true;
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
 
-	command_success_nodata(si, _("Entry Nickname/Host          Role"));
-	command_success_nodata(si, "----- ---------------------- ----");
+	/* TRANSLATORS: Adjust these numbers only if the translated column
+	 * headers would exceed that length. Pay particular attention to
+	 * also changing the numbers in the format string inside the loop
+	 * below to match them, and beware that these format strings are
+	 * shared across multiple files!
+	 */
+	command_success_nodata(si, _("%-8s %-22s %s"), _("Entry"), _("Nickname/Host"), _("Role"));
+	command_success_nodata(si, "----------------------------------------------------------------");
 
 	MOWGLI_ITER_FOREACH(n, mc->chanacs.head)
 	{
@@ -603,12 +504,12 @@ static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[])
 
 		role = get_template_name(mc, ca->level);
 
-		command_success_nodata(si, _("%-5d %-22s %s"), i, ca->entity ? ca->entity->name : ca->host, role);
+		command_success_nodata(si, _("%-8u %-22s %s"), i, ca->entity ? ca->entity->name : ca->host, role);
 
 		i++;
 	}
 
-	command_success_nodata(si, "----- ---------------------- ----");
+	command_success_nodata(si, "----------------------------------------------------------------");
 	command_success_nodata(si, _("End of \2%s\2 ACCESS listing."), channel);
 
 	if (operoverride)
@@ -617,8 +518,7 @@ static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_GET, "ACCESS:LIST: \2%s\2", mc->name);
 }
 
-/*
- * Syntax: ACCESS #channel INFO user
+/* Syntax: ACCESS #channel INFO user
  *
  * Output:
  *
@@ -628,23 +528,26 @@ static void cs_cmd_access_list(sourceinfo_t *si, int parc, char *parv[])
  * Modified   : Aug 18 21:41:31 2005 (5 years, 6 weeks, 0 days, 05:57:21 ago)
  * *** End of Info ***
  */
-static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_access_info(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanacs_t *ca;
-	myentity_t *mt;
-	mychan_t *mc;
+	struct chanacs *ca;
+	struct myentity *mt;
+	struct myentity *setter;
+	struct mychan *mc;
 	const char *channel = parv[0];
 	const char *target = parv[1];
 	bool operoverride = false;
 	const char *role;
-	struct tm tm;
+	const char *setter_name;
+	struct tm *tm;
 	char strfbuf[BUFSIZE];
-	metadata_t *md;
+	struct metadata *md;
 
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -661,7 +564,7 @@ static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[])
 			operoverride = true;
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
@@ -672,7 +575,7 @@ static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (!(mt = myentity_find_ext(target)))
 		{
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 			return;
 		}
 		target = mt->name;
@@ -693,8 +596,14 @@ static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[])
 
 	role = get_template_name(mc, ca->level);
 
-	tm = *localtime(&ca->tmodified);
-	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+	// Taken from chanserv/flags.c
+	if (*ca->setter_uid != '\0' && (setter = myentity_find_uid(ca->setter_uid)))
+		setter_name = setter->name;
+	else
+		setter_name = "?";
+
+	tm = localtime(&ca->tmodified);
+	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 	command_success_nodata(si, _("Access for \2%s\2 in \2%s\2:"), target, channel);
 
@@ -711,7 +620,7 @@ static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("Role       : %s"), role);
 
 	command_success_nodata(si, _("Flags      : %s (%s)"), xflag_tostr(ca->level), bitmask_to_flags2(ca->level, 0));
-	command_success_nodata(si, _("Modified   : %s (%s ago)"), strfbuf, time_ago(ca->tmodified));
+	command_success_nodata(si, _("Modified   : %s (%s ago) by %s"), strfbuf, time_ago(ca->tmodified), setter_name);
 	command_success_nodata(si, _("*** \2End of Info\2 ***"));
 
 	if (operoverride)
@@ -720,19 +629,19 @@ static void cs_cmd_access_info(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_GET, "ACCESS:INFO: \2%s\2 on \2%s\2", mc->name, target);
 }
 
-/*
- * Syntax: ACCESS #channel DEL user
+/* Syntax: ACCESS #channel DEL user
  *
  * Output:
  *
  * nenolod was removed from the Founder role in #atheme.
  */
-static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_access_del(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanacs_t *ca;
-	myentity_t *mt;
-	mychan_t *mc;
-	hook_channel_acl_req_t req;
+	struct chanacs *ca;
+	struct myentity *mt;
+	struct mychan *mc;
+	struct hook_channel_acl_req req;
 	unsigned int restrictflags;
 	const char *channel = parv[0];
 	const char *target = parv[1];
@@ -741,7 +650,7 @@ static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -759,7 +668,7 @@ static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[])
 	 */
 	if (!chanacs_source_has_flag(mc, si, CA_FLAGS) && entity(si->smu) != mt)
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -769,7 +678,7 @@ static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (mt == NULL)
 		{
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 			return;
 		}
 		target = mt->name;
@@ -803,7 +712,7 @@ static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (restrictflags & CA_AKICK && entity(si->smu) == mt)
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 
@@ -811,7 +720,7 @@ static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[])
 			restrictflags = allow_flags(mc, restrictflags);
 	}
 
-	if (!chanacs_modify(ca, &req.newlevel, &req.oldlevel, restrictflags))
+	if (!chanacs_modify(ca, &req.newlevel, &req.oldlevel, restrictflags, si->smu))
 	{
 		command_fail(si, fault_noprivs, _("You may not remove \2%s\2 from the \2%s\2 role."), target, role);
 		return;
@@ -826,19 +735,19 @@ static void cs_cmd_access_del(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_SET, "ACCESS:DEL: \2%s\2 from \2%s\2", target, mc->name);
 }
 
-/*
- * Syntax: ACCESS #channel ADD user role
+/* Syntax: ACCESS #channel ADD user role
  *
  * Output:
  *
  * nenolod was added with the Founder role in #atheme.
  */
-static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_access_add(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanacs_t *ca;
-	myentity_t *mt = NULL;
-	mychan_t *mc;
-	hook_channel_acl_req_t req;
+	struct chanacs *ca;
+	struct myentity *mt = NULL;
+	struct mychan *mc;
+	struct hook_channel_acl_req req;
 	unsigned int oldflags, restrictflags;
 	unsigned int newflags, addflags, removeflags;
 	const char *channel = parv[0];
@@ -848,7 +757,7 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -864,7 +773,7 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	 */
 	if (!chanacs_source_has_flag(mc, si, CA_FLAGS))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -874,7 +783,7 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (!(mt = myentity_find_ext(target)))
 		{
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 			return;
 		}
 		target = mt->name;
@@ -884,7 +793,7 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	if (ca->level == 0 && chanacs_is_table_full(ca))
 	{
 		chanacs_close(ca);
-		command_fail(si, fault_toomany, _("Channel %s access list is full."), mc->name);
+		command_fail(si, fault_toomany, _("Channel \2%s\2 access list is full."), mc->name);
 		return;
 	}
 
@@ -913,7 +822,7 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (restrictflags & CA_AKICK && entity(si->smu) == mt)
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 
@@ -927,7 +836,9 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (mychan_num_founders(mc) >= chansvs.maxfounders)
 		{
-			command_fail(si, fault_noprivs, _("Only %d founders allowed per channel."), chansvs.maxfounders);
+			command_fail(si, fault_noprivs, ngettext(N_("Only %u founder allowed per channel."),
+			                                         N_("Only %u founders allowed per channel."),
+			                                         chansvs.maxfounders), chansvs.maxfounders);
 			chanacs_close(ca);
 			return;
 		}
@@ -956,7 +867,7 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	addflags = newflags & ~oldflags;
 	removeflags = ca_all & ~newflags;
 
-	if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))
+	if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags, si->smu))
 	{
 		command_fail(si, fault_noprivs, _("You may not add \2%s\2 to the \2%s\2 role."), target, role);
 		return;
@@ -973,19 +884,19 @@ static void cs_cmd_access_add(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_SET, "ACCESS:ADD: \2%s\2 to \2%s\2 as \2%s\2", target, mc->name, role);
 }
 
-/*
- * Syntax: ACCESS #channel SET user role
+/* Syntax: ACCESS #channel SET user role
  *
  * Output:
  *
  * nenolod now has the Founder role in #atheme.
  */
-static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_access_set(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanacs_t *ca;
-	myentity_t *mt = NULL;
-	mychan_t *mc;
-	hook_channel_acl_req_t req;
+	struct chanacs *ca;
+	struct myentity *mt = NULL;
+	struct mychan *mc;
+	struct hook_channel_acl_req req;
 	unsigned int oldflags, restrictflags;
 	unsigned int newflags, addflags, removeflags;
 	const char *channel = parv[0];
@@ -995,7 +906,7 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -1011,7 +922,7 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
 	 */
 	if (!chanacs_source_has_flag(mc, si, CA_FLAGS))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -1021,7 +932,7 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (!(mt = myentity_find_ext(target)))
 		{
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 			return;
 		}
 		target = mt->name;
@@ -1060,7 +971,7 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (restrictflags & CA_AKICK && entity(si->smu) == mt)
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 
@@ -1074,7 +985,9 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (mychan_num_founders(mc) >= chansvs.maxfounders)
 		{
-			command_fail(si, fault_noprivs, _("Only %d founders allowed per channel."), chansvs.maxfounders);
+			command_fail(si, fault_noprivs, ngettext(N_("Only %u founder allowed per channel."),
+			                                         N_("Only %u founders allowed per channel."),
+			                                         chansvs.maxfounders), chansvs.maxfounders);
 			chanacs_close(ca);
 			return;
 		}
@@ -1097,7 +1010,7 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
 	addflags = newflags & ~oldflags;
 	removeflags = ca_all & ~newflags;
 
-	if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))
+	if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags, si->smu))
 	{
 		command_fail(si, fault_noprivs, _("You may not add \2%s\2 to the \2%s\2 role."), target, role);
 		return;
@@ -1114,8 +1027,7 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_SET, "ACCESS:SET: \2%s\2 to \2%s\2 as \2%s\2", target, mc->name, role);
 }
 
-/*
- * Syntax: ROLE #channel LIST
+/* Syntax: ROLE #channel LIST
  *
  * Output:
  *
@@ -1128,16 +1040,17 @@ static void cs_cmd_access_set(sourceinfo_t *si, int parc, char *parv[])
  * List of channel-defined roles:
  * Founder      : ...
  */
-static void cs_cmd_role_list(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_role_list(struct sourceinfo *si, int parc, char *parv[])
 {
-	mychan_t *mc;
+	struct mychan *mc;
 	const char *channel = parv[0];
 	mowgli_list_t *l;
 
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -1150,7 +1063,7 @@ static void cs_cmd_role_list(sourceinfo_t *si, int parc, char *parv[])
 
 		MOWGLI_ITER_FOREACH(n, l->head)
 		{
-			template_t *t = n->data;
+			struct channel_template *t = n->data;
 
 			command_success_nodata(si, "%-20s: %s (%s)", t->name, xflag_tostr(t->level), bitmask_to_flags(t->level));
 		}
@@ -1159,16 +1072,16 @@ static void cs_cmd_role_list(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/*
- * Syntax: ROLE #channel ADD <role> [flags-changes]
+/* Syntax: ROLE #channel ADD <role> [flags-changes]
  *
  * Output:
  *
  * Creates a new role with the given flags.
  */
-static void cs_cmd_role_add(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_role_add(struct sourceinfo *si, int parc, char *parv[])
 {
-	mychan_t *mc;
+	struct mychan *mc;
 	mowgli_list_t *l;
 	const char *channel = parv[0];
 	const char *role = parv[1];
@@ -1177,7 +1090,7 @@ static void cs_cmd_role_add(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -1190,7 +1103,7 @@ static void cs_cmd_role_add(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!chanacs_source_has_flag(mc, si, CA_FLAGS))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -1222,7 +1135,8 @@ static void cs_cmd_role_add(sourceinfo_t *si, int parc, char *parv[])
 	if (newflags == 0)
 	{
 		if (oldflags == 0)
-			command_fail(si, fault_badparams, _("No valid flags given, use /%s%s HELP ROLE ADD for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp);
+			command_fail(si, fault_badparams, _("No valid flags given, use \2/msg %s HELP ROLE ADD\2 "
+			                                    "for a list"), chansvs.me->disp);
 		else
 			command_fail(si, fault_nosuch_target, _("You cannot remove all flags from the role \2%s\2."), role);
 		return;
@@ -1234,7 +1148,7 @@ static void cs_cmd_role_add(sourceinfo_t *si, int parc, char *parv[])
 
 		MOWGLI_ITER_FOREACH(n, l->head)
 		{
-			template_t *t = n->data;
+			struct channel_template *t = n->data;
 
 			if (t->level == newflags)
 			{
@@ -1250,16 +1164,16 @@ static void cs_cmd_role_add(sourceinfo_t *si, int parc, char *parv[])
 	update_role_entry(si, mc, role, newflags);
 }
 
-/*
- * Syntax: ROLE #channel SET <role> [flags-changes]
+/* Syntax: ROLE #channel SET <role> [flags-changes]
  *
  * Output:
  *
  * Creates a new role with the given flags.
  */
-static void cs_cmd_role_set(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_role_set(struct sourceinfo *si, int parc, char *parv[])
 {
-	mychan_t *mc;
+	struct mychan *mc;
 	mowgli_list_t *l;
 	const char *channel = parv[0];
 	const char *role = parv[1];
@@ -1268,7 +1182,7 @@ static void cs_cmd_role_set(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -1281,7 +1195,7 @@ static void cs_cmd_role_set(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!chanacs_source_has_flag(mc, si, CA_FLAGS))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -1319,7 +1233,8 @@ static void cs_cmd_role_set(sourceinfo_t *si, int parc, char *parv[])
 	if (newflags == 0)
 	{
 		if (oldflags == 0)
-			command_fail(si, fault_badparams, _("No valid flags given, use /%s%s HELP ROLE ADD for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp);
+			command_fail(si, fault_badparams, _("No valid flags given, use \2/msg %s HELP ROLE ADD\2 "
+			                                    "for a list"), chansvs.me->disp);
 		else
 			command_fail(si, fault_nosuch_target, _("You cannot remove all flags from the role \2%s\2."), role);
 		return;
@@ -1331,7 +1246,7 @@ static void cs_cmd_role_set(sourceinfo_t *si, int parc, char *parv[])
 
 		MOWGLI_ITER_FOREACH(n, l->head)
 		{
-			template_t *t = n->data;
+			struct channel_template *t = n->data;
 
 			if (t->level == newflags)
 			{
@@ -1347,16 +1262,16 @@ static void cs_cmd_role_set(sourceinfo_t *si, int parc, char *parv[])
 	update_role_entry(si, mc, role, newflags);
 }
 
-/*
- * Syntax: ROLE #channel DEL <role>
+/* Syntax: ROLE #channel DEL <role>
  *
  * Output:
  *
  * Deletes a role.
  */
-static void cs_cmd_role_del(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_role_del(struct sourceinfo *si, int parc, char *parv[])
 {
-	mychan_t *mc;
+	struct mychan *mc;
 	const char *channel = parv[0];
 	const char *role = parv[1];
 	unsigned int oldflags, restrictflags;
@@ -1364,7 +1279,7 @@ static void cs_cmd_role_del(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -1377,7 +1292,7 @@ static void cs_cmd_role_del(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!chanacs_source_has_flag(mc, si, CA_FLAGS))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -1405,8 +1320,151 @@ static void cs_cmd_role_del(sourceinfo_t *si, int parc, char *parv[])
 	update_role_entry(si, mc, role, 0);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_access = {
+	.name           = "ACCESS",
+	.desc           = N_("Manage channel access."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_access,
+	.help           = { .func = &cs_help_access },
+};
+
+static struct command cs_role = {
+	.name           = "ROLE",
+	.desc           = N_("Manage channel roles."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_role,
+	.help           = { .func = &cs_help_role },
+};
+
+static struct command cs_access_list = {
+	.name           = "LIST",
+	.desc           = N_("List channel access entries."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_access_list,
+	.help           = { .path = "cservice/access_list" },
+};
+
+static struct command cs_access_info = {
+	.name           = "INFO",
+	.desc           = N_("Display information on an access list entry."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_access_info,
+	.help           = { .path = "cservice/access_info" },
+};
+
+static struct command cs_access_del = {
+	.name           = "DEL",
+	.desc           = N_("Delete an access list entry."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_access_del,
+	.help           = { .path = "cservice/access_del" },
+};
+
+static struct command cs_access_add = {
+	.name           = "ADD",
+	.desc           = N_("Add an access list entry."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_access_add,
+	.help           = { .path = "cservice/access_add" },
+};
+
+static struct command cs_access_set = {
+	.name           = "SET",
+	.desc           = N_("Update an access list entry."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_access_set,
+	.help           = { .path = "cservice/access_set" },
+};
+
+static struct command cs_role_list = {
+	.name           = "LIST",
+	.desc           = N_("List available roles."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_role_list,
+	.help           = { .path = "cservice/role_list" },
+};
+
+static struct command cs_role_add = {
+	.name           = "ADD",
+	.desc           = N_("Add a role."),
+	.access         = AC_NONE,
+	.maxparc        = 20,
+	.cmd            = &cs_cmd_role_add,
+	.help           = { .path = "cservice/role_add" },
+};
+
+static struct command cs_role_set = {
+	.name           = "SET",
+	.desc           = N_("Change flags on a role."),
+	.access         = AC_NONE,
+	.maxparc        = 20,
+	.cmd            = &cs_cmd_role_set,
+	.help           = { .path = "cservice/role_set" },
+};
+
+static struct command cs_role_del = {
+	.name           = "DEL",
+	.desc           = N_("Delete a role."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_role_del,
+	.help           = { .path = "cservice/role_del" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	if (! (cs_access_cmds = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	if (! (cs_role_cmds = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		(void) mowgli_patricia_destroy(cs_access_cmds, NULL, NULL);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) command_add(&cs_access_list, cs_access_cmds);
+	(void) command_add(&cs_access_info, cs_access_cmds);
+	(void) command_add(&cs_access_del, cs_access_cmds);
+	(void) command_add(&cs_access_add, cs_access_cmds);
+	(void) command_add(&cs_access_set, cs_access_cmds);
+
+	(void) command_add(&cs_role_list, cs_role_cmds);
+	(void) command_add(&cs_role_add, cs_role_cmds);
+	(void) command_add(&cs_role_set, cs_role_cmds);
+	(void) command_add(&cs_role_del, cs_role_cmds);
+
+	(void) service_named_bind_command("chanserv", &cs_access);
+	(void) service_named_bind_command("chanserv", &cs_role);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_named_unbind_command("chanserv", &cs_access);
+	(void) service_named_unbind_command("chanserv", &cs_role);
+
+	(void) mowgli_patricia_destroy(cs_access_cmds, &command_delete_trie_cb, cs_access_cmds);
+	(void) mowgli_patricia_destroy(cs_role_cmds, &command_delete_trie_cb, cs_role_cmds);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/access", MODULE_UNLOAD_CAPABILITY_OK)

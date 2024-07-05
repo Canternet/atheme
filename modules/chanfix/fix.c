@@ -1,11 +1,21 @@
-/* chanfix - channel fixing service
- * Copyright (c) 2010 Atheme Development Group
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2010 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2014-2016 Austin Ellis <siniStar@IRC4Fun.net>
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
+ *
+ * chanfix - channel fixing service
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanfix.h"
 
-static unsigned int count_ops(channel_t *c)
+bool chanfix_do_autofix;
+
+static unsigned int
+count_ops(struct channel *c)
 {
 	unsigned int i = 0;
 	mowgli_node_t *n;
@@ -14,7 +24,7 @@ static unsigned int count_ops(channel_t *c)
 
 	MOWGLI_ITER_FOREACH(n, c->members.head)
 	{
-		chanuser_t *cu = n->data;
+		struct chanuser *cu = n->data;
 
 		if (cu->modes & CSTATUS_OP)
 			i++;
@@ -23,9 +33,10 @@ static unsigned int count_ops(channel_t *c)
 	return i;
 }
 
-static bool chanfix_should_handle(chanfix_channel_t *cfchan, channel_t *c)
+static bool
+chanfix_should_handle(struct chanfix_channel *cfchan, struct channel *c)
 {
-	mychan_t *mc;
+	struct mychan *mc;
 	unsigned int n;
 
 	return_val_if_fail(cfchan != NULL, false);
@@ -37,9 +48,14 @@ static bool chanfix_should_handle(chanfix_channel_t *cfchan, channel_t *c)
 		return false;
 
 	n = count_ops(c);
-	/* enough ops, don't touch it */
+	// enough ops, don't touch it
 	if (n >= CHANFIX_OP_THRESHHOLD)
 		return false;
+
+	// Do not fix NOFIX'd channels
+	if ((metadata_find(cfchan, "private:nofix:setter")) != NULL)
+		return false;
+
 	/* only start a fix for opless channels, and consider a fix done
 	 * after CHANFIX_FIX_TIME if any ops were given
 	 */
@@ -50,7 +66,8 @@ static bool chanfix_should_handle(chanfix_channel_t *cfchan, channel_t *c)
 	return true;
 }
 
-static unsigned int chanfix_calculate_score(chanfix_oprecord_t *orec)
+static unsigned int
+chanfix_calculate_score(struct chanfix_oprecord *orec)
 {
 	unsigned int base;
 
@@ -63,17 +80,18 @@ static unsigned int chanfix_calculate_score(chanfix_oprecord_t *orec)
 	return base;
 }
 
-static void chanfix_lower_ts(chanfix_channel_t *chan)
+static void
+chanfix_lower_ts(struct chanfix_channel *chan)
 {
-	channel_t *ch;
-	chanuser_t *cfu;
+	struct channel *ch;
+	struct chanuser *cfu;
 	mowgli_node_t *n;
 
 	ch = chan->chan;
 	if (ch == NULL)
 		return;
 
-	/* Apply mode change locally only, chan_lowerts() will propagate. */
+	// Apply mode change locally only, chan_lowerts() will propagate.
 	channel_mode_va(NULL, ch, 2, "-ilk", "*");
 
 	chan->ts--;
@@ -81,7 +99,7 @@ static void chanfix_lower_ts(chanfix_channel_t *chan)
 
 	MOWGLI_ITER_FOREACH(n, ch->members.head)
 	{
-		chanuser_t *cu = n->data;
+		struct chanuser *cu = n->data;
 		cu->modes = 0;
 	}
 
@@ -94,7 +112,8 @@ static void chanfix_lower_ts(chanfix_channel_t *chan)
 	part(chan->name, chanfix->me->nick);
 }
 
-static unsigned int chanfix_get_highscore(chanfix_channel_t *chan)
+static unsigned int
+chanfix_get_highscore(struct chanfix_channel *chan)
 {
 	unsigned int highscore = 0;
 	mowgli_node_t *n;
@@ -102,7 +121,7 @@ static unsigned int chanfix_get_highscore(chanfix_channel_t *chan)
 	MOWGLI_ITER_FOREACH(n, chan->oprecords.head)
 	{
 		unsigned int score;
-		chanfix_oprecord_t *orec = n->data;
+		struct chanfix_oprecord *orec = n->data;
 
 		score = chanfix_calculate_score(orec);
 		if (score > highscore)
@@ -112,7 +131,8 @@ static unsigned int chanfix_get_highscore(chanfix_channel_t *chan)
 	return highscore;
 }
 
-static unsigned int chanfix_get_threshold(chanfix_channel_t *chan)
+static unsigned int
+chanfix_get_threshold(struct chanfix_channel *chan)
 {
 	unsigned int highscore, t, threshold;
 
@@ -129,9 +149,10 @@ static unsigned int chanfix_get_threshold(chanfix_channel_t *chan)
 	return threshold;
 }
 
-static bool chanfix_fix_channel(chanfix_channel_t *chan)
+static bool
+chanfix_fix_channel(struct chanfix_channel *chan)
 {
-	channel_t *ch;
+	struct channel *ch;
 	mowgli_node_t *n;
 	unsigned int threshold, opped = 0;
 
@@ -139,12 +160,12 @@ static bool chanfix_fix_channel(chanfix_channel_t *chan)
 	if (ch == NULL)
 		return false;
 
-	/* op users who have X% of the highest score. */
+	// op users who have X% of the highest score.
 	threshold = chanfix_get_threshold(chan);
 	MOWGLI_ITER_FOREACH(n, ch->members.head)
 	{
-		chanuser_t *cu = n->data;
-		chanfix_oprecord_t *orec;
+		struct chanuser *cu = n->data;
+		struct chanfix_oprecord *orec;
 		unsigned int score;
 
 		if (cu->user == chanfix->me)
@@ -171,21 +192,26 @@ static bool chanfix_fix_channel(chanfix_channel_t *chan)
 	if (opped == 0)
 		return false;
 
-	/* flush the modestacker. */
+	// flush the modestacker.
 	modestack_flush_channel(ch);
 
-	/* now report the damage */
-	msg(chanfix->me->nick, chan->name, "\2%d\2 client%s should have been opped.", opped, opped != 1 ? "s" : "");
+	// now report the damage
+	msg(chanfix->me->nick, chan->name, "\2%u\2 clients should have been opped.", opped);
 
-	/* fix done, leave. */
+	// if this is the services log channel, continue to occupy it after the fix
+	if (ch->flags & CHAN_LOG)
+	return true;
+
+	// fix done, leave.
 	part(chan->name, chanfix->me->nick);
 
 	return true;
 }
 
-static bool chanfix_can_start_fix(chanfix_channel_t *chan)
+static bool
+chanfix_can_start_fix(struct chanfix_channel *chan)
 {
-	channel_t *ch;
+	struct channel *ch;
 	mowgli_node_t *n;
 	unsigned int threshold;
 
@@ -196,8 +222,8 @@ static bool chanfix_can_start_fix(chanfix_channel_t *chan)
 	threshold = chanfix_get_highscore(chan) * CHANFIX_FINAL_STEP;
 	MOWGLI_ITER_FOREACH(n, ch->members.head)
 	{
-		chanuser_t *cu = n->data;
-		chanfix_oprecord_t *orec;
+		struct chanuser *cu = n->data;
+		struct chanfix_oprecord *orec;
 		unsigned int score;
 
 		if (cu->user == chanfix->me)
@@ -216,7 +242,8 @@ static bool chanfix_can_start_fix(chanfix_channel_t *chan)
 	return false;
 }
 
-static void chanfix_clear_bans(channel_t *ch)
+static void
+chanfix_clear_bans(struct channel *ch)
 {
 	bool joined = false;
 	mowgli_node_t *n, *tn;
@@ -252,7 +279,7 @@ static void chanfix_clear_bans(channel_t *ch)
 	}
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, ch->bans.head)
 	{
-		chanban_t *cb = n->data;
+		struct chanban *cb = n->data;
 
 		if (cb->type != 'b')
 			continue;
@@ -274,17 +301,15 @@ static void chanfix_clear_bans(channel_t *ch)
 	part(ch->name, chanfix->me->nick);
 }
 
-/*************************************************************************************/
-
-bool chanfix_do_autofix;
-
-void chanfix_autofix_ev(void *unused)
+void
+chanfix_autofix_ev(void *unused)
 {
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 	mowgli_patricia_iteration_state_t state;
 
 	MOWGLI_PATRICIA_FOREACH(chan, &state, chanfix_channels)
 	{
+
 		if (!chanfix_do_autofix && !chan->fix_requested)
 			continue;
 
@@ -331,11 +356,84 @@ void chanfix_autofix_ev(void *unused)
 	}
 }
 
-/*************************************************************************************/
-
-static void chanfix_cmd_fix(sourceinfo_t *si, int parc, char *parv[])
+static void
+chanfix_cmd_list(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
+	struct metadata *md, *mdnofix;
+	char *markpattern = NULL, *nofixpattern = NULL;
+	char buf[BUFSIZE];
+	mowgli_patricia_iteration_state_t state;
+	unsigned int matches = 0;
+	bool marked = false, nofix = false, markmatch = false, nofixmatch = false;
+	char *chanpattern = NULL;
+
+	if (parv[0] != NULL)
+		chanpattern = parv[0];
+
+	MOWGLI_PATRICIA_FOREACH(chan, &state, chanfix_channels)
+	{
+		if (chanpattern != NULL && match(chanpattern, chan->name))
+			continue;
+
+		if (markpattern)
+		{
+			markmatch = false;
+			md = metadata_find(chan, "private:mark:reason");
+			if (md != NULL && !match(markpattern, md->value))
+				markmatch = true;
+
+			if (!markmatch)
+				continue;
+		}
+
+		if (markmatch && !metadata_find(chan, "private:mark:setter"))
+			continue;
+
+		if (nofixpattern)
+		{
+			nofixmatch = false;
+			md = metadata_find(chan, "private:nofix:reason");
+			if (md != NULL && !match(nofixpattern, md->value))
+				nofixmatch = true;
+
+			if (!nofixmatch)
+				continue;
+		}
+
+		if (nofixmatch && !metadata_find(chan, "private:nofix:setter"))
+			continue;
+
+		// in the future we could add a LIMIT parameter
+		*buf = '\0';
+
+		if (metadata_find(chan, "private:mark:setter")) {
+			mowgli_strlcat(buf, "\2[marked]\2", BUFSIZE);
+		}
+
+		if (metadata_find(chan, "private:nofix:setter")) {
+			mowgli_strlcat(buf, "\2[nofix]\2", BUFSIZE);
+		}
+
+		command_success_nodata(si, "- %s %s", chan->name, buf);
+		matches++;
+	}
+
+	if (chanpattern == NULL)
+		chanpattern = "*";
+	logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 (\2%u\2 matches)", chanpattern, matches);
+	if (matches == 0)
+		command_success_nodata(si, _("No channels matched criteria \2%s\2"), chanpattern);
+	else
+		command_success_nodata(si, ngettext(N_("\2%u\2 match for criteria \2%s\2."),
+		                                    N_("\2%u\2 matches for criteria \2%s\2."), matches),
+		                                    matches, chanpattern);
+}
+
+static void
+chanfix_cmd_fix(struct sourceinfo *si, int parc, char *parv[])
+{
+	struct chanfix_channel *chan;
 	unsigned int highscore;
 
 	if (parv[0] == NULL)
@@ -364,6 +462,13 @@ static void chanfix_cmd_fix(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
+        // Do not fix NOFIX'd channels
+        if ((metadata_find(chan, "private:nofix:setter")) != NULL)
+	{
+		command_fail(si, fault_nochange, _("\2%s\2 has NOFIX enabled."), parv[0]);
+		return;
+	}
+
 	highscore = chanfix_get_highscore(chan);
 	if (highscore < CHANFIX_MIN_FIX_SCORE)
 	{
@@ -380,21 +485,21 @@ static void chanfix_cmd_fix(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("Fix request has been acknowledged for \2%s\2."), parv[0]);
 }
 
-command_t cmd_chanfix = { "CHANFIX", N_("Manually chanfix a channel."), PRIV_CHAN_ADMIN, 1, chanfix_cmd_fix, { .path = "chanfix/chanfix" } };
-
-static int chanfix_compare_records(mowgli_node_t *a, mowgli_node_t *b, void *unused)
+static int
+chanfix_compare_records(mowgli_node_t *a, mowgli_node_t *b, void *unused)
 {
-	chanfix_oprecord_t *ta = a->data;
-	chanfix_oprecord_t *tb = b->data;
+	struct chanfix_oprecord *ta = a->data;
+	struct chanfix_oprecord *tb = b->data;
 
 	return tb->age - ta->age;
 }
 
-static void chanfix_cmd_scores(sourceinfo_t *si, int parc, char *parv[])
+static void
+chanfix_cmd_scores(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
-	chanfix_channel_t *chan;
-	int i = 0;
+	struct chanfix_channel *chan;
+	unsigned int i = 0;
 	unsigned int count = 20;
 
 	if (parv[0] == NULL)
@@ -411,7 +516,7 @@ static void chanfix_cmd_scores(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* sort records by score. */
+	// sort records by score.
 	mowgli_list_sort(&chan->oprecords, chanfix_compare_records, NULL);
 
 	if (count > MOWGLI_LIST_LENGTH(&chan->oprecords))
@@ -423,38 +528,43 @@ static void chanfix_cmd_scores(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	command_success_nodata(si, _("Top \2%d\2 scores for \2%s\2 in the database:"), count, chan->name);
+	command_success_nodata(si, _("Top \2%u\2 scores for \2%s\2 in the database:"), count, chan->name);
 
-	command_success_nodata(si, "%-3s %-50s %s", _("Num"), _("Account/Hostmask"), _("Score"));
-	command_success_nodata(si, "%-3s %-50s %s", "---", "--------------------------------------------------", "-----");
+	/* TRANSLATORS: Adjust these numbers only if the translated column
+	 * headers would exceed that length. Pay particular attention to
+	 * also changing the numbers in the format string inside the loop
+	 * below to match them, and beware that these format strings are
+	 * shared across multiple files!
+	 */
+	command_success_nodata(si, _("%-8s %-50s %s"), _("Num"), _("Account/Hostmask"), _("Score"));
+	command_success_nodata(si, "----------------------------------------------------------------");
 
 	MOWGLI_ITER_FOREACH(n, chan->oprecords.head)
 	{
 		char buf[BUFSIZE];
 		unsigned int score;
-		chanfix_oprecord_t *orec = n->data;
+		struct chanfix_oprecord *orec = n->data;
 
 		score = chanfix_calculate_score(orec);
 
 		snprintf(buf, BUFSIZE, "%s@%s", orec->user, orec->host);
 
-		command_success_nodata(si, "%-3d %-50s %d", ++i, orec->entity ? orec->entity->name : buf, score);
+		command_success_nodata(si, _("%-8u %-50s %u"), ++i, orec->entity ? orec->entity->name : buf, score);
 	}
 
-	command_success_nodata(si, "%-3s %-50s %s", "---", "--------------------------------------------------", "-----");
+	command_success_nodata(si, "----------------------------------------------------------------");
 	command_success_nodata(si, _("End of \2SCORES\2 listing for \2%s\2."), chan->name);
 }
 
-command_t cmd_scores = { "SCORES", N_("List channel scores."), PRIV_CHAN_AUSPEX, 1, chanfix_cmd_scores, { .path = "chanfix/scores" } };
-
-static void chanfix_cmd_info(sourceinfo_t *si, int parc, char *parv[])
+static void
+chanfix_cmd_info(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanfix_oprecord_t *orec;
-	chanfix_channel_t *chan;
-	struct tm tm;
+	struct chanfix_oprecord *orec;
+	struct chanfix_channel *chan;
+	struct tm *tm;
 	char strfbuf[BUFSIZE];
 	unsigned int highscore = 0;
-	metadata_t *md;
+	struct metadata *md;
 
 	if (parv[0] == NULL)
 	{
@@ -470,13 +580,13 @@ static void chanfix_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* sort records by score. */
+	// sort records by score.
 	mowgli_list_sort(&chan->oprecords, chanfix_compare_records, NULL);
 
 	command_success_nodata(si, _("Information on \2%s\2:"), chan->name);
 
-	tm = *localtime(&chan->ts);
-	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+	tm = localtime(&chan->ts);
+	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 	command_success_nodata(si, _("Creation time: %s"), strfbuf);
 
@@ -487,13 +597,17 @@ static void chanfix_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	command_success_nodata(si, _("Highest score: \2%u\2"), highscore);
-	command_success_nodata(si, _("Usercount    : \2%zu\2"), chan->chan ? MOWGLI_LIST_LENGTH(&chan->chan->members) : 0);
-	command_success_nodata(si, _("Initial step : \2%.0f%%\2 of \2%u\2 (\2%0.1f\2)"), CHANFIX_INITIAL_STEP * 100, highscore, (highscore * CHANFIX_INITIAL_STEP));
+	command_success_nodata(si, _("Usercount    : \2%zu\2"),
+	                       chan->chan ? MOWGLI_LIST_LENGTH(&chan->chan->members) : 0);
+	command_success_nodata(si, _("Initial step : \2%.0f%%\2 of \2%u\2 (\2%0.1f\2)"),
+	                       (double) (CHANFIX_INITIAL_STEP * 100), highscore,
+	                       (double) (highscore * CHANFIX_INITIAL_STEP));
 	command_success_nodata(si, _("Current step : \2%u\2"), chanfix_get_threshold(chan));
-	command_success_nodata(si, _("Final step   : \2%.0f%%\2 of \2%u\2 (\2%0.1f\2)"), CHANFIX_FINAL_STEP * 100, highscore, (highscore * CHANFIX_FINAL_STEP));
-	command_success_nodata(si, _("Needs fixing : \2%s\2"), chanfix_should_handle(chan, chan->chan) ? "YES" : "NO");
-	command_success_nodata(si, _("Now fixing   : \2%s\2"),
-			chan->fix_started ? "YES" : "NO");
+	command_success_nodata(si, _("Final step   : \2%.0f%%\2 of \2%u\2 (\2%0.1f\2)"),
+	                       (double) (CHANFIX_FINAL_STEP * 100), highscore,
+	                       (double) (highscore * CHANFIX_FINAL_STEP));
+	command_success_nodata(si, _("Needs fixing : \2%s\2"), chanfix_should_handle(chan, chan->chan) ? _("Yes") : _("No"));
+	command_success_nodata(si, _("Now fixing   : \2%s\2"), chan->fix_started ? _("Yes") : _("No"));
 
 	if ((md = metadata_find(chan, "private:mark:setter")) != NULL)
 	{
@@ -507,24 +621,41 @@ static void chanfix_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		md = metadata_find(chan, "private:mark:timestamp");
 		ts = md != NULL ? atoi(md->value) : 0;
 
-		tm = *localtime(&ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
-		command_success_nodata(si, _("%s was \2MARKED\2 by %s on %s (%s)"), chan->name, setter, strfbuf, reason);
+		command_success_nodata(si, _("%s was \2MARKED\2 by \2%s\2 on \2%s\2 (%s)."), chan->name, setter, strfbuf, reason);
 	}
+
+        if ((md = metadata_find(chan, "private:nofix:setter")) != NULL)
+        {
+                const char *setter = md->value;
+                const char *reason;
+                time_t ts;
+
+                md = metadata_find(chan, "private:nofix:reason");
+                reason = md != NULL ? md->value : "unknown";
+
+                md = metadata_find(chan, "private:mark:timestamp");
+                ts = md != NULL ? atoi(md->value) : 0;
+
+                tm = localtime(&ts);
+                strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
+
+                command_success_nodata(si, _("%s had \2NOFIX\2 set by %s on %s (%s)"), chan->name, setter, strfbuf, reason);
+        }
 
 	command_success_nodata(si, _("\2*** End of Info ***\2"));
 }
 
-command_t cmd_info = { "INFO", N_("List information on channel."), PRIV_CHAN_AUSPEX, 1, chanfix_cmd_info, { .path = "chanfix/info" } };
-
-/* MARK <channel> ON|OFF [reason] */
-static void chanfix_cmd_mark(sourceinfo_t *si, int parc, char *parv[])
+// MARK <channel> ON|OFF [reason]
+static void
+chanfix_cmd_mark(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *action = parv[1];
 	char *info = parv[2];
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 
 	if (!target || !action)
 	{
@@ -590,38 +721,106 @@ static void chanfix_cmd_mark(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-command_t cmd_mark = { "MARK", N_("Adds a note to a channel."), PRIV_MARK, 3, chanfix_cmd_mark, { .path = "chanfix/mark" } };
-
-/* HELP <command> [params] */
-static void chanfix_cmd_help(sourceinfo_t *si, int parc, char *parv[])
+// NOFIX <channel> ON|OFF [reason]
+static void
+chanfix_cmd_nofix(struct sourceinfo *si, int parc, char *parv[])
 {
-	char *command = parv[0];
+	char *target = parv[0];
+	char *action = parv[1];
+	char *info = parv[2];
+	struct chanfix_channel *chan;
 
-	if (!command)
+	if (!target || !action)
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), si->service->nick);
-		command_success_nodata(si, _("\2%s\2 allows for simple channel operator management."), si->service->nick);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more information on a command, type:"));
-		command_success_nodata(si, "\2/%s%s help <command>\2", (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-		command_success_nodata(si, " ");
-
-		command_help(si, si->service->commands);
-
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "NOFIX");
+		command_fail(si, fault_needmoreparams, _("Usage: NOFIX <#channel> <ON|OFF> [reason]"));
 		return;
 	}
 
-	/* take the command through the hash table */
-	help_display(si, si->service, command, si->service->commands);
+	if (target[0] != '#')
+	{
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "NOFIX");
+		return;
+	}
+
+	if ((chan = chanfix_channel_find(parv[0])) == NULL)
+	{
+		command_fail(si, fault_nosuch_target, _("No CHANFIX record available for \2%s\2; try again later."),
+			     parv[0]);
+		return;
+	}
+
+	if (!strcasecmp(action, "ON"))
+	{
+		if (!info)
+		{
+			command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "MARK");
+			command_fail(si, fault_needmoreparams, _("Usage: NOFIX <#channel> ON <reason>"));
+			return;
+		}
+
+		if (metadata_find(chan, "private:nofix:setter"))
+		{
+			command_fail(si, fault_nochange, _("\2%s\2 already has NOFIX set."), target);
+			return;
+		}
+
+		metadata_add(chan, "private:nofix:setter", get_oper_name(si));
+		metadata_add(chan, "private:nofix:reason", info);
+		metadata_add(chan, "private:nofix:timestamp", number_to_string(CURRTIME));
+
+		logcommand(si, CMDLOG_ADMIN, "NOFIX:ON: \2%s\2 (reason: \2%s\2)", chan->name, info);
+		command_success_nodata(si, _("\2%s\2 is now set to NOFIX."), target);
+	}
+	else if (!strcasecmp(action, "OFF"))
+	{
+		if (!metadata_find(chan, "private:nofix:setter"))
+		{
+			command_fail(si, fault_nochange, _("\2%s\2 is not set to NOFIX."), target);
+			return;
+		}
+
+		metadata_delete(chan, "private:nofix:setter");
+		metadata_delete(chan, "private:nofix:reason");
+		metadata_delete(chan, "private:nofix:timestamp");
+
+		logcommand(si, CMDLOG_ADMIN, "NOFIX:OFF: \2%s\2", chan->name);
+		command_success_nodata(si, _("\2%s\2 is no longer set to NOFIX."), target);
+	}
+	else
+	{
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "NOFIX");
+		command_fail(si, fault_badparams, _("Usage: NOFIX <#channel> <ON|OFF> <reason>"));
+	}
 }
 
-command_t cmd_help = { "HELP", N_(N_("Displays contextual help information.")), AC_NONE, 1, chanfix_cmd_help, { .path = "help" } };
-
-void chanfix_can_register(hook_channel_register_check_t *req)
+// HELP <command> [params]
+static void
+chanfix_cmd_help(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanfix_channel_t *chan;
-	chanfix_oprecord_t *orec;
+	if (parv[0])
+	{
+		(void) help_display(si, si->service, parv[0], si->service->commands);
+		return;
+	}
+
+	(void) help_display_prefix(si, si->service);
+
+	(void) command_success_nodata(si, _("\2%s\2 allows for simple channel operator management."),
+	                              si->service->nick);
+
+	(void) help_display_newline(si);
+	(void) command_help(si, si->service->commands);
+	(void) help_display_moreinfo(si, si->service, NULL);
+	(void) help_display_locations(si);
+	(void) help_display_suffix(si);
+}
+
+void
+chanfix_can_register(struct hook_channel_register_check *req)
+{
+	struct chanfix_channel *chan;
+	struct chanfix_oprecord *orec;
 	unsigned int highscore, score;
 
 	return_if_fail(req != NULL);
@@ -659,3 +858,66 @@ void chanfix_can_register(hook_channel_register_check_t *req)
 		command_fail(req->si, fault_noprivs, _("Your chanfix score is too low to register \2%s\2."), req->name);
 	}
 }
+
+struct command cmd_list = {
+	.name           = "LIST",
+	.desc           = N_("List all channels with CHANFIX records."),
+	.access         = PRIV_CHAN_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &chanfix_cmd_list,
+	.help           = { .path = "chanfix/list" },
+};
+
+struct command cmd_chanfix = {
+	.name           = "CHANFIX",
+	.desc           = N_("Manually chanfix a channel."),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 1,
+	.cmd            = &chanfix_cmd_fix,
+	.help           = { .path = "chanfix/chanfix" },
+};
+
+struct command cmd_scores = {
+	.name           = "SCORES",
+	.desc           = N_("List channel scores."),
+	.access         = PRIV_CHAN_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &chanfix_cmd_scores,
+	.help           = { .path = "chanfix/scores" },
+};
+
+struct command cmd_info = {
+	.name           = "INFO",
+	.desc           = N_("List information on channel."),
+	.access         = PRIV_CHAN_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &chanfix_cmd_info,
+	.help           = { .path = "chanfix/info" },
+};
+
+struct command cmd_mark = {
+	.name           = "MARK",
+	.desc           = N_("Adds a note to a channel."),
+	.access         = PRIV_MARK,
+	.maxparc        = 3,
+	.cmd            = &chanfix_cmd_mark,
+	.help           = { .path = "chanfix/mark" },
+};
+
+struct command cmd_nofix = {
+	.name           = "NOFIX",
+	.desc           = N_("Adds NOFIX to a channel."),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 3,
+	.cmd            = &chanfix_cmd_nofix,
+	.help           = { .path = "chanfix/nofix" },
+};
+
+struct command cmd_help = {
+	.name           = "HELP",
+	.desc           = STR_HELP_DESCRIPTION,
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &chanfix_cmd_help,
+	.help           = { .path = "help" },
+};

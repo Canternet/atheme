@@ -1,160 +1,202 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * sharedheap.c: Shared heaps (mowgli.heap bound to atheme.object)
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2011 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2011-2012 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2018-2019 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * sharedheap.c: Shared heaps (mowgli.heap bound to atheme.object)
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
-typedef struct {
-	object_t parent;
+#ifdef ATHEME_ENABLE_HEAP_ALLOCATOR
 
-	size_t size;
-	mowgli_heap_t *heap;
+static mowgli_list_t sharedheap_list;
 
-	mowgli_node_t node;
-} sharedheap_t;
-
-mowgli_list_t sharedheap_list;
-
-static sharedheap_t *sharedheap_find_by_size(size_t size)
+static struct sharedheap *
+sharedheap_find_by_size(const size_t size)
 {
 	mowgli_node_t *n;
 
 	MOWGLI_ITER_FOREACH(n, sharedheap_list.head)
 	{
-		sharedheap_t *s = n->data;
+		struct sharedheap *const s = n->data;
 
 		if (s->size == size)
+		{
+#ifdef HEAP_DEBUG
+			(void) slog(LG_DEBUG, "%s: %zu --> %p", MOWGLI_FUNC_NAME, size, (void *) s);
+#endif
 			return s;
+		}
 	}
+
+#ifdef HEAP_DEBUG
+	(void) slog(LG_DEBUG, "%s: %zu --> NULL", MOWGLI_FUNC_NAME, size);
+#endif
 
 	return NULL;
 }
 
-static sharedheap_t *sharedheap_find_by_heap(mowgli_heap_t *heap)
+static struct sharedheap *
+sharedheap_find_by_heap(mowgli_heap_t *const restrict heap)
 {
 	mowgli_node_t *n;
 
 	MOWGLI_ITER_FOREACH(n, sharedheap_list.head)
 	{
-		sharedheap_t *s = n->data;
+		struct sharedheap *const s = n->data;
 
 		if (s->heap == heap)
+		{
+#ifdef HEAP_DEBUG
+			(void) slog(LG_DEBUG, "%s: %p --> %p", MOWGLI_FUNC_NAME, (void *) heap, (void *) s);
+#endif
 			return s;
+		}
 	}
+
+#ifdef HEAP_DEBUG
+	(void) slog(LG_DEBUG, "%s: %p --> NULL", MOWGLI_FUNC_NAME, (void *) heap);
+#endif
 
 	return NULL;
 }
 
-static void sharedheap_destroy(sharedheap_t *s)
+static void
+sharedheap_destroy(void *const restrict ptr)
 {
-	return_if_fail(s != NULL);
+	return_if_fail(ptr != NULL);
 
-	mowgli_heap_destroy(s->heap);
-	mowgli_node_delete(&s->node, &sharedheap_list);
+	struct sharedheap *const s = ptr;
 
-	free(s);
+	const size_t elem_size = s->size;
+
+	(void) mowgli_node_delete(&s->node, &sharedheap_list);
+	(void) mowgli_heap_destroy(s->heap);
+	(void) sfree(s);
+
+#ifdef HEAP_DEBUG
+	(void) slog(LG_DEBUG, "%s: sharedheap@%p: destroyed (elem_size %zu)", MOWGLI_FUNC_NAME, ptr, elem_size);
+#endif
 }
 
-static inline size_t sharedheap_prealloc_size(size_t size)
+static inline size_t
+sharedheap_prealloc_size(const size_t size)
 {
-	size_t page_size, prealloc_size;
-
 #ifndef MOWGLI_OS_WIN
-	page_size = sysconf(_SC_PAGESIZE);
+	const size_t page_size = sysconf(_SC_PAGESIZE);
 #else
 	SYSTEM_INFO si;
 	GetSystemInfo(&si);
 
-	page_size = si.dwPageSize;
+	const size_t page_size = si.dwPageSize;
 #endif
 
-	prealloc_size = page_size / size;
+#ifdef ATHEME_ENABLE_LARGE_NET
+	const size_t prealloc_size = (page_size / size) * 4U;
+#else
+	const size_t prealloc_size = (page_size / size);
+#endif
 
-#ifdef LARGE_NETWORK
-	prealloc_size *= 4;
+#ifdef HEAP_DEBUG
+	(void) slog(LG_DEBUG, "%s: %zu --> %zu", MOWGLI_FUNC_NAME, size, prealloc_size);
 #endif
 
 	return prealloc_size;
 }
 
-static inline size_t sharedheap_normalize_size(size_t size)
+static inline size_t
+sharedheap_normalize_size(const size_t size)
 {
-	size_t normalized;
+	const size_t normalized = ((size / sizeof(void *)) + ((size / sizeof(void *)) % 2U)) * sizeof(void *);
 
-	normalized = ((size / sizeof(void *)) + ((size / sizeof(void *)) % 2)) * sizeof(void *);
-
-	slog(LG_DEBUG, "sharedheap_normalize_size(%zu): normalized=%zu", size, normalized);
+#ifdef HEAP_DEBUG
+	(void) slog(LG_DEBUG, "%s: %zu --> %zu", MOWGLI_FUNC_NAME, size, normalized);
+#endif
 
 	return normalized;
 }
 
-static sharedheap_t *sharedheap_new(size_t size)
+static struct sharedheap * ATHEME_FATTR_MALLOC
+sharedheap_new(const size_t size)
 {
-	sharedheap_t *s;
+	mowgli_heap_t *const heap = mowgli_heap_create(size, sharedheap_prealloc_size(size), BH_NOW);
 
-	s = smalloc(sizeof(sharedheap_t));
-	object_init(object(s), NULL, (destructor_t) sharedheap_destroy);
-
-	s->size = size;
-	s->heap = mowgli_heap_create(size, sharedheap_prealloc_size(size), BH_NOW);
-
-	mowgli_node_add(s, &s->node, &sharedheap_list);
-
-	return object_sink_ref(s);
-}
-
-mowgli_heap_t *sharedheap_get(size_t size)
-{
-	sharedheap_t *s;
-
-	size = sharedheap_normalize_size(size);
-
-	s = sharedheap_find_by_size(size);
-
-	if (s == NULL)
+	if (! heap)
 	{
-		if ((s = sharedheap_new(size)) == NULL)
-		{
-			slog(LG_DEBUG, "sharedheap_get(%zu): mowgli.heap failure", size);
-			return NULL;
-		}
+		(void) slog(LG_ERROR, "%s: mowgli_heap_create() failed!", MOWGLI_FUNC_NAME);
+		return NULL;
 	}
 
-	soft_assert(s != NULL);
+	struct sharedheap *const s = smalloc(sizeof *s);
 
-	object_ref(s);
+	(void) atheme_object_init(atheme_object(s), NULL, &sharedheap_destroy);
+	(void) mowgli_node_add(s, &s->node, &sharedheap_list);
+
+	s->size = size;
+	s->heap = heap;
+
+#ifdef HEAP_DEBUG
+	(void) slog(LG_DEBUG, "%s: created (elem_size %zu)", MOWGLI_FUNC_NAME, size);
+#endif
+
+	return s;
+}
+
+mowgli_heap_t *
+sharedheap_get(const size_t size)
+{
+	const size_t normalized = sharedheap_normalize_size(size);
+
+	struct sharedheap *s = sharedheap_find_by_size(normalized);
+
+	if (s)
+		(void) atheme_object_ref(s);
+	else if (! (s = sharedheap_new(normalized)))
+		return NULL;
 
 	return s->heap;
 }
 
-void sharedheap_unref(mowgli_heap_t *heap)
+void
+sharedheap_unref(mowgli_heap_t *const restrict heap)
 {
-	sharedheap_t *s;
-
 	return_if_fail(heap != NULL);
 
-	s = sharedheap_find_by_heap(heap);
+	struct sharedheap *const s = sharedheap_find_by_heap(heap);
 
 	return_if_fail(s != NULL);
 
-	object_unref(s);
+	(void) atheme_object_unref(s);
 }
+
+#else /* ATHEME_ENABLE_HEAP_ALLOCATOR */
+
+mowgli_heap_t *
+sharedheap_get(const size_t size)
+{
+	mowgli_heap_t *const heap = mowgli_heap_create(size, 2, BH_NOW);
+
+	if (! heap)
+		return NULL;
+
+	return heap;
+}
+
+void
+sharedheap_unref(mowgli_heap_t *const restrict heap)
+{
+	return_if_fail(heap != NULL);
+
+	(void) mowgli_heap_destroy(heap);
+}
+
+#endif /* !ATHEME_ENABLE_HEAP_ALLOCATOR */

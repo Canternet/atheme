@@ -1,31 +1,34 @@
 /*
- * Copyright (c) 2014 Atheme Development Group
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2014 Atheme Project (http://atheme.org/)
  *
  * JSONRPC library header
- *
  */
 
-#ifndef JSONRPC_H
-#define JSONRPC_H
+#ifndef ATHEME_MOD_TRANSPORT_JSONRPC_JSONRPCLIB_H
+#define ATHEME_MOD_TRANSPORT_JSONRPC_JSONRPCLIB_H 1
 
-#include "atheme.h"
+#include <atheme.h>
 
-typedef bool (*jsonrpc_method_t)(void *conn, mowgli_list_t *params, char *id);
+typedef bool (*jsonrpc_method_fn)(void *conn, mowgli_list_t *params, char *id);
 
-typedef struct {
-    sourceinfo_t *base;
+struct jsonrpc_sourceinfo
+{
+    struct sourceinfo *base;
     char *id;
-} jsonrpc_sourceinfo_t;
+};
 
-E char *jsonrpc_normalizeBuffer(const char *buf);
+char *jsonrpc_normalizeBuffer(const char *buf) ATHEME_FATTR_MALLOC;
 
-E jsonrpc_method_t get_json_method(const char *method_name);
+jsonrpc_method_fn get_json_method(const char *method_name);
 
-E void jsonrpc_process(char *buffer, void *userdata);
-E void jsonrpc_register_method(const char *method_name, bool (*method)(void *conn, mowgli_list_t *params, char *id));
-E void jsonrpc_unregister_method(const char *method_name);
-E void jsonrpc_send_data(void *conn, char *str);
-E void jsonrpc_success_string(void *conn, const char *str, const char *id);
-E void jsonrpc_failure_string(void *conn, int code, const char *str, const char *id);
+void jsonrpc_process(char *buffer, void *userdata);
+void jsonrpc_register_method(const char *method_name, bool (*method)(void *conn, mowgli_list_t *params, char *id));
+void jsonrpc_unregister_method(const char *method_name);
+void jsonrpc_send_data(void *conn, char *str);
+void jsonrpc_success_string(void *conn, const char *str, const char *id);
+void jsonrpc_failure_string(void *conn, int code, const char *str, const char *id);
 
-#endif
+#endif /* !ATHEME_MOD_TRANSPORT_JSONRPC_JSONRPCLIB_H */

@@ -1,163 +1,20 @@
 /*
- * Copyright (c) 2005-2007 William Pitcock <nenolod@nenolod.net>
- * Copyright (c) 2006-2007 Jilles Tjoelker <jilles@stack.nl>
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Rights to this code are documented in doc/LICENSE.
+ * Copyright (C) 2005-2007 William Pitcock <nenolod@nenolod.net>
+ * Copyright (C) 2006-2007 Jilles Tjoelker <jilles@stack.nl>
  *
  * Dice generator.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "gameserv_common.h"
-
-#include <math.h>
-
-DECLARE_MODULE_V1("gameserv/dice", false, _modinit, _moddeinit, PACKAGE_STRING, "Atheme Development Group <http://www.atheme.org>");
-
-static void command_dice(sourceinfo_t *si, int parc, char *parv[]);
-static void command_calc(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cmd_dice = { "ROLL", N_("Rolls one or more dice."), AC_NONE, 3, command_dice, {.path = "gameserv/roll"} };
-command_t cmd_calc = { "CALC", N_("Calculate stuff."), AC_NONE, 3, command_calc, {.path = "gameserv/calc"} };
-
-static unsigned int max_rolls = 10;
-
-void _modinit(module_t * m)
-{
-	service_t *svs;
-
-	service_named_bind_command("chanserv", &cmd_dice);
-	service_named_bind_command("chanserv", &cmd_calc);
-
-	svs = service_find("gameserv");
-	if (!svs)
-		return;
-
-	service_bind_command(svs, &cmd_dice);
-	service_bind_command(svs, &cmd_calc);
-
-	add_uint_conf_item("MAX_ROLLS", &svs->conf_table, 0, &max_rolls, 1, INT_MAX, 10);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_t *svs;
-
-	service_named_unbind_command("chanserv", &cmd_dice);
-	service_named_unbind_command("chanserv", &cmd_calc);
-
-	svs = service_find("gameserv");
-	if (!svs)
-		return;
-
-	service_unbind_command(svs, &cmd_dice);
-	service_unbind_command(svs, &cmd_calc);
-
-	del_conf_item("MAX_ROLLS", &svs->conf_table);
-}
 
 #define CALC_MAX_STACK		(128)
 
 #define DICE_MAX_DICE		(100)
 #define DICE_MAX_SIDES		(100)
-
-int do_calc_expr(sourceinfo_t *si, char *expr, char *errmsg, double *presult);
-int do_calc_eval(sourceinfo_t *si, double lhs, char oper, double rhs, double *out, char *errmsg);
-int is_calcoper(char oper);
-
-//
-// <expr>
-//   expr = {<op>(<expr>)}|{<op><expr>}
-//   op   = { ~ ! d * / % \ ^ + - & $ | }
-//
-// [Rank 1]                        |  [Rank 4]
-// ~   = One's compliment          |  + - = Add / Subtract
-// !   = Logical NOT               |
-// d   = Dice Generator, LOL.      |  [Rank 5]
-//                                 |  &   = Bitwise AND
-// [Rank 2]                        |
-// ^   = Power                     |  [Rank 6]
-//                                 |  $   = Bitwise XOR (eXclusive OR)
-// [Rank 3]                        |
-// * / = Multiply / Divide         |  [Rank 7]
-// % \ = Modulus / Integer-divide  |  |   = Bitwise inclusive OR
-//
-static bool eval_calc(sourceinfo_t *si, char *s_input)
-{
-	static char buffer[1024];
-
-	char *ci = s_input;
-
-	int err, braces = 0;
-	double expr;
-
-
-	if (s_input == NULL)
-	{
-		command_fail(si, fault_badparams, _("Error: You typed an invalid expression."));
-		return false;
-	}
-
-	// Skip leading whitespace
-	while (*ci && isspace((unsigned char)*ci))
-		ci++;
-
-	if (!*ci)
-	{
-		command_fail(si, fault_badparams, _("Error: You typed an invalid expression."));
-		return false;
-	}
-
-	// Validate braces
-	while (*ci)
-	{
-		if (*ci == '(')
-		{
-			braces++;
-		}
-		else if (*ci == ')')
-		{
-			if (--braces < 0)
-				break;	// mismatched!
-		}
-		else if (!isspace((unsigned char)*ci) && !isdigit((unsigned char)*ci) && *ci != '.' && !is_calcoper(*ci))
-		{
-			command_fail(si, fault_badparams, _("Error: You typed an invalid expression."));
-			return false;
-		}
-		ci++;
-	}
-
-	if (braces != 0)
-	{
-		command_fail(si, fault_badparams, _("Error: Mismatched braces '( )' in expression."));
-		return false;
-	}
-
-	err = do_calc_expr(si, s_input, buffer, &expr);
-
-	if (!err)
-	{
-		if (strlen(s_input) > 250)
-		{
-			mowgli_strlcpy(buffer, s_input, 150);
-			sprintf(&buffer[150], "...%s = %.8g", &s_input[strlen(s_input) - 10], expr);
-		}
-		else
-		{
-			sprintf(buffer, "%s = %.8g", s_input, expr);
-		}
-	}
-	else
-		return false;
-
-	gs_command_report(si, "%s", buffer);
-	return true;
-}
-
-
-//////////////////////////////////////////////////////////////////////////
 
 enum
 {
@@ -165,7 +22,7 @@ enum
 	CALCEXPR_OPER
 };
 
-typedef struct _tagCalcStack
+typedef struct
 {
 	double _value;
 	char _oper;
@@ -173,7 +30,116 @@ typedef struct _tagCalcStack
 	int _brace;
 } CalcStack;
 
-int do_calc_expr(sourceinfo_t *si, char *expr, char *errmsg, double *presult)
+static unsigned int max_rolls = 10;
+
+static int
+is_calcoper(char oper)
+{
+	static char *opers = "~!d ^ */%\\ +- & $ |";
+	char *c = opers;
+	int rank = 1;
+
+	while (*c && *c != oper)
+	{
+		if (*c == ' ')
+			rank++;
+		c++;
+	}
+
+	return (*c ? rank : 0);
+}
+
+static double
+calc_dice_simple(double lhs, double rhs)
+{
+	double out = 0.0;
+	int i, sides, dice;
+
+	dice = floor(lhs);
+	sides = floor(rhs);
+
+	if (dice < 1 || dice > 100)
+		return 0.0;
+
+	if (sides < 1 || sides > 100)
+		return 0.0;
+
+	for (i = 0; i < dice; i++)
+	{
+		out += 1.0 + atheme_random_uniform(sides);
+	}
+
+	return out;
+}
+
+static int
+do_calc_eval(struct sourceinfo *si, double lhs, char oper, double rhs, double *out, char *errmsg)
+{
+	switch (oper)
+	{
+	  case '~':		// 1's compliment (unary)
+		  *out = (double)(~(long long)rhs);
+		  break;
+	  case '!':		// NOT (unary)
+		  *out = (double)(!(long long)rhs);
+		  break;
+	  case 'd':
+		  *out = calc_dice_simple(lhs, rhs);
+		  break;
+	  case '*':		// multiplication
+		  *out = lhs * rhs;
+		  break;
+	  case '/':		// division
+	  case '%':		// MOD
+	  case '\\':		// DIV
+		  if (rhs <= 0.0 || (oper == '%' && ((long long)rhs == 0)))
+		  {
+			  command_fail(si, fault_badparams, _("Error: Cannot perform modulus or division by zero."));
+			  return 1;
+		  }
+
+		  switch (oper)
+		  {
+		    case '/':
+			    *out = lhs / rhs;
+			    break;
+		    case '%':
+			    *out = (double)((long long)lhs % (long long)rhs);
+			    break;
+		    case '\\':
+			    lhs /= rhs;
+			    *out = (lhs < 0) ? ceil(lhs) : floor(lhs);
+			    break;
+		  }
+		  break;
+	  case '^':		// power-of
+		  *out = pow(lhs, rhs);
+		  break;
+	  case '+':		// addition
+		  *out = lhs + rhs;
+		  break;
+	  case '-':		// subtraction
+		  *out = lhs - rhs;
+		  break;
+	  case '&':		// AND (bitwise)
+		  *out = (double)((long long)lhs & (long long)rhs);
+		  break;
+	  case '$':		// XOR (bitwise)
+		  *out = (double)((long long)lhs ^ (long long)rhs);
+		  break;
+	  case '|':		// OR (bitwise)
+		  *out = (double)((long long)lhs | (long long)rhs);
+		  break;
+	  default:
+		  command_fail(si, fault_unimplemented, _("Error: Unknown mathematical operator %c."), oper);
+		  return 1;
+	}
+
+	return 0;
+}
+
+static int
+do_calc_expr(struct sourceinfo *si, char *expr, char *errmsg, double *presult)
 {
 	int expect = CALCEXPR_VALUE, lastrank, currank;
 	char *cur = expr, *endptr, lastop, curop = ' ';
@@ -346,119 +312,98 @@ int do_calc_expr(sourceinfo_t *si, char *expr, char *errmsg, double *presult)
 	return 0;		// no error
 }
 
-
-static double calc_dice_simple(double lhs, double rhs)
-{
-	double out = 0.0;
-	int i, sides, dice;
-
-	dice = floor(lhs);
-	sides = floor(rhs);
-
-	if (dice < 1 || dice > 100)
-		return 0.0;
-
-	if (sides < 1 || sides > 100)
-		return 0.0;
-
-	for (i = 0; i < dice; i++)
-	{
-		out += 1.0 + (arc4random() % sides);
-	}
-
-	return out;
-}
-
-//////////////////////////////////////////////////////////////////////////
-
-int do_calc_eval(sourceinfo_t *si, double lhs, char oper, double rhs, double *out, char *errmsg)
-{
-	switch (oper)
-	{
-	  case '~':		// 1's compliment (unary)
-		  *out = (double)(~(long long)rhs);
-		  break;
-	  case '!':		// NOT (unary)
-		  *out = (double)(!(long long)rhs);
-		  break;
-	  case 'd':
-		  *out = calc_dice_simple(lhs, rhs);
-		  break;
-	  case '*':		// multiplication
-		  *out = lhs * rhs;
-		  break;
-	  case '/':		// division
-	  case '%':		// MOD
-	  case '\\':		// DIV
-		  if (rhs <= 0.0 || (oper == '%' && ((long long)rhs == 0)))
-		  {
-			  command_fail(si, fault_badparams, _("Error: Cannot perform modulus or division by zero."));
-			  return 1;
-		  }
-
-		  switch (oper)
-		  {
-		    case '/':
-			    *out = lhs / rhs;
-			    break;
-		    case '%':
-			    *out = (double)((long long)lhs % (long long)rhs);
-			    break;
-		    case '\\':
-			    lhs /= rhs;
-			    *out = (lhs < 0) ? ceil(lhs) : floor(lhs);
-			    break;
-		  }
-		  break;
-	  case '^':		// power-of
-		  *out = pow(lhs, rhs);
-		  break;
-	  case '+':		// addition
-		  *out = lhs + rhs;
-		  break;
-	  case '-':		// subtraction
-		  *out = lhs - rhs;
-		  break;
-	  case '&':		// AND (bitwise)
-		  *out = (double)((long long)lhs & (long long)rhs);
-		  break;
-	  case '$':		// XOR (bitwise)
-		  *out = (double)((long long)lhs ^ (long long)rhs);
-		  break;
-	  case '|':		// OR (bitwise)
-		  *out = (double)((long long)lhs | (long long)rhs);
-		  break;
-	  default:
-		  command_fail(si, fault_unimplemented, _("Error: Unknown mathematical operator %c."), oper);
-		  return 1;
-	}
-
-	return 0;
-}
-
-//////////////////////////////////////////////////////////////////////////
-
-// Is 'oper' an operator? If so, return its 'rank', else '0'.
+// <expr>
+//   expr = {<op>(<expr>)}|{<op><expr>}
+//   op   = { ~ ! d * / % \ ^ + - & $ | }
 //
-int is_calcoper(char oper)
+// [Rank 1]                        |  [Rank 4]
+// ~   = One's compliment          |  + - = Add / Subtract
+// !   = Logical NOT               |
+// d   = Dice Generator, LOL.      |  [Rank 5]
+//                                 |  &   = Bitwise AND
+// [Rank 2]                        |
+// ^   = Power                     |  [Rank 6]
+//                                 |  $   = Bitwise XOR (eXclusive OR)
+// [Rank 3]                        |
+// * / = Multiply / Divide         |  [Rank 7]
+// % \ = Modulus / Integer-divide  |  |   = Bitwise inclusive OR
+//
+static bool
+eval_calc(struct sourceinfo *si, char *s_input)
 {
-	static char *opers = "~!d ^ */%\\ +- & $ |";
-	char *c = opers;
-	int rank = 1;
+	static char buffer[1024];
 
-	while (*c && *c != oper)
+	char *ci = s_input;
+
+	int err, braces = 0;
+	double expr;
+
+
+	if (s_input == NULL)
 	{
-		if (*c == ' ')
-			rank++;
-		c++;
+		command_fail(si, fault_badparams, _("Error: You typed an invalid expression."));
+		return false;
 	}
 
-	return (*c ? rank : 0);
+	// Skip leading whitespace
+	while (*ci && isspace((unsigned char)*ci))
+		ci++;
+
+	if (!*ci)
+	{
+		command_fail(si, fault_badparams, _("Error: You typed an invalid expression."));
+		return false;
+	}
+
+	// Validate braces
+	while (*ci)
+	{
+		if (*ci == '(')
+		{
+			braces++;
+		}
+		else if (*ci == ')')
+		{
+			if (--braces < 0)
+				break;	// mismatched!
+		}
+		else if (!isspace((unsigned char)*ci) && !isdigit((unsigned char)*ci) && *ci != '.' && !is_calcoper(*ci))
+		{
+			command_fail(si, fault_badparams, _("Error: You typed an invalid expression."));
+			return false;
+		}
+		ci++;
+	}
+
+	if (braces != 0)
+	{
+		command_fail(si, fault_badparams, _("Error: Mismatched braces '( )' in expression."));
+		return false;
+	}
+
+	err = do_calc_expr(si, s_input, buffer, &expr);
+
+	if (!err)
+	{
+		if (strlen(s_input) > 250)
+		{
+			mowgli_strlcpy(buffer, s_input, 150);
+			sprintf(&buffer[150], "...%s = %.8g", &s_input[strlen(s_input) - 10], expr);
+		}
+		else
+		{
+			sprintf(buffer, "%s = %.8g", s_input, expr);
+		}
+	}
+	else
+		return false;
+
+	gs_command_report(si, "%s", buffer);
+	return true;
 }
 
-/*************************************************************************************/
-
-static bool eval_dice(sourceinfo_t *si, char *s_input)
+static bool
+eval_dice(struct sourceinfo *si, char *s_input)
 {
 	static char buffer[1024], result[32];
 
@@ -534,19 +479,19 @@ static bool eval_dice(sourceinfo_t *si, char *s_input)
 	}
 
 	total = 0.0;
-	snprintf(buffer, 1024, "\2%s\2 rolled %ud%u: ", si->su->nick, x, y);
+	snprintf(buffer, 1024, _("\2%s\2 rolled %ud%u: "), si->su->nick, x, y);
 	for (roll = 0; roll < x; ++roll)
 	{
-		snprintf(result, 32, "%d ", dice = (1 + (arc4random() % y)));
+		snprintf(result, 32, "%u ", dice = (1 + atheme_random_uniform(y)));
 		mowgli_strlcat(buffer, result, sizeof(buffer));
 		total += dice;
 	}
 
 	if (op == '\0')
-		snprintf(result, 32, " <Total: %g>", total);
+		snprintf(result, 32, _(" <Total: %g>"), total);
 	else
 	{
-		snprintf(result, 32, " <Total: %g(%c%u) = ", total, op, z);
+		snprintf(result, 32, _(" <Total: %g(%c%u) = "), total, op, z);
 		mowgli_strlcat(buffer, result, sizeof(buffer));
 		switch (op)
 		{
@@ -573,36 +518,40 @@ static bool eval_dice(sourceinfo_t *si, char *s_input)
 	return true;
 }
 
-static void command_dice(sourceinfo_t *si, int parc, char *parv[])
+static void
+command_dice(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *arg;
-	mychan_t *mc;
-	int i, times = 1;
+	struct mychan *mc;
+	unsigned int i, times = 1;
 
 	if (!gs_do_parameters(si, &parc, &parv, &mc))
 		return;
+
 	if (parc < 1)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "ROLL");
 		command_fail(si, fault_needmoreparams, _("Syntax: ROLL [times] [dice]d<sides>"));
 		return;
 	}
+
 	if (parc < 2)
+	{
 		arg = parv[0];
+	}
 	else
 	{
-		times = atoi(parv[0]);
-		arg = parv[1];
-
-		if (times > max_rolls)
+		if (! string_to_uint(parv[0], &times) || times > max_rolls)
 			times = max_rolls;
+
+		arg = parv[1];
 	}
 
 	if (!strcasecmp("RICK", arg))
 	{
-		gs_command_report(si, "Never gonna give you up; Never gonna let you down");
-		gs_command_report(si, "Never gonna run around and desert you; Never gonna make you cry");
-		gs_command_report(si, "Never gonna say goodbye; Never gonna tell a lie and hurt you");
+		gs_command_report(si, _("Never gonna give you up; Never gonna let you down"));
+		gs_command_report(si, _("Never gonna run around and desert you; Never gonna make you cry"));
+		gs_command_report(si, _("Never gonna say goodbye; Never gonna tell a lie and hurt you"));
 		return;
 	}
 
@@ -611,29 +560,33 @@ static void command_dice(sourceinfo_t *si, int parc, char *parv[])
 			break;
 }
 
-static void command_calc(sourceinfo_t *si, int parc, char *parv[])
+static void
+command_calc(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *arg;
-	mychan_t *mc;
-	int i, times = 1;
+	struct mychan *mc;
+	unsigned int i, times = 1;
 
 	if (!gs_do_parameters(si, &parc, &parv, &mc))
 		return;
+
 	if (parc < 1)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "CALC");
 		command_fail(si, fault_needmoreparams, _("Syntax: CALC [times] <expression>"));
 		return;
 	}
+
 	if (parc < 2)
+	{
 		arg = parv[0];
+	}
 	else
 	{
-		times = atoi(parv[0]);
-		arg = parv[1];
-
-		if (times > max_rolls)
+		if (! string_to_uint(parv[0], &times) || times > max_rolls)
 			times = max_rolls;
+
+		arg = parv[1];
 	}
 
 	for (i = 0; i < times; i++)
@@ -641,4 +594,58 @@ static void command_calc(sourceinfo_t *si, int parc, char *parv[])
 			break;
 }
 
-//////////////////////////////////////////////////////////////////////////
+static struct command cmd_dice = {
+	.name           = "ROLL",
+	.desc           = N_("Rolls one or more dice."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &command_dice,
+	.help           = { .path = "gameserv/roll" },
+};
+
+static struct command cmd_calc = {
+	.name           = "CALC",
+	.desc           = N_("Calculate stuff."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &command_calc,
+	.help           = { .path = "gameserv/calc" },
+};
+
+static void
+mod_init(struct module ATHEME_VATTR_UNUSED *const restrict m)
+{
+	struct service *svs;
+
+	service_named_bind_command("chanserv", &cmd_dice);
+	service_named_bind_command("chanserv", &cmd_calc);
+
+	svs = service_find("gameserv");
+	if (!svs)
+		return;
+
+	service_bind_command(svs, &cmd_dice);
+	service_bind_command(svs, &cmd_calc);
+
+	add_uint_conf_item("MAX_ROLLS", &svs->conf_table, 0, &max_rolls, 1, INT_MAX, 10);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	struct service *svs;
+
+	service_named_unbind_command("chanserv", &cmd_dice);
+	service_named_unbind_command("chanserv", &cmd_calc);
+
+	svs = service_find("gameserv");
+	if (!svs)
+		return;
+
+	service_unbind_command(svs, &cmd_dice);
+	service_unbind_command(svs, &cmd_calc);
+
+	del_conf_item("MAX_ROLLS", &svs->conf_table);
+}
+
+SIMPLE_DECLARE_MODULE_V1("gameserv/dice", MODULE_UNLOAD_CAPABILITY_OK)

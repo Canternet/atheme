@@ -1,31 +1,35 @@
 /*
- * Copyright (c) 2006-2007 William Pitcock, et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006-2007 William Pitcock, et al.
  *
  * This file contains routines to handle the NickServ SET PRIVMSG command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "list_common.h"
 #include "list.h"
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_privmsg", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
+static bool
+uses_privmsg(const struct mynick *mn, const void *arg)
+{
+	struct myuser *mu = mn->owner;
 
-/* SET PRIVMSG ON|OFF */
-static void ns_cmd_set_privmsg(sourceinfo_t *si, int parc, char *parv[])
+	return ( mu->flags & MU_USE_PRIVMSG ) == MU_USE_PRIVMSG;
+}
+
+// SET PRIVMSG ON|OFF
+static void
+ns_cmd_set_privmsg(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *params = parv[0];
 
 	if (!params)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "PRIVMSG");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET PRIVMSG");
 		return;
 	}
 
@@ -63,30 +67,32 @@ static void ns_cmd_set_privmsg(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "PRIVMSG");
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET PRIVMSG");
 		return;
 	}
 }
 
-command_t ns_set_privmsg = { "PRIVMSG", N_("Uses private messages instead of notices if enabled."), AC_NONE, 1, ns_cmd_set_privmsg, { .path = "nickserv/set_privmsg" } };
+static struct command ns_set_privmsg = {
+	.name           = "PRIVMSG",
+	.desc           = N_("Uses private messages instead of notices if enabled."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_privmsg,
+	.help           = { .path = "nickserv/set_privmsg" },
+};
 
-static bool uses_privmsg(const mynick_t *mn, const void *arg)
+static void
+mod_init(struct module *const restrict m)
 {
-	myuser_t *mu = mn->owner;
-
-	return ( mu->flags & MU_USE_PRIVMSG ) == MU_USE_PRIVMSG;
-}
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-	command_add(&ns_set_privmsg, *ns_set_cmdtree);
-
-	use_privmsg++;
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
 
 	use_nslist_main_symbols(m);
 
-	static list_param_t use_privmsg;
+	use_privmsg++;
+
+	command_add(&ns_set_privmsg, *ns_set_cmdtree);
+
+	static struct list_param use_privmsg;
 	use_privmsg.opttype = OPT_BOOL;
 	use_privmsg.is_match = uses_privmsg;
 
@@ -94,7 +100,8 @@ void _modinit(module_t *m)
 	list_register("use_privmsg", &use_privmsg);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	command_delete(&ns_set_privmsg, *ns_set_cmdtree);
 
@@ -104,8 +111,4 @@ void _moddeinit(module_unload_intent_t intent)
 	list_unregister("use_privmsg");
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_privmsg", MODULE_UNLOAD_CAPABILITY_OK)

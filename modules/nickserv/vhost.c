@@ -1,44 +1,16 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
  *
  * Allows setting a vhost on an account
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/vhost", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void vhost_on_identify(user_t *u);
-static void ns_cmd_vhost(sourceinfo_t *si, int parc, char *parv[]);
-static void ns_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_vhost = { "VHOST", N_("Manages user virtualhosts."), PRIV_USER_VHOST, 4, ns_cmd_vhost, { .path = "nickserv/vhost" } };
-command_t ns_listvhost = { "LISTVHOST", N_("Lists user virtualhosts."), PRIV_USER_AUSPEX, 1, ns_cmd_listvhost, { .path = "nickserv/listvhost" } };
-
-void _modinit(module_t *m)
-{
-	hook_add_event("user_identify");
-	hook_add_user_identify(vhost_on_identify);
-	service_named_bind_command("nickserv", &ns_vhost);
-	service_named_bind_command("nickserv", &ns_listvhost);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	hook_del_user_identify(vhost_on_identify);
-	service_named_unbind_command("nickserv", &ns_vhost);
-	service_named_unbind_command("nickserv", &ns_listvhost);
-}
-
-
-static void do_sethost(user_t *u, stringref host)
+static void
+do_sethost(struct user *u, stringref host)
 {
 	if (!strcmp(u->vhost, host))
 		return;
@@ -46,10 +18,11 @@ static void do_sethost(user_t *u, stringref host)
 	user_sethost(nicksvs.me->me, u, host);
 }
 
-static void do_sethost_all(myuser_t *mu, stringref host)
+static void
+do_sethost_all(struct myuser *mu, stringref host)
 {
 	mowgli_node_t *n;
-	user_t *u;
+	struct user *u;
 
 	MOWGLI_ITER_FOREACH(n, mu->logins.head)
 	{
@@ -59,18 +32,19 @@ static void do_sethost_all(myuser_t *mu, stringref host)
 	}
 }
 
-/* VHOST <account> [host]  (legacy) */
-/* VHOST <account> ON|OFF [host] */
-static void ns_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
+// VHOST <account> [host]  (legacy)
+// VHOST <account> ON|OFF [host]
+static void
+ns_cmd_vhost(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *host;
-	myuser_t *mu;
-	metadata_t *md, *markmd;
+	struct myuser *mu;
+	struct metadata *md, *markmd;
 	bool force = false, ismarked = false;
 	char cmdtext[NICKLEN + HOSTLEN + 20];
 	char timestring[16];
-	hook_user_needforce_t needforce_hdata;
+	struct hook_user_needforce needforce_hdata;
 
 	if (!target)
 	{
@@ -79,10 +53,10 @@ static void ns_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* find the user... */
+	// find the user...
 	if (!(mu = myuser_find_ext(target)))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
 
@@ -194,7 +168,7 @@ static void ns_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 		}
 	}
 
-	/* deletion action */
+	// deletion action
 	if (!host)
 	{
 		if (!metadata_find(mu, "private:usercloak"))
@@ -211,7 +185,7 @@ static void ns_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_ADMIN, "VHOST:REMOVE: \2%s\2", entity(mu)->name);
 		if (ismarked)
 		{
-			wallops("%s deleted vhost from the \2MARKED\2 account %s.", get_oper_name(si), entity(mu)->name);
+			wallops("\2%s\2 deleted vhost from the \2MARKED\2 account %s.", get_oper_name(si), entity(mu)->name);
 			if (markmd) {
 				command_success_nodata(si, _("Overriding MARK placed by %s on the account %s."), markmd->value, entity(mu)->name);
 			} else {
@@ -244,7 +218,7 @@ static void ns_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 			host, entity(mu)->name);
 	if (ismarked)
 	{
-		wallops("%s set vhost %s on the \2MARKED\2 account %s.", get_oper_name(si), host, entity(mu)->name);
+		wallops("\2%s\2 set vhost %s on the \2MARKED\2 account %s.", get_oper_name(si), host, entity(mu)->name);
 		if (markmd) {
 			command_success_nodata(si, _("Overriding MARK placed by %s on the account %s."), markmd->value, entity(mu)->name);
 		} else {
@@ -255,14 +229,15 @@ static void ns_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-static void ns_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_listvhost(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *pattern;
-	myentity_iteration_state_t state;
-	myentity_t *mt;
-	myuser_t *mu;
-	metadata_t *md;
-	int matches = 0;
+	struct myentity_iteration_state state;
+	struct myentity *mt;
+	struct myuser *mu;
+	struct metadata *md;
+	unsigned int matches = 0;
 
 	pattern = parc >= 1 ? parv[0] : "*";
 
@@ -279,28 +254,61 @@ static void ns_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[])
 		}
 	}
 
-	logcommand(si, CMDLOG_ADMIN, "LISTVHOST: \2%s\2 (\2%d\2 matches)", pattern, matches);
+	logcommand(si, CMDLOG_ADMIN, "LISTVHOST: \2%s\2 (\2%u\2 matches)", pattern, matches);
 	if (matches == 0)
 		command_success_nodata(si, _("No vhosts matched pattern \2%s\2"), pattern);
 	else
-		command_success_nodata(si, ngettext(N_("\2%d\2 match for pattern \2%s\2"),
-						    N_("\2%d\2 matches for pattern \2%s\2"), matches), matches, pattern);
+		command_success_nodata(si, ngettext(N_("\2%u\2 match for pattern \2%s\2"),
+						    N_("\2%u\2 matches for pattern \2%s\2"), matches), matches, pattern);
 }
 
-static void vhost_on_identify(user_t *u)
+static void
+vhost_on_identify(struct user *u)
 {
-	myuser_t *mu = u->myuser;
-	metadata_t *md;
+	struct myuser *mu = u->myuser;
+	struct metadata *md;
 
-	/* NO CLOAK?!*$*%*&&$(!& */
+	// NO CLOAK?!*$*%*&&$(!&
 	if (!(md = metadata_find(mu, "private:usercloak")))
 		return;
 
 	do_sethost(u, md->value);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_vhost = {
+	.name           = "VHOST",
+	.desc           = N_("Manages user virtualhosts."),
+	.access         = PRIV_USER_VHOST,
+	.maxparc        = 4,
+	.cmd            = &ns_cmd_vhost,
+	.help           = { .path = "nickserv/vhost" },
+};
+
+static struct command ns_listvhost = {
+	.name           = "LISTVHOST",
+	.desc           = N_("Lists user virtualhosts."),
+	.access         = PRIV_USER_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_listvhost,
+	.help           = { .path = "nickserv/listvhost" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	hook_add_first_user_identify(vhost_on_identify);
+	service_named_bind_command("nickserv", &ns_vhost);
+	service_named_bind_command("nickserv", &ns_listvhost);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	hook_del_user_identify(vhost_on_identify);
+	service_named_unbind_command("nickserv", &ns_vhost);
+	service_named_unbind_command("nickserv", &ns_listvhost);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/vhost", MODULE_UNLOAD_CAPABILITY_OK)

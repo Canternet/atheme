@@ -1,14 +1,17 @@
-PLUGIN = jsonrpc$(PLUGIN_SUFFIX)
-
-SRCS = main.c jsonrpclib.c
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
+#
+# Copyright (C) 2014 Errietta Kostala <errietta@errietta.me>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../../extra.mk
+
+plugindir = ${MODDIR}/modules/transport
+PLUGIN    = jsonrpc${PLUGIN_SUFFIX}
+SRCS      = jsonrpclib.c main.c
+
 include ../../../buildsys.mk
 
-plugindir = $(MODDIR)/modules/transport
-
-CPPFLAGS	+= -I../../../include
-CFLAGS		+= $(PLUGIN_CFLAGS)
-LDFLAGS		+= $(PLUGIN_LDFLAGS)
-LIBS +=	-L../../../libathemecore -lathemecore ${LDFLAGS_RPATH}
-
+CPPFLAGS += -I../../../include
+LDFLAGS  += -L../../../libathemecore
+LIBS     += -lathemecore

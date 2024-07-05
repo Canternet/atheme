@@ -1,40 +1,20 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 Atheme Project (http://atheme.org/)
  *
  * Controls noexpire options for channels.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/hold", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_hold(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_hold = { "HOLD", N_("Prevents a channel from expiring."),
-			PRIV_HOLD, 2, cs_cmd_hold, { .path = "cservice/hold" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("chanserv", &cs_hold);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_hold);
-}
-
-static void cs_cmd_hold(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_hold(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *action = parv[1];
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (!target || !action)
 	{
@@ -51,7 +31,7 @@ static void cs_cmd_hold(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!(mc = mychan_find(target)))
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), target);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
 
@@ -65,7 +45,7 @@ static void cs_cmd_hold(sourceinfo_t *si, int parc, char *parv[])
 
 		mc->flags |= MC_HOLD;
 
-		wallops("%s set the HOLD option for the channel \2%s\2.", get_oper_name(si), target);
+		wallops("\2%s\2 set the HOLD option for the channel \2%s\2.", get_oper_name(si), target);
 		logcommand(si, CMDLOG_ADMIN, "HOLD:ON: \2%s\2", mc->name);
 		command_success_nodata(si, _("\2%s\2 is now held."), target);
 	}
@@ -79,7 +59,7 @@ static void cs_cmd_hold(sourceinfo_t *si, int parc, char *parv[])
 
 		mc->flags &= ~MC_HOLD;
 
-		wallops("%s removed the HOLD option on the channel \2%s\2.", get_oper_name(si), target);
+		wallops("\2%s\2 removed the HOLD option on the channel \2%s\2.", get_oper_name(si), target);
 		logcommand(si, CMDLOG_ADMIN, "HOLD:OFF: \2%s\2", mc->name);
 		command_success_nodata(si, _("\2%s\2 is no longer held."), target);
 	}
@@ -90,8 +70,27 @@ static void cs_cmd_hold(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_hold = {
+	.name           = "HOLD",
+	.desc           = N_("Prevents a channel from expiring."),
+	.access         = PRIV_HOLD,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_hold,
+	.help           = { .path = "cservice/hold" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	service_named_bind_command("chanserv", &cs_hold);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_hold);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/hold", MODULE_UNLOAD_CAPABILITY_OK)

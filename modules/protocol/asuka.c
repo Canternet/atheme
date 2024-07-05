@@ -1,23 +1,18 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock, et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 William Pitcock, et al.
  *
  * This file contains protocol support for P10 ircd's.
  * Some sources used: Run's documentation, beware's description,
  * raw data sent by asuka.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
-#include "protocol/asuka.h"
+#include <atheme.h>
+#include <atheme/protocol/asuka.h>
 
-DECLARE_MODULE_V1("protocol/asuka", true, _modinit, NULL, PACKAGE_STRING, "Atheme Development Group <http://www.atheme.org>");
-
-/* *INDENT-OFF* */
-
-ircd_t Asuka = {
+static struct ircd Asuka = {
 	.ircdname = "Asuka 1.2.1 and later",
 	.tldprefix = "$",
 	.uses_uid = true,
@@ -43,7 +38,7 @@ ircd_t Asuka = {
 	.flags = IRCD_CIDR_BANS,
 };
 
-struct cmode_ asuka_mode_list[] = {
+static const struct cmode asuka_mode_list[] = {
   { 'i', CMODE_INVITE },
   { 'm', CMODE_MOD    },
   { 'n', CMODE_NOEXT  },
@@ -58,23 +53,23 @@ struct cmode_ asuka_mode_list[] = {
   { '\0', 0 }
 };
 
-struct extmode asuka_ignore_mode_list[] = {
+static struct extmode asuka_ignore_mode_list[] = {
   { '\0', 0 }
 };
 
-struct cmode_ asuka_status_mode_list[] = {
+static const struct cmode asuka_status_mode_list[] = {
   { 'o', CSTATUS_OP    },
   { 'v', CSTATUS_VOICE },
   { '\0', 0 }
 };
 
-struct cmode_ asuka_prefix_mode_list[] = {
+static const struct cmode asuka_prefix_mode_list[] = {
   { '@', CSTATUS_OP    },
   { '+', CSTATUS_VOICE },
   { '\0', 0 }
 };
 
-struct cmode_ asuka_user_mode_list[] = {
+static const struct cmode asuka_user_mode_list[] = {
   { 'i', UF_INVIS    },
   { 'o', UF_IRCOP    },
   { 'd', UF_DEAF     },
@@ -82,12 +77,11 @@ struct cmode_ asuka_user_mode_list[] = {
   { '\0', 0 }
 };
 
-static void check_hidehost(user_t *u);
+static void check_hidehost(struct user *u);
 
-/* *INDENT-ON* */
-
-/* NOTICE wrapper */
-static void asuka_notice_channel_sts(user_t *from, channel_t *target, const char *text)
+// NOTICE wrapper
+static void
+asuka_notice_channel_sts(struct user *from, struct channel *target, const char *text)
 {
 	if (target->modes & CMODE_NONOTICE)
 	{
@@ -103,7 +97,8 @@ static void asuka_notice_channel_sts(user_t *from, channel_t *target, const char
 		sts("%s O %s :[%s:%s] %s", me.numeric, target->name, from->nick, target->name, text);
 }
 
-static void asuka_wallchops(user_t *sender, channel_t *channel, const char *message)
+static void
+asuka_wallchops(struct user *sender, struct channel *channel, const char *message)
 {
 	if (channel->modes & CMODE_NONOTICE)
 	{
@@ -116,8 +111,9 @@ static void asuka_wallchops(user_t *sender, channel_t *channel, const char *mess
 	sts("%s WC %s :%s", sender->uid, channel->name, message);
 }
 
-/* protocol-specific stuff to do on login */
-static void asuka_on_login(user_t *u, myuser_t *account, const char *wantedhost)
+// protocol-specific stuff to do on login
+static void
+asuka_on_login(struct user *u, struct myuser *account, const char *wantedhost)
 {
 	return_if_fail(u != NULL);
 
@@ -128,22 +124,24 @@ static void asuka_on_login(user_t *u, myuser_t *account, const char *wantedhost)
 
 /* P10 does not support logout, so kill the user
  * we can't keep track of which logins are stale and which aren't -- jilles */
-static bool asuka_on_logout(user_t *u, const char *account)
+static bool
+asuka_on_logout(struct user *u, const char *account)
 {
 	return_val_if_fail(u != NULL, false);
 
-	kill_user(NULL, u, "Forcing logout %s -> %s", u->nick, account);
+	kill_user(nicksvs.me ? nicksvs.me->me : NULL, u, "Forcing logout %s -> %s", u->nick, account);
 	return true;
 }
 
-static void m_nick(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_nick(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u;
-	char ipstring[HOSTIPLEN];
+	struct user *u;
+	char ipstring[HOSTIPLEN + 1];
 	char *p;
 	int i;
 
-	/* got the right number of args for an introduction? */
+	// got the right number of args for an introduction?
 	if (parc >= 8)
 	{
 		/* -> AB N jilles 1 1137687480 jilles jaguar.test +oiwgrx jilles B]AAAB ABAAE :Jilles Tjoelker */
@@ -165,9 +163,11 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 				if (p != NULL)
 					*p++ = '\0';
 				handle_burstlogin(u, parv[5+i], p ? atol(p) : 0);
-				/* killed to force logout? */
+
+				// killed to force logout?
 				if (user_find(parv[parc - 2]) == NULL)
 					return;
+
 				i++;
 			}
 			if (strchr(parv[5], 'h'))
@@ -180,7 +180,7 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 				}
 				else
 				{
-					char userbuf[USERLEN];
+					char userbuf[USERLEN + 1];
 
 					strshare_unref(u->vhost);
 					u->vhost = strshare_get(p + 1);
@@ -198,14 +198,15 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 			if (strchr(parv[5], 'x'))
 			{
 				u->flags |= UF_HIDEHOSTREQ;
-				/* this must be after setting the account name */
+
+				// this must be after setting the account name
 				check_hidehost(u);
 			}
 		}
 
 		handle_nickchange(u);
 	}
-	/* if it's only 2 then it's a nickname change */
+	// if it's only 2 then it's a nickname change
 	else if (parc == 2)
 	{
 		if (!si->su)
@@ -230,16 +231,17 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_mode(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_mode(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u;
+	struct user *u;
 	char *p;
 
 	if (*parv[0] == '#')
 		channel_mode(NULL, channel_find(parv[0]), parc - 1, &parv[1]);
 	else
 	{
-		/* Yes this is a nick and not a UID -- jilles */
+		// Yes this is a nick and not a UID -- jilles
 		u = user_find_named(parv[0]);
 		if (u == NULL)
 		{
@@ -256,7 +258,7 @@ static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 		{
 			if (parc > 2)
 			{
-				/* assume +h */
+				// assume +h
 				p = strchr(parv[2], '@');
 				if (p == NULL)
 				{
@@ -265,7 +267,7 @@ static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 				}
 				else
 				{
-					char userbuf[USERLEN];
+					char userbuf[USERLEN + 1];
 
 					strshare_unref(u->vhost);
 					u->vhost = strshare_get(p + 1);
@@ -283,29 +285,30 @@ static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 			}
 			else
 			{
-				/* must be -h */
-				/* XXX we don't know the original ident */
+				// must be -h
+				// XXX we don't know the original ident
 				slog(LG_DEBUG, "m_mode(): user %s turning off vhost", u->nick);
 
 				strshare_unref(u->vhost);
 				u->vhost = strshare_get(u->host);
 
-				/* revert to +x vhost if applicable */
+				// revert to +x vhost if applicable
 				check_hidehost(u);
 			}
 		}
 	}
 }
 
-static void check_hidehost(user_t *u)
+static void
+check_hidehost(struct user *u)
 {
 	static bool warned = false;
 	char buf[HOSTLEN + 1];
 
-	/* do they qualify? */
+	// do they qualify?
 	if (!(u->flags & UF_HIDEHOSTREQ) || u->myuser == NULL || (u->myuser->flags & MU_WAITAUTH))
 		return;
-	/* don't use this if they have some other kind of vhost */
+	// don't use this if they have some other kind of vhost
 	if (strcmp(u->host, u->vhost))
 	{
 		slog(LG_DEBUG, "check_hidehost(): +x overruled by other vhost for %s", u->nick);
@@ -329,11 +332,12 @@ static void check_hidehost(user_t *u)
 	slog(LG_DEBUG, "check_hidehost(): %s -> %s", u->nick, u->vhost);
 }
 
-void _modinit(module_t * m)
+static void
+mod_init(struct module *const restrict m)
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/p10-generic");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/p10-generic")
 
-	/* Symbol relocation voodoo. */
+	// Symbol relocation voodoo.
 	notice_channel_sts = &asuka_notice_channel_sts;
 	wallchops = &asuka_wallchops;
 	ircd_on_login = &asuka_on_login;
@@ -348,21 +352,19 @@ void _modinit(module_t * m)
 
 	ircd = &Asuka;
 
-	/* override these */
+	// override these
 	pcommand_delete("N");
 	pcommand_delete("M");
 	pcommand_delete("OM");
 	pcommand_add("N", m_nick, 2, MSRC_USER | MSRC_SERVER);
 	pcommand_add("M", m_mode, 2, MSRC_USER | MSRC_SERVER);
-	pcommand_add("OM", m_mode, 2, MSRC_USER); /* OPMODE, treat as MODE */
-
-	m->mflags = MODTYPE_CORE;
-
-	pmodule_loaded = true;
+	pcommand_add("OM", m_mode, 2, MSRC_USER); // OPMODE, treat as MODE
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("protocol/asuka", MODULE_UNLOAD_CAPABILITY_NEVER)

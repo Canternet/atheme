@@ -1,46 +1,28 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService INFO functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/info", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static bool show_custom_metadata = true;
 
-static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_info = { "INFO", N_("Displays information on registrations."),
-                        AC_NONE, 2, cs_cmd_info, { .path = "cservice/info" } };
-
-void _modinit(module_t *m)
+static void
+cs_cmd_info(struct sourceinfo *si, int parc, char *parv[])
 {
-        service_named_bind_command("chanserv", &cs_info);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_info);
-}
-
-static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
-{
-	mychan_t *mc;
+	struct mychan *mc;
 	char *name = parv[0];
 	char buf[BUFSIZE], strfbuf[BUFSIZE];
-	struct tm tm;
-	myuser_t *mu;
-	metadata_t *md;
+	struct tm *tm;
+	struct myuser *mu;
+	struct metadata *md;
 	mowgli_patricia_iteration_state_t state;
-	hook_channel_req_t req;
-	bool hide_info, hide_acl;
+	struct hook_channel_req req;
+	bool hide_info, hide_acl, user_on_channel;
 
 	if (!name)
 	{
@@ -58,9 +40,18 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!(mc = mychan_find(name)))
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), name);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, name);
 		return;
 	}
+
+	hide_info = (mc->flags & MC_PRIVATE) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW) &&
+		!has_priv(si, PRIV_CHAN_AUSPEX);
+
+	hide_acl = !chanacs_source_has_flag(mc, si, CA_ACLVIEW) &&
+		!has_priv(si, PRIV_CHAN_AUSPEX) &&
+		!(mc->flags & MC_PUBACL);
+
+	user_on_channel = si->su != NULL && mc->chan != NULL && chanuser_find(mc->chan, si->su) != NULL;
 
 	if (!has_priv(si, PRIV_CHAN_AUSPEX) && metadata_find(mc, "private:close:closer"))
 	{
@@ -68,15 +59,8 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	hide_info = use_channel_private && mc->flags & MC_PRIVATE &&
-		!chanacs_source_has_flag(mc, si, CA_ACLVIEW) &&
-		!has_priv(si, PRIV_CHAN_AUSPEX);
-	hide_acl = !chanacs_source_has_flag(mc, si, CA_ACLVIEW) &&
-		!has_priv(si, PRIV_CHAN_AUSPEX) &&
-		!(mc->flags & MC_PUBACL);
-
-	tm = *localtime(&mc->registered);
-	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+	tm = localtime(&mc->registered);
+	strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 	command_success_nodata(si, _("Information on \2%s\2:"), mc->name);
 
@@ -94,14 +78,14 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 
 	command_success_nodata(si, _("Registered : %s (%s ago)"), strfbuf, time_ago(mc->registered));
 
-	if (CURRTIME - mc->used >= 86400)
+	if ((CURRTIME - mc->used) >= SECONDS_PER_DAY)
 	{
 		if (hide_info)
-			command_success_nodata(si, _("Last used  : (about %d weeks ago)"), (int)((CURRTIME - mc->used) / 604800));
+			command_success_nodata(si, _("Last used  : (about %u week(s) ago)"), (unsigned int)((CURRTIME - mc->used) / SECONDS_PER_WEEK));
 		else
 		{
-			tm = *localtime(&mc->used);
-			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+			tm = localtime(&mc->used);
+			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 			command_success_nodata(si, _("Last used  : %s (%s ago)"), strfbuf, time_ago(mc->used));
 		}
 	}
@@ -111,7 +95,7 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (md != NULL && strlen(md->value) > 450)
 		{
-			/* Be safe */
+			// Be safe
 			command_success_nodata(si, _("Mode lock is too long, not entirely shown"));
 			md = NULL;
 		}
@@ -120,30 +104,47 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 
-	if ((!hide_info || (si->su != NULL && chanuser_find(mc->chan, si->su))) &&
+	if ((!hide_info || user_on_channel) &&
 			(md = metadata_find(mc, "url")))
 		command_success_nodata(si, "URL        : %s", md->value);
 
 	if (!hide_info && (md = metadata_find(mc, "email")))
 		command_success_nodata(si, "Email      : %s", md->value);
 
-	if ((!hide_info || (si->su != NULL && chanuser_find(mc->chan, si->su))) &&
+	if ((!hide_info || user_on_channel) &&
 			(md = metadata_find(mc, "private:entrymsg")))
 		command_success_nodata(si, "Entrymsg   : %s", md->value);
 
 	if (!hide_info)
 	{
-		MOWGLI_PATRICIA_FOREACH(md, &state, object(mc)->metadata)
+		unsigned int mdcount = 0;
+
+		MOWGLI_PATRICIA_FOREACH(md, &state, atheme_object(mc)->metadata)
 		{
 			if (!strncmp(md->name, "private:", 8))
 				continue;
-			/* these are shown separately */
+			// these are shown separately
 			if (!strcasecmp(md->name, "email") ||
 					!strcasecmp(md->name, "url") ||
 					!strcasecmp(md->name, "disable_fantasy"))
 				continue;
-			command_success_nodata(si, _("Metadata   : %s = %s"),
-					md->name, md->value);
+			if (show_custom_metadata)
+				command_success_nodata(si, _("Metadata   : %s = %s"),
+						md->name, md->value);
+			else
+				mdcount++;
+		}
+
+		if (mdcount && !show_custom_metadata)
+		{
+			command_success_nodata(si, ngettext(N_("%u custom metadata entry not shown."),
+			                                    N_("%u custom metadata entries not shown."),
+			                                    mdcount), mdcount);
+
+			if (module_find_published("chanserv/taxonomy"))
+				command_success_nodata(si, ngettext(N_("Use \2/msg %s TAXONOMY %s\2 to view it."),
+				                                    N_("Use \2/msg %s TAXONOMY %s\2 to view them."),
+				                                    mdcount), si->service->disp, name);
 		}
 	}
 
@@ -223,7 +224,15 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		strcat(buf, "FANTASY");
 	}
 
-	if (use_channel_private && MC_PRIVATE & mc->flags)
+	if (MC_NOSYNC & mc->flags)
+	{
+		if (*buf)
+			strcat(buf, " ");
+
+		strcat(buf, "NOSYNC");
+	}
+
+	if (MC_PRIVATE & mc->flags)
 	{
 		if (*buf)
 			strcat(buf, " ");
@@ -258,6 +267,15 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			command_success_nodata(si, _("Prefix     : %s (default)"), chansvs.trigger);
 	}
 
+	if (!hide_info && (md = metadata_find(mc, "private:antiflood:enforce-method")))
+	{
+		if ((md = metadata_find(mc, "private:antiflood:enforce-method")))
+			command_success_nodata(si, _("AntiFlood  : %s"), md->value);
+		else
+			command_success_nodata(si, _("AntiFlood  : (default)"));
+	}
+
+
 	if (has_priv(si, PRIV_CHAN_AUSPEX) && (md = metadata_find(mc, "private:mark:setter")))
 	{
 		const char *setter = md->value;
@@ -270,10 +288,10 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		md = metadata_find(mc, "private:mark:timestamp");
 		ts = md != NULL ? atoi(md->value) : 0;
 
-		tm = *localtime(&ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
-		command_success_nodata(si, _("%s was \2MARKED\2 by %s on %s (%s)"), mc->name, setter, strfbuf, reason);
+		command_success_nodata(si, _("%s was \2MARKED\2 by \2%s\2 on \2%s\2 (%s)."), mc->name, setter, strfbuf, reason);
 	}
 
 	if (has_priv(si, PRIV_CHAN_AUSPEX) && (MC_INHABIT & mc->flags))
@@ -291,8 +309,8 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		md = metadata_find(mc, "private:close:timestamp");
 		ts = md != NULL ? atoi(md->value) : 0;
 
-		tm = *localtime(&ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 		command_success_nodata(si, _("%s was \2CLOSED\2 by %s on %s (%s)"), mc->name, setter, strfbuf, reason);
 	}
@@ -305,8 +323,28 @@ static void cs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_GET, "INFO: \2%s\2", mc->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_info = {
+	.name           = "INFO",
+	.desc           = N_("Displays information on registrations."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_info,
+	.help           = { .path = "cservice/info" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	service_named_bind_command("chanserv", &cs_info);
+	add_bool_conf_item("SHOW_CUSTOM_METADATA", &chansvs.me->conf_table, 0, &show_custom_metadata, true);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_info);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/info", MODULE_UNLOAD_CAPABILITY_OK)

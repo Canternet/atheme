@@ -1,35 +1,33 @@
 /*
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * This file contains the main() routine.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/main", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static struct service *opersvs = NULL;
 
-service_t *opersvs = NULL;
-
-void _modinit(module_t *m)
+static void
+mod_init(struct module *const restrict m)
 {
-        opersvs = service_add("operserv", NULL);
+	if (! (opersvs = service_add("operserv", NULL)))
+	{
+		(void) slog(LG_ERROR, "%s: service_add() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-	if (opersvs != NULL)
-		service_delete(opersvs);
+	(void) service_delete(opersvs);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("operserv/main", MODULE_UNLOAD_CAPABILITY_OK)

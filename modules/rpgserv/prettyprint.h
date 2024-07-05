@@ -1,7 +1,16 @@
-/* prettyprint helpers for rpgserv */
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2013 Atheme Project (http://atheme.org/)
+ *
+ * prettyprint helpers for rpgserv
+ */
 
-#ifndef __RPGSERV__PRETTYPRINT_H__GUARD
-#define __RPGSERV__PRETTYPRINT_H__GUARD
+#ifndef ATHEME_MOD_RPGSERV_PRETTYPRINT_H
+#define ATHEME_MOD_RPGSERV_PRETTYPRINT_H 1
+
+#include <atheme.h>
 
 /*
  * Important: keys and names must line up index-wise or everything
@@ -58,7 +67,7 @@ static const char *system_names[] = {
 	"Character Approval", "Diced", "Character Sheets"
 };
 
-static inline const char *rs_prettyprint_keywords(metadata_t *md, const char **keys, const char **values,
+static inline const char *rs_prettyprint_keywords(struct metadata *md, const char **keys, const char **values,
 	unsigned int arraysize)
 {
 	static char ppbuf[BUFSIZE];
@@ -96,4 +105,4 @@ static inline const char *rs_prettyprint_keywords(metadata_t *md, const char **k
 	return ppbuf;
 }
 
-#endif
+#endif /* !ATHEME_MOD_RPGSERV_PRETTYPRINT_H */

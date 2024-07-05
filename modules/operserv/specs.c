@@ -1,35 +1,16 @@
 /*
- * Copyright (c) 2005-2006 Patrick Fish, et al
- * Copyright (c) 2011 William Pitcock <nenolod@atheme.org>.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Rights to this code are documented in doc/LICENSE.
+ * Copyright (C) 2005-2006 Patrick Fish, et al.
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2016 Atheme Development Group (https://atheme.github.io/)
  *
  * This file contains functionality which implements the OService SPECS command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "../groupserv/main/groupserv_common.h"
-
-DECLARE_MODULE_V1
-(
-	"operserv/specs", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_specs(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_specs = { "SPECS", N_("Shows oper flags."), AC_NONE, 2, os_cmd_specs, { .path = "oservice/specs" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("operserv", &os_specs);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_specs);
-}
 
 struct privilege
 {
@@ -43,79 +24,82 @@ struct priv_category
 	struct privilege privs[];
 };
 
-static struct priv_category nickserv_privs = {
-	N_("Nicknames/Accounts"),
-	{
-		{ PRIV_USER_AUSPEX, N_("view concealed information about accounts") },
-		{ PRIV_USER_ADMIN, N_("drop accounts, freeze accounts, reset passwords") },
-		{ PRIV_USER_SENDPASS, N_("send passwords") },
-		{ PRIV_USER_VHOST, N_("set vhosts") },
-		{ PRIV_USER_FREGISTER, N_("register accounts on behalf of another user") },
-		{ PRIV_MARK, N_("mark accounts") },
-		{ PRIV_HOLD, N_("hold accounts") },
-		{ NULL, NULL },
-	}
-};
-
-static struct priv_category chanserv_privs = {
-	N_("Channels"),
-	{
-		{ PRIV_CHAN_AUSPEX, N_("view concealed information about channels") },
-		{ PRIV_CHAN_ADMIN, N_("drop channels, close channels, transfer ownership") },
-		{ PRIV_CHAN_CMODES, N_("mlock operator modes") },
-		{ PRIV_JOIN_STAFFONLY, N_("join staff channels") },
-		{ PRIV_MARK, N_("mark accounts") },
-		{ PRIV_HOLD, N_("hold accounts") },
-		{ PRIV_REG_NOLIMIT, N_("bypass channel registration limits") },
-		{ NULL, NULL },
-	}
-};
-
-static struct priv_category general_privs = {
-	N_("General"),
-	{
-		{ PRIV_SERVER_AUSPEX, N_("view concealed information about servers") },
-		{ PRIV_VIEWPRIVS, N_("view privileges of other users") },
-		{ PRIV_FLOOD, N_("exempt from flood control") },
-		{ PRIV_ADMIN, N_("administer services") },
-		{ PRIV_METADATA, N_("edit private and internal metadata") },
-		{ NULL, NULL },
-	}
-};
-
-static struct priv_category operserv_privs = {
-	N_("OperServ"),
-	{
-		{ PRIV_OMODE, N_("set channel modes") },
-		{ PRIV_AKILL, N_("add and remove autokills") },
-		{ PRIV_MASS_AKILL, N_("masskill channels or regexes") },
-		{ PRIV_JUPE, N_("jupe servers") },
-		{ PRIV_NOOP, N_("NOOP access") },
-		{ PRIV_GLOBAL, N_("send global notices") },
-		{ PRIV_GRANT, N_("edit oper privileges") },
-		{ PRIV_OVERRIDE, N_("perform actions as any other user") },
-		{ NULL, NULL },
-	}
-};
-
-static struct priv_category groupserv_privs = {
-	N_("GroupServ"),
-	{
-		{ PRIV_GROUP_AUSPEX, N_("view concealed information about groups") },
-		{ PRIV_GROUP_ADMIN, N_("administer groups") },
-		{ PRIV_REG_NOLIMIT, N_("bypass group registration limits") },
-		{ NULL, NULL },
-	}
-};
-
-static struct priv_category *priv_categories[] = {
-	&nickserv_privs, &chanserv_privs, &general_privs, &operserv_privs, &groupserv_privs,
-};
-
-static void os_cmd_specs(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_specs(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *tu = NULL;
-	operclass_t *cl = NULL;
+	static const struct priv_category nickserv_privs = {
+		N_("Nicknames/Accounts"),
+		{
+			{ PRIV_USER_AUSPEX, N_("view concealed information about accounts") },
+			{ PRIV_USER_ADMIN, N_("drop accounts, freeze accounts, reset passwords") },
+			{ PRIV_USER_SENDPASS, N_("send passwords") },
+			{ PRIV_USER_VHOST, N_("set vhosts") },
+			{ PRIV_USER_FREGISTER, N_("register accounts on behalf of another user") },
+			{ PRIV_MARK, N_("mark accounts") },
+			{ PRIV_HOLD, N_("hold accounts") },
+			{ PRIV_EXCEED_LIMITS, N_("bypass nickname grouping limits") },
+			{ PRIV_LOGIN_NOLIMIT, N_("bypass login limits") },
+			{ PRIV_REGNOLIMIT, N_("allow other accounts to bypass channel registration limits") },
+			{ NULL, NULL },
+		}
+	};
+
+	static const struct priv_category chanserv_privs = {
+		N_("Channels"),
+		{
+			{ PRIV_CHAN_AUSPEX, N_("view concealed information about channels") },
+			{ PRIV_CHAN_ADMIN, N_("drop channels, close channels, transfer ownership") },
+			{ PRIV_CHAN_CMODES, N_("mlock operator modes") },
+			{ PRIV_JOIN_STAFFONLY, N_("join staff channels") },
+			{ PRIV_MARK, N_("mark channels") },
+			{ PRIV_HOLD, N_("hold channels") },
+			{ PRIV_EXCEED_LIMITS, N_("bypass channel registration limits") },
+			{ NULL, NULL },
+		}
+	};
+
+	static const struct priv_category general_privs = {
+		N_("General"),
+		{
+			{ PRIV_SERVER_AUSPEX, N_("view concealed information about servers") },
+			{ PRIV_VIEWPRIVS, N_("view privileges of other users") },
+			{ PRIV_FLOOD, N_("exempt from flood control") },
+			{ PRIV_ADMIN, N_("administer services") },
+			{ PRIV_METADATA, N_("edit private and internal metadata") },
+			{ NULL, NULL },
+		}
+	};
+
+	static const struct priv_category operserv_privs = {
+		N_("OperServ"),
+		{
+			{ PRIV_OMODE, N_("set channel modes") },
+			{ PRIV_AKILL, N_("add and remove autokills") },
+			{ PRIV_MASS_AKILL, N_("masskill channels or regexes") },
+			{ PRIV_JUPE, N_("jupe servers") },
+			{ PRIV_NOOP, N_("NOOP access") },
+			{ PRIV_GLOBAL, N_("send global notices") },
+			{ PRIV_GRANT, N_("edit oper privileges") },
+			{ NULL, NULL },
+		}
+	};
+
+	static const struct priv_category groupserv_privs = {
+		N_("GroupServ"),
+		{
+			{ PRIV_GROUP_AUSPEX, N_("view concealed information about groups") },
+			{ PRIV_GROUP_ADMIN, N_("administer groups") },
+			{ PRIV_EXCEED_LIMITS, N_("bypass group registration limits") },
+			{ NULL, NULL },
+		}
+	};
+
+	static const struct priv_category *priv_categories[] = {
+		&nickserv_privs, &chanserv_privs, &general_privs, &operserv_privs, &groupserv_privs,
+	};
+
+	struct user *tu = NULL;
+	struct operclass *cl = NULL;
 	const char *targettype = parv[0];
 	const char *target = parv[1];
 	unsigned int i;
@@ -141,7 +125,7 @@ static void os_cmd_specs(sourceinfo_t *si, int parc, char *parv[])
 			tu = user_find_named(target);
 			if (tu == NULL)
 			{
-				command_fail(si, fault_nosuch_target, _("\2%s\2 is not on IRC."), target);
+				command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), target);
 				return;
 			}
 			if (!has_any_privs_user(tu))
@@ -182,7 +166,7 @@ static void os_cmd_specs(sourceinfo_t *si, int parc, char *parv[])
 
 	for (i = 0; i < ARRAY_SIZE(priv_categories); i++)
 	{
-		struct priv_category *cat = priv_categories[i];
+		const struct priv_category *cat = priv_categories[i];
 
 		command_success_nodata(si, "\2%s\2:", _(cat->name));
 
@@ -199,7 +183,7 @@ static void os_cmd_specs(sourceinfo_t *si, int parc, char *parv[])
 			command_success_nodata(si, "    %s", _("(no privileges held)"));
 	}
 
-	command_success_nodata(si, _("End of privileges"));
+	command_success_nodata(si, _("End of privileges."));
 
 	if (targettype == NULL)
 		logcommand(si, CMDLOG_ADMIN, "SPECS");
@@ -209,8 +193,27 @@ static void os_cmd_specs(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_ADMIN, "SPECS:OPERCLASS: \2%s\2", cl->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_specs = {
+	.name           = "SPECS",
+	.desc           = N_("Shows oper flags."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &os_cmd_specs,
+	.help           = { .path = "oservice/specs" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+        service_named_bind_command("operserv", &os_specs);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_specs);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/specs", MODULE_UNLOAD_CAPABILITY_OK)

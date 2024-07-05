@@ -1,15 +1,21 @@
 /*
- * Copyright (c) 2005-2010 William Pitcock <nenolod@atheme.org>.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 William Pitcock <nenolod@dereferenced.org>
  *
  * Initialization stub for libathemecore.
  */
 
-#include "atheme.h"
-#include "serno.h"
+#include <atheme.h>
+#include <atheme/libathemecore.h>
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
+	if (! libathemecore_early_init())
+		return EXIT_FAILURE;
+
 	unsigned int usercount = 0, channelcount = 0, membercount = 0,
 		klinecount = 0, qlinecount = 0, xlinecount = 0, regchannelcount = 0,
 		servercount = 0, regusercount = 0;
@@ -45,30 +51,30 @@ int main(int argc, char *argv[])
 
 	printf("\n* * *\n\n");
 
-	printf("sizeof object_t: %zu B\n", sizeof(object_t));
+	printf("sizeof object_t: %zu B\n", sizeof(struct atheme_object));
 
 	printf("\n* * *\n\n");
 
-	printf("sizeof myentity_t: %zu B --> %zu KB\n", sizeof(myentity_t), (regusercount * sizeof(myentity_t)) / 1024);
-	printf("sizeof myuser_t: %zu B --> %zu KB\n", sizeof(myuser_t), (regusercount * sizeof(myuser_t)) / 1024);
-	printf("sizeof mychan_t: %zu B --> %zu KB\n", sizeof(mychan_t), (regchannelcount * sizeof(mychan_t)) / 1024);
-	printf("sizeof mynick_t: %zu B --> %zu KB\n", sizeof(mynick_t), (regusercount * sizeof(mynick_t)) / 1024);
+	printf("sizeof myentity_t: %zu B --> %zu KB\n", sizeof(struct myentity), (regusercount * sizeof(struct myentity)) / 1024);
+	printf("sizeof myuser_t: %zu B --> %zu KB\n", sizeof(struct myuser), (regusercount * sizeof(struct myuser)) / 1024);
+	printf("sizeof mychan_t: %zu B --> %zu KB\n", sizeof(struct mychan), (regchannelcount * sizeof(struct mychan)) / 1024);
+	printf("sizeof mynick_t: %zu B --> %zu KB\n", sizeof(struct mynick), (regusercount * sizeof(struct mynick)) / 1024);
 
 	printf("\n* * *\n\n");
 
-	printf("sizeof user_t: %zu B --> %zu KB\n", sizeof(user_t), (usercount * sizeof(user_t)) / 1024);
-	printf("sizeof channel_t: %zu B --> %zu KB\n", sizeof(channel_t), (channelcount * sizeof(channel_t)) / 1024);
-	printf("sizeof chanuser_t: %zu B --> %zu KB\n", sizeof(chanuser_t), (membercount * sizeof(chanuser_t)) / 1024);
+	printf("sizeof user_t: %zu B --> %zu KB\n", sizeof(struct user), (usercount * sizeof(struct user)) / 1024);
+	printf("sizeof channel_t: %zu B --> %zu KB\n", sizeof(struct channel), (channelcount * sizeof(struct channel)) / 1024);
+	printf("sizeof chanuser_t: %zu B --> %zu KB\n", sizeof(struct chanuser), (membercount * sizeof(struct chanuser)) / 1024);
 
 	printf("\n* * *\n\n");
 
-	printf("sizeof kline_t: %zu B --> %zu KB\n", sizeof(kline_t), (klinecount * sizeof(kline_t)) / 1024);
-	printf("sizeof xline_t: %zu B --> %zu KB\n", sizeof(xline_t), (xlinecount * sizeof(xline_t)) / 1024);
-	printf("sizeof qline_t: %zu B --> %zu KB\n", sizeof(qline_t), (qlinecount * sizeof(qline_t)) / 1024);
+	printf("sizeof kline_t: %zu B --> %zu KB\n", sizeof(struct kline), (klinecount * sizeof(struct kline)) / 1024);
+	printf("sizeof xline_t: %zu B --> %zu KB\n", sizeof(struct xline), (xlinecount * sizeof(struct xline)) / 1024);
+	printf("sizeof qline_t: %zu B --> %zu KB\n", sizeof(struct qline), (qlinecount * sizeof(struct qline)) / 1024);
 
 	printf("\n* * *\n\n");
 
-	printf("sizeof server_t: %zu B --> %zu KB\n", sizeof(server_t), (servercount * sizeof(server_t)) / 1024);
+	printf("sizeof server_t: %zu B --> %zu KB\n", sizeof(struct server), (servercount * sizeof(struct server)) / 1024);
 
 	return EXIT_SUCCESS;
 }

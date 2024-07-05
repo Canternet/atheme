@@ -1,8 +1,17 @@
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 Stephen Bennett
+ */
+
+#include <atheme.h>
 #include "api/atheme_perl.h"
 
 static mowgli_list_t * perl_object_references = NULL;
 
-void register_object_reference(SV * sv)
+void
+register_object_reference(SV * sv)
 {
 	dTHX;
 
@@ -15,7 +24,8 @@ void register_object_reference(SV * sv)
 	mowgli_node_add(SvREFCNT_inc(sv), mowgli_node_create(), perl_object_references);
 }
 
-void invalidate_object_references(void)
+void
+invalidate_object_references(void)
 {
 	mowgli_node_t *n;
 
@@ -37,7 +47,8 @@ void invalidate_object_references(void)
 	}
 }
 
-void free_object_list(void)
+void
+free_object_list(void)
 {
 	mowgli_node_t *n;
 
@@ -55,5 +66,3 @@ void free_object_list(void)
 	mowgli_list_free(perl_object_references);
 	perl_object_references = NULL;
 }
-
-

@@ -1,49 +1,40 @@
 /*
- * Copyright (c) 2006 William Pitcock, et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006 William Pitcock, et al.
  *
  * This file is a meta-module for compatibility with old
  * setups pre-SET split.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-void _modinit(module_t *m)
+static void
+mod_init(struct module *const restrict m)
 {
-	/* MODULE_TRY_REQUEST_DEPENDENCY stuff so this acts like a meta-
-	 * module like chanserv/set.c .
-	 */
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_core");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_email");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_emailmemos");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_hidemail");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_core")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_email")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_emailmemos")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_hidelastlogin")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_hidemail")
 
 #ifdef ENABLE_NLS
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_language");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_language")
 #endif
 
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_neverop");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_nomemo");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_noop");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_password");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_property");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_quietchg");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_neverop")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_nomemo")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_noop")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_password")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_property")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_quietchg")
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
+
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("nickserv/set", MODULE_UNLOAD_CAPABILITY_OK)

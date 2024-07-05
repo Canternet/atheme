@@ -1,30 +1,30 @@
-# Copyright (c) 2010 Atheme Development Group
-# Rights to this code are documented in doc/LICENSE.
-
-PLUGIN = Atheme$(PLUGIN_SUFFIX)
-
-SRCS = Atheme.c perl_command.c perl_utilities.c perl_hooks.c
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
+#
+# Copyright (C) 2010-2013 Stephen Bennett <spb@exherbo.org>
+# Copyright (C) 2011 Jilles Tjoelker <jilles@stack.nl>
+# Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../../../extra.mk
+
+plugindir = ${MODDIR}/modules/scripting/lib
+DISTCLEAN = Atheme.c perl_hooks.c
+PLUGIN    = Atheme${PLUGIN_SUFFIX}
+SRCS      = Atheme.c perl_command.c perl_hooks.c perl_utilities.c
+
 include ../../../../buildsys.mk
 
-plugindir = $(MODDIR)/modules/scripting/lib
+# Disable warnings on the Perl code; Perl's system headers are *garbage*
+CFLAGS   += -w
 
-CPPFLAGS += -I../../../../include -I. -I../../../../libmowgli-2/src/libmowgli
-CPPFLAGS += $(PERL_CFLAGS)
-CFLAGS += $(PLUGIN_CFLAGS)
-LDFLAGS += $(PLUGIN_LDFLAGS)
-LIBS += -L../../../../libathemecore -lathemecore ${LDFLAGS_RPATH} -L../../../../libmowgli-2/src/libmowgli
-
-# Some of the code from Perl is not designed to compile with warnings.
-PERL_WARN_HACKS = -Wno-redundant-decls -Wno-float-equal -Wno-unused-value
-PERL_WARN_HACKS += -Wno-nested-externs -Wno-unused-variable -Wno-shadow
-CFLAGS += $(PERL_WARN_HACKS)
-# This does not make any sense, but other warning flags are in CPPFLAGS too.
-CPPFLAGS += $(PERL_WARN_HACKS)
+CPPFLAGS += -I../../../../include -I.
+LDFLAGS  += -L../../../../libathemecore
+CFLAGS   += ${LIBPERL_CFLAGS}
+LIBS     += ${LIBPERL_LIBS} -lathemecore
 
 Atheme.c: $(wildcard *.xs) typemap
-	xsubpp -prototypes -typemap typemap Atheme.xs >$@ || rm -f $@
+	@xsubpp -prototypes -typemap typemap Atheme.xs >$@ || rm -f $@
 
-perl_hooks.c: make_perl_hooks.pl ../../../../include/hooktypes.in
-	perl make_perl_hooks.pl
+perl_hooks.c: make_perl_hooks.pl ../../../../include/atheme/hooktypes.in
+	@perl make_perl_hooks.pl

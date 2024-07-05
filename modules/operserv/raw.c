@@ -1,36 +1,16 @@
 /*
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality which implements the OService RAW command.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/raw", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_raw(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_raw = { "RAW", N_("Sends data to the uplink."), PRIV_ADMIN, 1, os_cmd_raw, { .path = "oservice/raw" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("operserv", &os_raw);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_raw);
-}
-
-static void os_cmd_raw(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_raw(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *s = parv[0];
 
@@ -48,8 +28,27 @@ static void os_cmd_raw(sourceinfo_t *si, int parc, char *parv[])
 	sts("%s", s);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_raw = {
+	.name           = "RAW",
+	.desc           = N_("Sends data to the uplink."),
+	.access         = PRIV_ADMIN,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_raw,
+	.help           = { .path = "oservice/raw" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+        service_named_bind_command("operserv", &os_raw);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_raw);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/raw", MODULE_UNLOAD_CAPABILITY_OK)

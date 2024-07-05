@@ -1,46 +1,24 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the ChanServ CLEAR USERS function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/clear_users", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **cs_clear_cmds = NULL;
 
-static void cs_cmd_clear_users(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_clear_users = { "USERS", N_("Kicks all users from a channel."),
-	AC_NONE, 2, cs_cmd_clear_users, { .path = "cservice/clear_users" } };
-
-mowgli_patricia_t **cs_clear_cmds;
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, cs_clear_cmds, "chanserv/clear", "cs_clear_cmds");
-
-	command_add(&cs_clear_users, *cs_clear_cmds);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&cs_clear_users, *cs_clear_cmds);
-}
-
-static void cs_cmd_clear_users(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_clear_users(struct sourceinfo *si, int parc, char *parv[])
 {
 	char fullreason[200];
-	channel_t *c;
+	struct channel *c;
 	char *channel = parv[0];
-	mychan_t *mc = mychan_find(channel);
-	chanuser_t *cu;
+	struct mychan *mc = mychan_find(channel);
+	struct chanuser *cu;
 	mowgli_node_t *n, *tn;
 	int oldlimit;
 	unsigned int nmembers;
@@ -52,31 +30,31 @@ static void cs_cmd_clear_users(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
 	if (!(c = channel_find(channel)))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), channel);
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, channel);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_RECOVER))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), channel);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, channel);
 		return;
 	}
 
 	command_add_flood(si, MOWGLI_LIST_LENGTH(&c->members) > 3 ? FLOOD_HEAVY : FLOOD_MODERATE);
 
-	/* stop a race condition where users can rejoin */
+	// stop a race condition where users can rejoin
 	oldlimit = c->limit;
 	if (oldlimit != 1)
 		modestack_mode_limit(chansvs.nick, c, MTYPE_ADD, 1);
@@ -86,12 +64,13 @@ static void cs_cmd_clear_users(sourceinfo_t *si, int parc, char *parv[])
 	{
 		cu = n->data;
 
-		/* don't kick the user who requested the masskick */
+		// don't kick the user who requested the masskick
 		if (cu->user == si->su || is_internal_client(cu->user))
 			continue;
 
 		nmembers = MOWGLI_LIST_LENGTH(&c->members);
 		try_kick(chansvs.me->me, c, cu->user, fullreason);
+
 		/* If there are only two users remaining before the kick,
 		 * it is possible that the last user is chanserv which will
 		 * part if leave_chans is enabled. If it is a permanent
@@ -108,7 +87,7 @@ static void cs_cmd_clear_users(sourceinfo_t *si, int parc, char *parv[])
 			break;
 	}
 
-	/* the channel may be empty now, so our pointer may be bogus! */
+	// the channel may be empty now, so our pointer may be bogus!
 	c = channel_find(channel);
 	if (c != NULL)
 	{
@@ -120,7 +99,8 @@ static void cs_cmd_clear_users(sourceinfo_t *si, int parc, char *parv[])
 			 * -- jilles */
 			part(channel, chansvs.nick);
 		}
-		/* could be permanent channel, blah */
+
+		// could be permanent channel, blah
 		c = channel_find(channel);
 		if (c != NULL)
 		{
@@ -136,8 +116,27 @@ static void cs_cmd_clear_users(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("Cleared users from \2%s\2."), channel);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_clear_users = {
+	.name           = "USERS",
+	.desc           = N_("Kicks all users from a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_clear_users,
+	.help           = { .path = "cservice/clear_users" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, cs_clear_cmds, "chanserv/clear", "cs_clear_cmds")
+
+	command_add(&cs_clear_users, *cs_clear_cmds);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&cs_clear_users, *cs_clear_cmds);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/clear_users", MODULE_UNLOAD_CAPABILITY_OK)

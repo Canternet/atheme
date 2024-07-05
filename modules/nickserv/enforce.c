@@ -1,6 +1,8 @@
 /*
- * Copyright (c) 2005-2007 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 Atheme Project (http://atheme.org/)
  *
  * This file contains code for the NickServ RELEASE/ENFORCE functions.
  *
@@ -13,50 +15,30 @@
  * by the ircd, otherwise clients.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/enforce",false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-typedef struct {
-	char nick[NICKLEN];
-	char host[HOSTLEN];
+struct enforce_timeout
+{
+	char nick[NICKLEN + 1];
+	char host[HOSTLEN + 1];
 	time_t timelimit;
 	mowgli_node_t node;
-} enforce_timeout_t;
+};
 
-mowgli_list_t enforce_list;
-mowgli_heap_t *enforce_timeout_heap;
-time_t enforce_next;
-
-static void guest_nickname(user_t *u);
-
-static void ns_cmd_set_enforce(sourceinfo_t *si, int parc, char *parv[]);
-static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[]);
-static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[]);
-
-static void enforce_timeout_check(void *arg);
-static void show_enforce(hook_user_req_t *hdata);
-static void check_registration(hook_user_register_check_t *hdata);
-static void check_enforce(hook_nick_enforce_t *hdata);
-
-command_t ns_set_enforce = { "ENFORCE", N_("Enables or disables automatic protection of a nickname."), AC_NONE, 1, ns_cmd_set_enforce, { .path = "nickserv/set_enforce" } };
-command_t ns_release = { "RELEASE", N_("Releases a services enforcer."), AC_NONE, 2, ns_cmd_release, { .path = "nickserv/release" } };
-command_t ns_regain = { "REGAIN", N_("Regain usage of a nickname."), AC_NONE, 2, ns_cmd_regain, { .path = "nickserv/regain" } };
-
-mowgli_patricia_t **ns_set_cmdtree;
-
+static mowgli_heap_t *enforce_timeout_heap = NULL;
 static mowgli_eventloop_timer_t *enforce_timeout_check_timer = NULL;
 static mowgli_eventloop_timer_t *enforce_remove_enforcers_timer = NULL;
 
-/* logs a released nickname out */
-static bool log_enforce_victim_out(user_t *u, myuser_t *mu)
+static mowgli_list_t enforce_list;
+static time_t enforce_next;
+
+static mowgli_patricia_t **ns_set_cmdtree;
+
+// logs a released nickname out
+static bool
+log_enforce_victim_out(struct user *u, struct myuser *mu)
 {
-	mynick_t *mn;
+	struct mynick *mn;
 	mowgli_node_t *n, *tn;
 
 	return_val_if_fail(u != NULL, false);
@@ -69,7 +51,7 @@ static bool log_enforce_victim_out(user_t *u, myuser_t *mu)
 	if ((mn = mynick_find(u->nick)) != NULL)
 		mn->lastseen = CURRTIME;
 
-	if (!ircd_on_logout(u, entity(u->myuser)->name))
+	if (!ircd_logout_or_kill(u, entity(u->myuser)->name))
 	{
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, u->myuser->logins.head)
 		{
@@ -88,10 +70,11 @@ static bool log_enforce_victim_out(user_t *u, myuser_t *mu)
 	return true;
 }
 
-/* sends an FNC for the given user */
-static void guest_nickname(user_t *u)
+// sends an FNC for the given user
+static void
+guest_nickname(struct user *u)
 {
-	char gnick[NICKLEN];
+	char gnick[NICKLEN + 1];
 	int tries;
 
 	/* Generate a new guest nickname and check if it already exists
@@ -100,7 +83,7 @@ static void guest_nickname(user_t *u)
 	 * you shouldn't use this module. */
 	for (tries = 0; tries < 30; tries++)
 	{
-		snprintf(gnick, sizeof gnick, "%s%d", nicksvs.enforce_prefix, arc4random()%100000);
+		snprintf(gnick, sizeof gnick, "%s%u", nicksvs.enforce_prefix, 1 + atheme_random_uniform(9999));
 
 		if (!user_find_named(gnick))
 			break;
@@ -108,11 +91,137 @@ static void guest_nickname(user_t *u)
 	fnc_sts(nicksvs.me->me, u, gnick, FNC_FORCE);
 }
 
-static void check_enforce_all(myuser_t *mu)
+static void
+enforce_timeout_check(void *arg)
+{
+	mowgli_node_t *n, *tn;
+	struct enforce_timeout *timeout;
+	struct user *u;
+	struct mynick *mn;
+	bool valid;
+
+	enforce_next = 0;
+	MOWGLI_ITER_FOREACH_SAFE(n, tn, enforce_list.head)
+	{
+		timeout = n->data;
+		if (timeout->timelimit > CURRTIME)
+		{
+			enforce_next = timeout->timelimit;
+			enforce_timeout_check_timer = mowgli_timer_add_once(base_eventloop, "enforce_timeout_check", enforce_timeout_check, NULL, enforce_next - CURRTIME);
+			break; // assume sorted list
+		}
+		u = user_find_named(timeout->nick);
+		mn = mynick_find(timeout->nick);
+		valid = u != NULL && mn != NULL && (!strcmp(u->host, timeout->host) || !strcmp(u->vhost, timeout->host));
+		mowgli_node_delete(&timeout->node, &enforce_list);
+		mowgli_heap_free(enforce_timeout_heap, timeout);
+		if (!valid)
+			continue;
+		if (is_internal_client(u))
+			continue;
+		if (u->myuser == mn->owner)
+			continue;
+		if (myuser_access_verify(u, mn->owner))
+			continue;
+		if (!metadata_find(mn->owner, "private:doenforce"))
+			continue;
+
+		notice(nicksvs.nick, u->nick, "You failed to identify in time for the nickname %s", mn->nick);
+		guest_nickname(u);
+		if (ircd->flags & IRCD_HOLDNICK)
+			holdnick_sts(nicksvs.me->me, u->flags & UF_WASENFORCED ? SECONDS_PER_HOUR : 30, u->nick, mn->owner);
+		else
+			u->flags |= UF_DOENFORCE;
+		u->flags |= UF_WASENFORCED;
+	}
+}
+
+static void
+check_enforce(struct hook_nick_enforce *hdata)
+{
+	struct enforce_timeout *timeout, *timeout2;
+	mowgli_node_t *n;
+	struct metadata *md;
+
+	// nick is a service, ignore it
+	if (is_internal_client(hdata->u))
+		return;
+
+	if (!metadata_find(hdata->mn->owner, "private:doenforce"))
+		return;
+	// check if this nick has been used recently enough
+	if (nicksvs.enforce_expiry > 0 &&
+			!(hdata->mn->owner->flags & MU_HOLD) &&
+			(unsigned int)(CURRTIME - hdata->mn->lastseen) > nicksvs.enforce_expiry)
+		return;
+
+	// check if it's already in enforce_list
+	timeout = NULL;
+#ifdef SHOW_CORRECT_TIMEOUT_BUT_BE_SLOW
+	/* don't do this now, it's O(n^2) in the number of users using
+	 * a nick without access at a time */
+	MOWGLI_ITER_FOREACH(n, enforce_list.head)
+	{
+		timeout2 = n->data;
+		if (!irccasecmp(hdata->mn->nick, timeout2->nick) && (!strcmp(hdata->u->host, timeout2->host) || !strcmp(hdata->u->vhost, timeout2->host)))
+		{
+			timeout = timeout2;
+			break;
+		}
+	}
+#endif
+
+	if (timeout == NULL)
+	{
+		timeout = mowgli_heap_alloc(enforce_timeout_heap);
+		mowgli_strlcpy(timeout->nick, hdata->mn->nick, sizeof timeout->nick);
+		mowgli_strlcpy(timeout->host, hdata->u->host, sizeof timeout->host);
+
+		if (!metadata_find(hdata->mn->owner, "private:enforcetime"))
+			timeout->timelimit = CURRTIME + nicksvs.enforce_delay;
+		else
+		{
+			md = metadata_find(hdata->mn->owner, "private:enforcetime");
+			int enforcetime = atoi(md->value);
+			timeout->timelimit = CURRTIME + enforcetime;
+		}
+
+		// if the account is frozen, they cannot identify to it regardless of how long we wait   -- amdj
+		if (metadata_find(hdata->mn->owner, "private:freeze:freezer"))
+			timeout->timelimit = CURRTIME + 1;
+
+		// insert in sorted order
+		MOWGLI_ITER_FOREACH_PREV(n, enforce_list.tail)
+		{
+			timeout2 = n->data;
+			if (timeout2->timelimit <= timeout->timelimit)
+				break;
+		}
+		if (n == NULL)
+			mowgli_node_add_head(timeout, &timeout->node, &enforce_list);
+		else if (n->next == NULL)
+			mowgli_node_add(timeout, &timeout->node, &enforce_list);
+		else
+			mowgli_node_add_before(timeout, &timeout->node, &enforce_list, n->next);
+
+		if (enforce_next == 0 || enforce_next > timeout->timelimit)
+		{
+			if (enforce_next != 0)
+				mowgli_timer_destroy(base_eventloop, enforce_timeout_check_timer);
+			enforce_next = timeout->timelimit;
+			enforce_timeout_check_timer = mowgli_timer_add_once(base_eventloop, "enforce_timeout_check", enforce_timeout_check, NULL, enforce_next - CURRTIME);
+		}
+	}
+
+	notice(nicksvs.nick, hdata->u->nick, "You have %u seconds to identify to your nickname before it is changed.", (unsigned int)(timeout->timelimit - CURRTIME));
+}
+
+static void
+check_enforce_all(struct myuser *mu)
 {
 	mowgli_node_t *n;
-	mynick_t *mn;
-	user_t *u;
+	struct mynick *mn;
+	struct user *u;
 
 	MOWGLI_ITER_FOREACH(n, mu->nicks.head)
 	{
@@ -120,11 +229,12 @@ static void check_enforce_all(myuser_t *mu)
 		u = user_find(mn->nick);
 		if (u != NULL && u->myuser != mn->owner &&
 				!myuser_access_verify(u, mn->owner))
-			check_enforce(&(hook_nick_enforce_t){ .u = u, .mn = mn });
+			check_enforce(&(struct hook_nick_enforce){ .u = u, .mn = mn });
 	}
 }
 
-static void ns_cmd_set_enforce(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_set_enforce(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *setting = parv[0];
 
@@ -168,17 +278,17 @@ static void ns_cmd_set_enforce(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_release(struct sourceinfo *si, int parc, char *parv[])
 {
-	mynick_t *mn;
+	struct mynick *mn;
 	const char *target = parv[0];
 	const char *password = parv[1];
-	user_t *u;
+	struct user *u;
 	mowgli_node_t *n, *tn;
-	enforce_timeout_t *timeout;
+	struct enforce_timeout *timeout;
 
-	/* Absolutely do not do anything like this if nicks
-	 * are not considered owned */
+	// Absolutely do not do anything like this if nicks are not considered owned
 	if (nicksvs.no_nick_ownership)
 	{
 		command_fail(si, fault_noprivs, _("RELEASE is disabled."));
@@ -203,7 +313,7 @@ static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* The != NULL check is required to make releasing an enforcer via xmlrpc work */
+	// The != NULL check is required to make releasing an enforcer via xmlrpc work
 	if (u != NULL && u == si->su)
 	{
 		command_fail(si, fault_noprivs, _("You cannot RELEASE yourself."));
@@ -211,7 +321,7 @@ static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
 	}
 	if (password && metadata_find(mn->owner, "private:freeze:freezer"))
 	{
-		command_fail(si, fault_authfail, "You cannot release \2%s\2 because the account has been frozen.", target);
+		command_fail(si, fault_authfail, _("You cannot release \2%s\2 because the account has been frozen."), target);
 		logcommand(si, CMDLOG_DO, "failed RELEASE \2%s\2 (frozen)", target);
 		return;
 	}
@@ -223,7 +333,7 @@ static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
 	}
 	if ((si->smu == mn->owner) || verify_password(mn->owner, password))
 	{
-		/* if this (nick, host) is waiting to be enforced, remove it */
+		// if this (nick, host) is waiting to be enforced, remove it
 		if (si->su != NULL)
 		{
 			MOWGLI_ITER_FOREACH_SAFE(n, tn, enforce_list.head)
@@ -255,7 +365,7 @@ static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
 			{
 				guest_nickname(u);
 				if (ircd->flags & IRCD_HOLDNICK)
-					holdnick_sts(nicksvs.me->me, 60 + arc4random() % 60, u->nick, mn->owner);
+					holdnick_sts(nicksvs.me->me, SECONDS_PER_MINUTE + atheme_random_uniform(SECONDS_PER_MINUTE), u->nick, mn->owner);
 				else
 					u->flags |= UF_DOENFORCE;
 				command_success_nodata(si, _("\2%s\2 has been released."), target);
@@ -278,18 +388,18 @@ static void ns_cmd_release(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_regain(struct sourceinfo *si, int parc, char *parv[])
 {
-	mynick_t *mn;
+	struct mynick *mn;
 	const char *target = parv[0];
 	const char *password = parv[1];
-	user_t *u;
+	struct user *u;
 	mowgli_node_t *n, *tn;
-	enforce_timeout_t *timeout;
+	struct enforce_timeout *timeout;
 	char lau[BUFSIZE];
 
-	/* Absolutely do not do anything like this if nicks
-	 * are not considered owned */
+	// Absolutely do not do anything like this if nicks are not considered owned
 	if (nicksvs.no_nick_ownership)
 	{
 		command_fail(si, fault_noprivs, _("REGAIN is disabled."));
@@ -321,7 +431,7 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 	}
 	if (password && metadata_find(mn->owner, "private:freeze:freezer"))
 	{
-		command_fail(si, fault_authfail, "You cannot regain \2%s\2 because the account has been frozen.", target);
+		command_fail(si, fault_authfail, _("You cannot regain \2%s\2 because the account has been frozen."), target);
 		logcommand(si, CMDLOG_DO, "failed REGAIN \2%s\2 (frozen)", target);
 		return;
 	}
@@ -331,56 +441,15 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_DO, "failed REGAIN \2%s\2 (password authentication disabled)", target);
 		return;
 	}
+	if (!is_valid_nick(target))
+	{
+		command_fail(si, fault_badparams, _("\2%s\2 is not a valid nick."), target);
+		logcommand(si, CMDLOG_DO, "failed REGAIN \2%s\2 (not a valid nickname)", target);
+		return;
+	}
 	if ((si->smu == mn->owner) || verify_password(mn->owner, password))
 	{
-		if (si->su != NULL && (user_is_channel_banned(si->su, 'b') || user_is_channel_banned(si->su, 'q')))
-		{
-			command_fail(si, fault_noprivs, _("You can not regain your nickname while banned or quieted on a channel."));
-			return;
-		}
-
-		/* if this (nick, host) is waiting to be enforced, remove it */
-		if (si->su != NULL)
-		{
-			MOWGLI_ITER_FOREACH_SAFE(n, tn, enforce_list.head)
-			{
-				timeout = n->data;
-				if (!irccasecmp(mn->nick, timeout->nick) && (!strcmp(si->su->host, timeout->host) || !strcmp(si->su->vhost, timeout->host)))
-				{
-					mowgli_node_delete(&timeout->node, &enforce_list);
-					mowgli_heap_free(enforce_timeout_heap, timeout);
-				}
-			}
-		}
-		if (u == NULL || is_internal_client(u))
-		{
-			logcommand(si, CMDLOG_DO, "REGAIN: \2%s\2", target);
-			holdnick_sts(si->service->me, 0, target, mn->owner);
-			if (u != NULL && u->flags & UF_ENFORCER)
-			{
-				quit_sts(u, "REGAIN command");
-				user_delete(u, "REGAIN command");
-			}
-			fnc_sts(nicksvs.me->me, si->su, target, FNC_FORCE);
-			command_success_nodata(si, _("\2%s\2 has been regained."), target);
-		}
-		else
-		{
-			notice(nicksvs.nick, target, "\2%s\2 has regained your nickname.", get_source_mask(si));
-			if (!log_enforce_victim_out(u, mn->owner))
-			{
-				guest_nickname(u);
-				if (ircd->flags & IRCD_HOLDNICK)
-					holdnick_sts(nicksvs.me->me, 60 + arc4random() % 60, u->nick, mn->owner);
-				else
-					u->flags |= UF_DOENFORCE;
-				command_success_nodata(si, _("\2%s\2 has been regained."), target);
-				logcommand(si, CMDLOG_DO, "REGAIN: \2%s!%s@%s\2", u->nick, u->user, u->vhost);
-			}
-			fnc_sts(nicksvs.me->me, si->su, target, FNC_FORCE);
-		}
-
-		if (MOWGLI_LIST_LENGTH(&mn->owner->logins) >= me.maxlogins)
+		if (user_loginmaxed(mn->owner))
 		{
 			command_fail(si, fault_toomany, _("You were not logged in."));
 			command_fail(si, fault_toomany, _("There are already \2%zu\2 sessions logged in to \2%s\2 (maximum allowed: %u)."), MOWGLI_LIST_LENGTH(&mn->owner->logins), entity(mn->owner)->name, me.maxlogins);
@@ -390,23 +459,22 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 			{
 				if (lau[0] != '\0')
 					mowgli_strlcat(lau, ", ", sizeof lau);
-				mowgli_strlcat(lau, ((user_t *)n->data)->nick, sizeof lau);
+				mowgli_strlcat(lau, ((struct user *)n->data)->nick, sizeof lau);
 			}
 			command_fail(si, fault_toomany, _("Logged in nicks are: %s"), lau);
 
 			return;
 		}
-
-		/* identify them to the target nick's account if they aren't yet */
+		// identify them to the target nick's account if they aren't yet
 		if (si->smu != mn->owner)
 		{
-			/* if they are identified to another account, nuke their session first */
+			// if they are identified to another account, nuke their session first
 			if (si->smu != NULL)
 			{
 				command_success_nodata(si, _("You have been logged out of \2%s\2."), entity(si->smu)->name);
 
-				if (ircd_on_logout(si->su, entity(si->smu)->name))
-					/* logout killed the user... */
+				if (ircd_logout_or_kill(si->su, entity(si->smu)->name))
+					// logout killed the user...
 					return;
 				si->smu->lastlogin = CURRTIME;
 				MOWGLI_ITER_FOREACH_SAFE(n, tn, si->smu->logins.head)
@@ -422,6 +490,63 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 			}
 
 			myuser_login(si->service, si->su, mn->owner, true);
+		}
+
+		struct chanuser *cu = NULL;
+		if (si->su != NULL && ((cu = find_user_banned_channel(si->su, 'b')) || (cu = find_user_banned_channel(si->su, 'q'))))
+		{
+			command_fail(si, fault_noprivs, _("You can not regain your nickname while banned or quieted on a channel: \2%s\2"), cu->chan->name);
+			return;
+		}
+
+		if (qline_find_match(target) && !has_priv(si, PRIV_MASS_AKILL))
+		{
+			command_fail(si, fault_noprivs, _("You can not regain a reserved nickname."));
+			return;
+		}
+
+		// if this (nick, host) is waiting to be enforced, remove it
+		if (si->su != NULL)
+		{
+			MOWGLI_ITER_FOREACH_SAFE(n, tn, enforce_list.head)
+			{
+				timeout = n->data;
+				if (!irccasecmp(mn->nick, timeout->nick) && (!strcmp(si->su->host, timeout->host) || !strcmp(si->su->vhost, timeout->host)))
+				{
+					mowgli_node_delete(&timeout->node, &enforce_list);
+					mowgli_heap_free(enforce_timeout_heap, timeout);
+				}
+			}
+		}
+		if (u != NULL && is_service(u))
+		{
+			command_fail(si, fault_badparams, _("You cannot regain a network service."));
+			return;
+		}
+		else if (u == NULL || is_internal_client(u))
+		{
+			logcommand(si, CMDLOG_DO, "REGAIN: \2%s\2", target);
+			holdnick_sts(si->service->me, 0, target, mn->owner);
+			if (u != NULL && u->flags & UF_ENFORCER)
+			{
+				quit_sts(u, "REGAIN command");
+				user_delete(u, "REGAIN command");
+			}
+			fnc_sts(nicksvs.me->me, si->su, target, FNC_REGAIN);
+			command_success_nodata(si, _("\2%s\2 has been regained."), target);
+		}
+		else
+		{
+			notice(nicksvs.nick, target, "\2%s\2 has regained your nickname.", get_source_mask(si));
+			logcommand(si, CMDLOG_DO, "REGAIN: \2%s!%s@%s\2", u->nick, u->user, u->vhost);
+			if (!log_enforce_victim_out(u, mn->owner))
+			{
+				if (ircd->flags & IRCD_HOLDNICK)
+					holdnick_sts(nicksvs.me->me, SECONDS_PER_MINUTE + atheme_random_uniform(SECONDS_PER_MINUTE), u->nick, mn->owner);
+				guest_nickname(u);
+				command_success_nodata(si, _("\2%s\2 has been regained."), target);
+			}
+			fnc_sts(nicksvs.me->me, si->su, target, FNC_REGAIN);
 		}
 
 		return;
@@ -440,10 +565,11 @@ static void ns_cmd_regain(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void enforce_remove_enforcers(void *arg)
+static void
+enforce_remove_enforcers(void *arg)
 {
 	mowgli_node_t *n, *tn;
-	user_t *u;
+	struct user *u;
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, me.me->userlist.head)
 	{
@@ -456,57 +582,15 @@ static void enforce_remove_enforcers(void *arg)
 	}
 }
 
-void enforce_timeout_check(void *arg)
-{
-	mowgli_node_t *n, *tn;
-	enforce_timeout_t *timeout;
-	user_t *u;
-	mynick_t *mn;
-	bool valid;
-
-	enforce_next = 0;
-	MOWGLI_ITER_FOREACH_SAFE(n, tn, enforce_list.head)
-	{
-		timeout = n->data;
-		if (timeout->timelimit > CURRTIME)
-		{
-			enforce_next = timeout->timelimit;
-			enforce_timeout_check_timer = mowgli_timer_add_once(base_eventloop, "enforce_timeout_check", enforce_timeout_check, NULL, enforce_next - CURRTIME);
-			break; /* assume sorted list */
-		}
-		u = user_find_named(timeout->nick);
-		mn = mynick_find(timeout->nick);
-		valid = u != NULL && mn != NULL && (!strcmp(u->host, timeout->host) || !strcmp(u->vhost, timeout->host));
-		mowgli_node_delete(&timeout->node, &enforce_list);
-		mowgli_heap_free(enforce_timeout_heap, timeout);
-		if (!valid)
-			continue;
-		if (is_internal_client(u))
-			continue;
-		if (u->myuser == mn->owner)
-			continue;
-		if (myuser_access_verify(u, mn->owner))
-			continue;
-		if (!metadata_find(mn->owner, "private:doenforce"))
-			continue;
-
-		notice(nicksvs.nick, u->nick, "You failed to identify in time for the nickname %s", mn->nick);
-		guest_nickname(u);
-		if (ircd->flags & IRCD_HOLDNICK)
-			holdnick_sts(nicksvs.me->me, u->flags & UF_WASENFORCED ? 3600 : 30, u->nick, mn->owner);
-		else
-			u->flags |= UF_DOENFORCE;
-		u->flags |= UF_WASENFORCED;
-	}
-}
-
-static void show_enforce(hook_user_req_t *hdata)
+static void
+show_enforce(struct hook_user_req *hdata)
 {
 	if (metadata_find(hdata->mu, "private:doenforce"))
-		command_success_nodata(hdata->si, "%s has enabled nick protection", entity(hdata->mu)->name);
+		command_success_nodata(hdata->si, _("%s has enabled nick protection"), entity(hdata->mu)->name);
 }
 
-static void check_registration(hook_user_register_check_t *hdata)
+static void
+check_registration(struct hook_user_register_check *hdata)
 {
 	int prefixlen;
 
@@ -519,89 +603,15 @@ static void check_registration(hook_user_register_check_t *hdata)
 
 	if (!strncasecmp(hdata->account, nicksvs.enforce_prefix, prefixlen) && isdigit((unsigned char)hdata->account[prefixlen]))
 	{
-		command_fail(hdata->si, fault_badparams, "The nick \2%s\2 is reserved and cannot be registered.", hdata->account);
+		command_fail(hdata->si, fault_badparams, _("The nickname \2%s\2 is reserved and cannot be registered."), hdata->account);
 		hdata->approved = 1;
 	}
 }
 
-static void check_enforce(hook_nick_enforce_t *hdata)
+static int
+idcheck_foreach_cb(struct myentity *mt, void *privdata)
 {
-	enforce_timeout_t *timeout, *timeout2;
-	mowgli_node_t *n;
-	metadata_t *md;
-
-	/* nick is a service, ignore it */
-	if (is_internal_client(hdata->u))
-		return;
-
-	if (!metadata_find(hdata->mn->owner, "private:doenforce"))
-		return;
-	/* check if this nick has been used recently enough */
-	if (nicksvs.enforce_expiry > 0 &&
-			!(hdata->mn->owner->flags & MU_HOLD) &&
-			(unsigned int)(CURRTIME - hdata->mn->lastseen) > nicksvs.enforce_expiry)
-		return;
-
-	/* check if it's already in enforce_list */
-	timeout = NULL;
-#ifdef SHOW_CORRECT_TIMEOUT_BUT_BE_SLOW
-	/* don't do this now, it's O(n^2) in the number of users using
-	 * a nick without access at a time */
-	MOWGLI_ITER_FOREACH(n, enforce_list.head)
-	{
-		timeout2 = n->data;
-		if (!irccasecmp(hdata->mn->nick, timeout2->nick) && (!strcmp(hdata->u->host, timeout2->host) || !strcmp(hdata->u->vhost, timeout2->host)))
-		{
-			timeout = timeout2;
-			break;
-		}
-	}
-#endif
-
-	if (timeout == NULL)
-	{
-		timeout = mowgli_heap_alloc(enforce_timeout_heap);
-		mowgli_strlcpy(timeout->nick, hdata->mn->nick, sizeof timeout->nick);
-		mowgli_strlcpy(timeout->host, hdata->u->host, sizeof timeout->host);
-
-		if (!metadata_find(hdata->mn->owner, "private:enforcetime"))
-			timeout->timelimit = CURRTIME + nicksvs.enforce_delay;
-		else
-		{
-			md = metadata_find(hdata->mn->owner, "private:enforcetime");
-			int enforcetime = atoi(md->value);
-			timeout->timelimit = CURRTIME + enforcetime;
-		}
-
-		/* insert in sorted order */
-		MOWGLI_ITER_FOREACH_PREV(n, enforce_list.tail)
-		{
-			timeout2 = n->data;
-			if (timeout2->timelimit <= timeout->timelimit)
-				break;
-		}
-		if (n == NULL)
-			mowgli_node_add_head(timeout, &timeout->node, &enforce_list);
-		else if (n->next == NULL)
-			mowgli_node_add(timeout, &timeout->node, &enforce_list);
-		else
-			mowgli_node_add_before(timeout, &timeout->node, &enforce_list, n->next);
-
-		if (enforce_next == 0 || enforce_next > timeout->timelimit)
-		{
-			if (enforce_next != 0)
-				mowgli_timer_destroy(base_eventloop, enforce_timeout_check_timer);
-			enforce_next = timeout->timelimit;
-			enforce_timeout_check_timer = mowgli_timer_add_once(base_eventloop, "enforce_timeout_check", enforce_timeout_check, NULL, enforce_next - CURRTIME);
-		}
-	}
-
-	notice(nicksvs.nick, hdata->u->nick, "You have %d seconds to identify to your nickname before it is changed.", (int)(timeout->timelimit - CURRTIME));
-}
-
-static int idcheck_foreach_cb(myentity_t *mt, void *privdata)
-{
-	myuser_t *mu = user(mt);
+	struct myuser *mu = user(mt);
 
 	if (metadata_find(mu, "private:idcheck"))
 		metadata_delete(mu, "private:idcheck");
@@ -611,45 +621,71 @@ static int idcheck_foreach_cb(myentity_t *mt, void *privdata)
 	return 0;
 }
 
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
+static struct command ns_set_enforce = {
+	.name           = "ENFORCE",
+	.desc           = N_("Enables or disables automatic protection of a nickname."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_enforce,
+	.help           = { .path = "nickserv/set_enforce" },
+};
 
+static struct command ns_release = {
+	.name           = "RELEASE",
+	.desc           = N_("Releases a services enforcer."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_release,
+	.help           = { .path = "nickserv/release" },
+};
+
+static struct command ns_regain = {
+	.name           = "REGAIN",
+	.desc           = N_("Regain usage of a nickname."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_regain,
+	.help           = { .path = "nickserv/regain" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
 	/* Leave this for compatibility with old versions of this code
 	 * -- jilles
 	 */
 	myentity_foreach_t(ENT_USER, idcheck_foreach_cb, NULL);
 
-	/* Absolutely do not do anything like this if nicks
-	 * are not considered owned */
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	// Absolutely do not do anything like this if nicks are not considered owned
 	if (nicksvs.no_nick_ownership)
 	{
 		slog(LG_ERROR, "modules/nickserv/enforce: nicks are not configured to be owned");
-		m->mflags = MODTYPE_FAIL;
+		m->mflags |= MODFLAG_FAIL;
 		return;
 	}
 
-	enforce_timeout_heap = mowgli_heap_create(sizeof(enforce_timeout_t), 128, BH_NOW);
+	enforce_timeout_heap = mowgli_heap_create(sizeof(struct enforce_timeout), 128, BH_NOW);
 	if (enforce_timeout_heap == NULL)
 	{
-		m->mflags = MODTYPE_FAIL;
+		m->mflags |= MODFLAG_FAIL;
 		return;
 	}
 
-	enforce_remove_enforcers_timer = mowgli_timer_add(base_eventloop, "enforce_remove_enforcers", enforce_remove_enforcers, NULL, 300);
+	enforce_remove_enforcers_timer = mowgli_timer_add(base_eventloop, "enforce_remove_enforcers", enforce_remove_enforcers, NULL, 5 * SECONDS_PER_MINUTE);
 
 	service_named_bind_command("nickserv", &ns_release);
 	service_named_bind_command("nickserv", &ns_regain);
 	command_add(&ns_set_enforce, *ns_set_cmdtree);
-	hook_add_event("user_info");
 	hook_add_user_info(show_enforce);
-	hook_add_event("nick_can_register");
 	hook_add_nick_can_register(check_registration);
-	hook_add_event("nick_enforce");
 	hook_add_nick_enforce(check_enforce);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	enforce_remove_enforcers(NULL);
 
@@ -667,8 +703,4 @@ void _moddeinit(module_unload_intent_t intent)
 	mowgli_heap_destroy(enforce_timeout_heap);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("nickserv/enforce", MODULE_UNLOAD_CAPABILITY_OK)

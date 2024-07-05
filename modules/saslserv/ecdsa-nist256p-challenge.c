@@ -1,168 +1,235 @@
 /*
- * Copyright (c) 2013 William Pitcock <nenolod@dereferenced.org>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2013 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2018-2019 Atheme Development Group (https://atheme.github.io/)
  *
  * ECDSA-NIST256P-CHALLENGE mechanism provider.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-#if defined HAVE_OPENSSL && defined HAVE_OPENSSL_EC_H
+#ifdef HAVE_LIBCRYPTO_ECDSA
 
 #include <openssl/ec.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/sha.h>
 
-#define CHALLENGE_LENGTH	SHA256_DIGEST_LENGTH
+#define CHALLENGE_LENGTH	32U
 #define CURVE_IDENTIFIER	NID_X9_62_prime256v1
 
-DECLARE_MODULE_V1
-(
-	"saslserv/ecdsa-nist256p-challenge", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-sasl_mech_register_func_t *regfuncs;
-static int mech_start(sasl_session_t *p, char **out, size_t *out_len);
-static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
-static void mech_finish(sasl_session_t *p);
-sasl_mechanism_t mech = {"ECDSA-NIST256P-CHALLENGE", &mech_start, &mech_step, &mech_finish};
-
-typedef enum {
-	ECDSA_ST_INIT = 0,
-	ECDSA_ST_ACCNAME,
-	ECDSA_ST_RESPONSE,
-	ECDSA_ST_COUNT,
-} ecdsa_step_t;
-
-typedef struct {
-	ecdsa_step_t step;
-	EC_KEY *pubkey;
-	unsigned char challenge[CHALLENGE_LENGTH];
-} ecdsa_session_t;
-
-void _modinit(module_t *m)
+struct sasl_ecdsa_nist256p_challenge_session
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_pubkey");
-	MODULE_TRY_REQUEST_SYMBOL(m, regfuncs, "saslserv/main", "sasl_mech_register_funcs");
-	regfuncs->mech_register(&mech);
-}
+	unsigned char    challenge[CHALLENGE_LENGTH];
+	EC_KEY          *pubkey;
+};
 
-void _moddeinit(module_unload_intent_t intent)
+static const struct sasl_core_functions *sasl_core_functions = NULL;
+
+static enum sasl_mechanism_result ATHEME_FATTR_WUR
+sasl_mech_ecdsa_step_account_names(struct sasl_session *const restrict p,
+                                   const struct sasl_input_buf *const restrict in,
+                                   struct sasl_output_buf *const restrict out)
 {
-	regfuncs->mech_unregister(&mech);
-}
+	EC_KEY *pubkey = NULL;
+	struct myuser *mu = NULL;
 
-static int mech_start(sasl_session_t *p, char **out, size_t *out_len)
-{
-	ecdsa_session_t *s = mowgli_alloc(sizeof(ecdsa_session_t));
-	p->mechdata = s;
+	const char *const end = memchr(in->buf, 0x00, in->len);
 
-	s->pubkey = EC_KEY_new_by_curve_name(CURVE_IDENTIFIER);
-	s->step = ECDSA_ST_ACCNAME;
-
-	EC_KEY_set_conv_form(s->pubkey, POINT_CONVERSION_COMPRESSED);
-
-	return ASASL_MORE;
-}
-
-static int mech_step_accname(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
-{
-	ecdsa_session_t *s = p->mechdata;
-	myuser_t *mu;
-	char *end;
-	unsigned char pubkey_raw[BUFSIZE];
-	const unsigned char *pubkey_raw_p;
-	metadata_t *md;
-	int ret;
-
-	memset(pubkey_raw, '\0', sizeof pubkey_raw);
-
-	end = memchr(message, '\0', len);
-	if (end == NULL)
-		p->username = sstrndup(message, len);
+	if (! end)
+	{
+		if (in->len > NICKLEN)
+		{
+			(void) slog(LG_DEBUG, "%s: in->len (%zu) is unacceptable", MOWGLI_FUNC_NAME, in->len);
+			return ASASL_MRESULT_ERROR;
+		}
+		if (! sasl_core_functions->authcid_can_login(p, HULM_PK_CHALLENGE, in->buf, &mu))
+		{
+			(void) slog(LG_DEBUG, "%s: authcid_can_login failed", MOWGLI_FUNC_NAME);
+			return ASASL_MRESULT_ERROR;
+		}
+	}
 	else
 	{
-		p->username = sstrndup(message, end-message);
-		p->authzid = sstrndup(end+1, len-1-(end-message));
+		const char *const bufchrptr = in->buf;
+		const size_t authcid_length = (size_t) (end - bufchrptr);
+		const size_t authzid_length = in->len - 1 - authcid_length;
+
+		if (! authcid_length || authcid_length > NICKLEN)
+		{
+			(void) slog(LG_DEBUG, "%s: authcid_length (%zu) is unacceptable",
+			                      MOWGLI_FUNC_NAME, authcid_length);
+			return ASASL_MRESULT_ERROR;
+		}
+		if (! authzid_length || authzid_length > NICKLEN)
+		{
+			(void) slog(LG_DEBUG, "%s: authzid_length (%zu) is unacceptable",
+			                      MOWGLI_FUNC_NAME, authzid_length);
+			return ASASL_MRESULT_ERROR;
+		}
+		if (! sasl_core_functions->authzid_can_login(p, HULM_PK_CHALLENGE, end + 1, NULL))
+		{
+			(void) slog(LG_DEBUG, "%s: authzid_can_login failed", MOWGLI_FUNC_NAME);
+			return ASASL_MRESULT_ERROR;
+		}
+		if (! sasl_core_functions->authcid_can_login(p, HULM_PK_CHALLENGE, in->buf, &mu))
+		{
+			(void) slog(LG_DEBUG, "%s: authcid_can_login failed", MOWGLI_FUNC_NAME);
+			return ASASL_MRESULT_ERROR;
+		}
 	}
-
-	mu = myuser_find_by_nick(p->username);
-	if (mu == NULL)
-		return ASASL_FAIL;
-
-	md = metadata_find(mu, "private:pubkey");
-	if (md == NULL)
+	if (! mu)
 	{
-		md = metadata_find(mu, "pubkey");
-		if (md == NULL)
-			return ASASL_FAIL;
+		(void) slog(LG_ERROR, "%s: authcid_can_login did not set 'mu' (BUG)", MOWGLI_FUNC_NAME);
+		return ASASL_MRESULT_ERROR;
 	}
 
-	ret = base64_decode(md->value, (char *)pubkey_raw, BUFSIZE);
-	if (ret == -1)
-		return ASASL_FAIL;
+	struct metadata *md;
+	if (! (md = metadata_find(mu, "private:pubkey")) && ! (md = metadata_find(mu, "pubkey")))
+	{
+		(void) slog(LG_DEBUG, "%s: metadata_find() failed", MOWGLI_FUNC_NAME);
+		return ASASL_MRESULT_ERROR;
+	}
 
-	pubkey_raw_p = pubkey_raw;
-	o2i_ECPublicKey(&s->pubkey, &pubkey_raw_p, ret);
+	unsigned char pubkey_raw[0x1000];
+	const unsigned char *pubkey_raw_p = pubkey_raw;
+	const size_t ret = base64_decode(md->value, pubkey_raw, sizeof pubkey_raw);
+	if (ret == BASE64_FAIL)
+	{
+		(void) slog(LG_DEBUG, "%s: base64_decode() failed", MOWGLI_FUNC_NAME);
+		return ASASL_MRESULT_ERROR;
+	}
 
-#ifndef DEBUG_STATIC_CHALLENGE_VECTOR
-	RAND_pseudo_bytes(s->challenge, CHALLENGE_LENGTH);
-#else
-	memset(s->challenge, 'A', CHALLENGE_LENGTH);
-#endif
+	if (! (pubkey = EC_KEY_new_by_curve_name(CURVE_IDENTIFIER)))
+	{
+		(void) slog(LG_ERROR, "%s: EC_KEY_new_by_curve_name() failed", MOWGLI_FUNC_NAME);
+		return ASASL_MRESULT_ERROR;
+	}
 
-	*out = malloc(400);
-	memcpy(*out, s->challenge, CHALLENGE_LENGTH);
-	*out_len = CHALLENGE_LENGTH;
+	(void) EC_KEY_set_conv_form(pubkey, POINT_CONVERSION_COMPRESSED);
 
-	s->step = ECDSA_ST_RESPONSE;
-	return ASASL_MORE;
+	if (! o2i_ECPublicKey(&pubkey, &pubkey_raw_p, (long) ret))
+	{
+		(void) slog(LG_DEBUG, "%s: o2i_ECPublicKey() failed", MOWGLI_FUNC_NAME);
+		(void) EC_KEY_free(pubkey);
+		return ASASL_MRESULT_ERROR;
+	}
+
+	struct sasl_ecdsa_nist256p_challenge_session *const s = smalloc(sizeof *s);
+	(void) atheme_random_buf(s->challenge, sizeof s->challenge);
+	s->pubkey = pubkey;
+
+	out->buf = s->challenge;
+	out->len = sizeof s->challenge;
+
+	p->mechdata = s;
+
+	return ASASL_MRESULT_CONTINUE;
 }
 
-static int mech_step_response(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
+static enum sasl_mechanism_result ATHEME_FATTR_WUR
+sasl_mech_ecdsa_step_verify_signature(struct sasl_session *const restrict p,
+                                      const struct sasl_input_buf *const restrict in)
 {
-	ecdsa_session_t *s = p->mechdata;
+	struct sasl_ecdsa_nist256p_challenge_session *const s = p->mechdata;
 
-	if (ECDSA_verify(0, s->challenge, CHALLENGE_LENGTH, (const unsigned char *)message, len, s->pubkey) != 1)
-		return ASASL_FAIL;
+	const int retd = ECDSA_verify(0, s->challenge, sizeof s->challenge, in->buf, (int) in->len, s->pubkey);
 
-	return ASASL_DONE;
+	if (retd == 1)
+		return ASASL_MRESULT_SUCCESS;
+	if (retd != 0)
+		return ASASL_MRESULT_ERROR;
+
+	/* Some cryptographic signature abstractions *require* hashing, so make it easier for clients of all types
+	 * to sign the challenge. If they are forced to hash it, hash it on this side too and try verifying it
+	 * again. NIST FIPS186-4 calls for SHA2-256, which is why this module uses a 32-byte challenge anyway.
+	 * We're not going to support any other digests.   <https://github.com/atheme/atheme/issues/684>    -- amdj
+	 */
+	unsigned char digestbuf[DIGEST_MDLEN_SHA2_256];
+
+	if (! digest_oneshot(DIGALG_SHA2_256, s->challenge, sizeof s->challenge, digestbuf, NULL))
+		return ASASL_MRESULT_ERROR;
+
+	const int reth = ECDSA_verify(0, digestbuf, sizeof digestbuf, in->buf, (int) in->len, s->pubkey);
+
+	if (reth == 1)
+		return ASASL_MRESULT_SUCCESS;
+	if (reth != 0)
+		return ASASL_MRESULT_ERROR;
+
+	// The signature is formatted correctly, but is not valid for the challenge or the hashed challenge
+	return ASASL_MRESULT_FAILURE;
 }
 
-typedef int (*mech_stepfn_t)(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len);
-
-static int mech_step(sasl_session_t *p, char *message, size_t len, char **out, size_t *out_len)
+static enum sasl_mechanism_result ATHEME_FATTR_WUR
+sasl_mech_ecdsa_step(struct sasl_session *const restrict p, const struct sasl_input_buf *const restrict in,
+                     struct sasl_output_buf *const restrict out)
 {
-	static mech_stepfn_t mech_steps[ECDSA_ST_COUNT] = {
-		[ECDSA_ST_ACCNAME] = &mech_step_accname,
-		[ECDSA_ST_RESPONSE] = &mech_step_response,
-	};
-	ecdsa_session_t *s = p->mechdata;
+	if (! (p && in && in->buf && in->len))
+		return ASASL_MRESULT_ERROR;
 
-	if (mech_steps[s->step] != NULL)
-		return mech_steps[s->step](p, message, len, out, out_len);
-
-	return ASASL_FAIL;
+	if (p->mechdata == NULL)
+		return sasl_mech_ecdsa_step_account_names(p, in, out);
+	else
+		return sasl_mech_ecdsa_step_verify_signature(p, in);
 }
 
-static void mech_finish(sasl_session_t *p)
+static void
+sasl_mech_ecdsa_finish(struct sasl_session *const restrict p)
 {
-	ecdsa_session_t *s = p->mechdata;
+	if (! (p && p->mechdata))
+		return;
 
-	if (s->pubkey != NULL)
-		EC_KEY_free(s->pubkey);
+	struct sasl_ecdsa_nist256p_challenge_session *const s = p->mechdata;
 
-	mowgli_free(s);
+	if (s->pubkey)
+		(void) EC_KEY_free(s->pubkey);
+
+	(void) sfree(s);
+
+	p->mechdata = NULL;
 }
 
-#endif
+static const struct sasl_mechanism sasl_mech_ecdsa = {
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+	.name           = "ECDSA-NIST256P-CHALLENGE",
+	.mech_start     = NULL,
+	.mech_step      = &sasl_mech_ecdsa_step,
+	.mech_finish    = &sasl_mech_ecdsa_finish,
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/set_pubkey")
+	MODULE_TRY_REQUEST_SYMBOL(m, sasl_core_functions, "saslserv/main", "sasl_core_functions")
+
+	(void) sasl_core_functions->mech_register(&sasl_mech_ecdsa);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) sasl_core_functions->mech_unregister(&sasl_mech_ecdsa);
+}
+
+#else /* HAVE_LIBCRYPTO_ECDSA */
+
+static void
+mod_init(struct module *const restrict m)
+{
+	(void) slog(LG_ERROR, "Module %s requires OpenSSL ECDSA support, refusing to load.", m->name);
+
+	m->mflags |= MODFLAG_FAIL;
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	// Nothing To Do
+}
+
+#endif /* !HAVE_LIBCRYPTO_ECDSA */
+
+SIMPLE_DECLARE_MODULE_V1("saslserv/ecdsa-nist256p-challenge", MODULE_UNLOAD_CAPABILITY_OK)

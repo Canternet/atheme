@@ -1,77 +1,25 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005-2006 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality which implements
  * the OperServ AKILL command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/akill", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t *os_akill_cmds = NULL;
 
-static void os_akill_newuser(hook_user_nick_t *data);
-
-static void os_cmd_akill(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_akill_add(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_akill_list(sourceinfo_t *si, int parc, char *parv[]);
-static void os_cmd_akill_sync(sourceinfo_t *si, int parc, char *parv[]);
-
-
-command_t os_akill = { "AKILL", N_("Manages network bans."), PRIV_AKILL, 3, os_cmd_akill, { .path = "oservice/akill" } };
-
-command_t os_akill_add = { "ADD", N_("Adds a network ban"), AC_NONE, 2, os_cmd_akill_add, { .path = "" } };
-command_t os_akill_del = { "DEL", N_("Deletes a network ban"), AC_NONE, 1, os_cmd_akill_del, { .path = "" } };
-command_t os_akill_list = { "LIST", N_("Lists all network bans"), AC_NONE, 1, os_cmd_akill_list, { .path = "" } };
-command_t os_akill_sync = { "SYNC", N_("Synchronises network bans to servers"), AC_NONE, 0, os_cmd_akill_sync, { .path = "" } };
-
-mowgli_patricia_t *os_akill_cmds;
-
-void _modinit(module_t *m)
+static void
+os_akill_newuser(struct hook_user_nick *data)
 {
-        service_named_bind_command("operserv", &os_akill);
+	struct user *u = data->u;
+	struct kline *k;
 
-	os_akill_cmds = mowgli_patricia_create(strcasecanon);
-
-	/* Add sub-commands */
-	command_add(&os_akill_add, os_akill_cmds);
-	command_add(&os_akill_del, os_akill_cmds);
-	command_add(&os_akill_list, os_akill_cmds);
-	command_add(&os_akill_sync, os_akill_cmds);
-
-	hook_add_event("user_add");
-	hook_add_user_add(os_akill_newuser);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_akill);
-
-	/* Delete sub-commands */
-	command_delete(&os_akill_add, os_akill_cmds);
-	command_delete(&os_akill_del, os_akill_cmds);
-	command_delete(&os_akill_list, os_akill_cmds);
-	command_delete(&os_akill_sync, os_akill_cmds);
-
-	hook_del_user_add(os_akill_newuser);
-
-	mowgli_patricia_destroy(os_akill_cmds, NULL, NULL);
-}
-
-static void os_akill_newuser(hook_user_nick_t *data)
-{
-	user_t *u = data->u;
-	kline_t *k;
-
-	/* If the user has been killed, don't do anything. */
+	// If the user has been killed, don't do anything.
 	if (!u)
 		return;
 
@@ -92,33 +40,23 @@ static void os_akill_newuser(hook_user_nick_t *data)
 	}
 }
 
-static void os_cmd_akill(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_akill(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
 {
-	/* Grab args */
-	char *cmd = parv[0];
-        command_t *c;
-
-	/* Bad/missing arg */
-	if (!cmd)
+	if (parc < 1)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "AKILL");
-		command_fail(si, fault_needmoreparams, _("Syntax: AKILL ADD|DEL|LIST"));
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "AKILL");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: AKILL ADD|DEL|LIST"));
 		return;
 	}
 
-	c = command_find(os_akill_cmds, cmd);
-	if (c == NULL)
-	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-		return;
-	}
-
-	command_exec(si->service, si, c, parc - 1, parv + 1);
+	(void) subcommand_dispatch_simple(si->service, si, parc, parv, os_akill_cmds, "AKILL");
 }
 
-static void os_cmd_akill_add(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_akill_add(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u;
+	struct user *u;
 	char *target = parv[0];
 	char *token = strtok(parv[1], " ");
 	char star[] = "*";
@@ -126,7 +64,7 @@ static void os_cmd_akill_add(sourceinfo_t *si, int parc, char *parv[])
 	char *treason, reason[BUFSIZE];
 	long duration;
 	char *s;
-	kline_t *k;
+	struct kline *k;
 
 	if (!target || !token)
 	{
@@ -155,15 +93,15 @@ static void os_cmd_akill_add(sourceinfo_t *si, int parc, char *parv[])
 			mowgli_strlcpy(reason, "No reason given", BUFSIZE);
 		if (s)
 		{
-			duration = (atol(s) * 60);
+			duration = (atol(s) * SECONDS_PER_MINUTE);
 			while (isdigit((unsigned char)*s))
 				s++;
 			if (*s == 'h' || *s == 'H')
-				duration *= 60;
+				duration *= MINUTES_PER_HOUR;
 			else if (*s == 'd' || *s == 'D')
-				duration *= 1440;
+				duration *= MINUTES_PER_DAY;
 			else if (*s == 'w' || *s == 'W')
-				duration *= 10080;
+				duration *= MINUTES_PER_WEEK;
 			else if (*s == '\0')
 				;
 			else
@@ -205,7 +143,7 @@ static void os_cmd_akill_add(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (!(u = user_find_named(target)))
 		{
-			command_fail(si, fault_nosuch_target, _("\2%s\2 is not on IRC."), target);
+			command_fail(si, fault_nosuch_target, _("\2%s\2 is not online."), target);
 			return;
 		}
 
@@ -298,13 +236,14 @@ static void os_cmd_akill_add(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_ADMIN, "AKILL:ADD: \2%s@%s\2 (reason: \2%s\2) (duration: \2Permanent\2)", k->user, k->host, k->reason);
 }
 
-static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_akill_del(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *userbuf, *hostbuf;
 	unsigned int number;
 	char *s;
-	kline_t *k;
+	struct kline *k;
 
 	if (!target)
 	{
@@ -330,7 +269,7 @@ static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
 				t[++i] = '\0';
 				start = atoi(t);
 
-				s++;	/* skip past the : */
+				s++;	// skip past the :
 
 				for (i = 0; *s != '\0'; s++, i++)
 					t[i] = *s;
@@ -342,7 +281,7 @@ static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
 				{
 					if (!(k = kline_find_num(i)))
 					{
-						command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%d\2."), i);
+						command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%u\2."), i);
 						continue;
 					}
 
@@ -361,7 +300,7 @@ static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
 
 			if (!(k = kline_find_num(number)))
 			{
-				command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%d\2."), number);
+				command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%u\2."), number);
 				return;
 			}
 
@@ -389,7 +328,7 @@ static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
 			t[++i] = '\0';
 			start = atoi(t);
 
-			target++;	/* skip past the : */
+			target++;	// skip past the :
 
 			for (i = 0; *target != '\0'; target++, i++)
 				t[i] = *target;
@@ -401,7 +340,7 @@ static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
 			{
 				if (!(k = kline_find_num(i)))
 				{
-					command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%d\2."), i);
+					command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%u\2."), i);
 					continue;
 				}
 
@@ -420,7 +359,7 @@ static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
 
 		if (!(k = kline_find_num(number)))
 		{
-			command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%d\2."), number);
+			command_fail(si, fault_nosuch_target, _("No such AKILL with number \2%u\2."), number);
 			return;
 		}
 
@@ -452,14 +391,15 @@ static void os_cmd_akill_del(sourceinfo_t *si, int parc, char *parv[])
 	kline_delete(k);
 }
 
-static void os_cmd_akill_list(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_akill_list(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *param = parv[0];
 	char *user = NULL, *host = NULL;
 	unsigned long num = 0;
 	bool full = false;
 	mowgli_node_t *n;
-	kline_t *k;
+	struct kline *k;
 
 	if (param != NULL)
 	{
@@ -495,7 +435,13 @@ static void os_cmd_akill_list(sourceinfo_t *si, int parc, char *parv[])
 
 	MOWGLI_ITER_FOREACH(n, klnlist.head)
 	{
-		k = (kline_t *)n->data;
+		struct tm *tm;
+		char settime[64];
+
+		k = (struct kline *)n->data;
+
+		tm = localtime(&k->settime);
+		strftime(settime, sizeof settime, TIME_FORMAT, tm);
 
 		if (num != 0 && k->number != num)
 			continue;
@@ -505,19 +451,21 @@ static void os_cmd_akill_list(sourceinfo_t *si, int parc, char *parv[])
 			continue;
 
 		if (k->duration && full)
-			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 - expires in \2%s\2 - (%s)"), k->number, k->user, k->host, k->setby, timediff(k->expires > CURRTIME ? k->expires - CURRTIME : 0), k->reason);
+			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 on %s - expires in \2%s\2 - (%s)"), k->number, k->user, k->host, k->setby, settime, timediff(k->expires > CURRTIME ? k->expires - CURRTIME : 0), k->reason);
 		else if (k->duration && !full)
-			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 - expires in \2%s\2"), k->number, k->user, k->host, k->setby, timediff(k->expires > CURRTIME ? k->expires - CURRTIME : 0));
+			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 on %s - expires in \2%s\2"), k->number, k->user, k->host, k->setby, settime, timediff(k->expires > CURRTIME ? k->expires - CURRTIME : 0));
 		else if (!k->duration && full)
-			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 - \2permanent\2 - (%s)"), k->number, k->user, k->host, k->setby, k->reason);
+			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 on %s - \2permanent\2 - (%s)"), k->number, k->user, k->host, k->setby, settime, k->reason);
 		else
-			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 - \2permanent\2"), k->number, k->user, k->host, k->setby);
+			command_success_nodata(si, _("%lu: %s@%s - by \2%s\2 on %s - \2permanent\2"), k->number, k->user, k->host, k->setby, settime);
 	}
 
 	if (user || host || num)
 		command_success_nodata(si, _("End of AKILL list."));
 	else
-		command_success_nodata(si, _("Total of \2%zu\2 %s in AKILL list."), klnlist.count, (klnlist.count == 1) ? "entry" : "entries");
+		command_success_nodata(si, ngettext(N_("Total of \2%zu\2 entry in AKILL list."),
+		                                    N_("Total of \2%zu\2 entries in AKILL list."),
+		                                    klnlist.count), klnlist.count);
 	if (user || host)
 		logcommand(si, CMDLOG_GET, "AKILL:LIST: \2%s@%s\2", user ? user : "*", host ? host : "*");
 	else if (num)
@@ -526,16 +474,17 @@ static void os_cmd_akill_list(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_GET, "AKILL:LIST: \2%s\2", full ? " FULL" : "");
 }
 
-static void os_cmd_akill_sync(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_akill_sync(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
-	kline_t *k;
+	struct kline *k;
 
 	logcommand(si, CMDLOG_DO, "AKILL:SYNC");
 
 	MOWGLI_ITER_FOREACH(n, klnlist.head)
 	{
-		k = (kline_t *)n->data;
+		k = (struct kline *)n->data;
 
 
 		char reason[BUFSIZE];
@@ -550,8 +499,82 @@ static void os_cmd_akill_sync(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("AKILL list synchronized to servers."));
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_akill = {
+	.name           = "AKILL",
+	.desc           = N_("Manages network host bans."),
+	.access         = PRIV_AKILL,
+	.maxparc        = 3,
+	.cmd            = &os_cmd_akill,
+	.help           = { .path = "oservice/akill" },
+};
+
+static struct command os_akill_add = {
+	.name           = "ADD",
+	.desc           = N_("Adds a network host ban."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &os_cmd_akill_add,
+	.help           = { .path = "" },
+};
+
+static struct command os_akill_del = {
+	.name           = "DEL",
+	.desc           = N_("Deletes a network host ban."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_akill_del,
+	.help           = { .path = "" },
+};
+
+static struct command os_akill_list = {
+	.name           = "LIST",
+	.desc           = N_("Lists all network host bans."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_akill_list,
+	.help           = { .path = "" },
+};
+
+static struct command os_akill_sync = {
+	.name           = "SYNC",
+	.desc           = N_("Synchronises network host bans to all servers."),
+	.access         = AC_NONE,
+	.maxparc        = 0,
+	.cmd            = &os_cmd_akill_sync,
+	.help           = { .path = "" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	if (! (os_akill_cmds = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) command_add(&os_akill_add, os_akill_cmds);
+	(void) command_add(&os_akill_del, os_akill_cmds);
+	(void) command_add(&os_akill_list, os_akill_cmds);
+	(void) command_add(&os_akill_sync, os_akill_cmds);
+
+	(void) service_named_bind_command("operserv", &os_akill);
+
+	(void) hook_add_user_add(&os_akill_newuser);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) hook_del_user_add(&os_akill_newuser);
+
+	(void) service_named_unbind_command("operserv", &os_akill);
+
+	(void) mowgli_patricia_destroy(os_akill_cmds, &command_delete_trie_cb, os_akill_cmds);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/akill", MODULE_UNLOAD_CAPABILITY_OK)

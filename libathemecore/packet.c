@@ -1,44 +1,35 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * packet.c: IRC packet handling.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * packet.c: IRC packet handling.
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "datastream.h"
+#include <atheme.h>
+#include "internal.h"
 
 /* bursting timer */
 #if HAVE_GETTIMEOFDAY
 struct timeval burstime;
 #endif
 
-mowgli_eventloop_timer_t *ping_uplink_timer = NULL;
+static mowgli_eventloop_timer_t *ping_uplink_timer = NULL;
 
-static void irc_recvq_handler(connection_t *cptr)
+static void
+irc_recvq_handler(struct connection *cptr)
 {
 	bool wasnonl;
 	char parsebuf[BUFSIZE + 1];
 	int count;
 
-	wasnonl = cptr->flags & CF_NONEWLINE ? true : false;
+	wasnonl = CF_IS_NONEWLINE(cptr) ? true : false;
 	count = recvq_getline(cptr, parsebuf, sizeof parsebuf - 1);
 	if (count <= 0)
 		return;
@@ -55,7 +46,8 @@ static void irc_recvq_handler(connection_t *cptr)
 	parse(parsebuf);
 }
 
-static void ping_uplink(void *arg)
+static void
+ping_uplink(void *arg)
 {
 	unsigned int diff;
 
@@ -65,10 +57,10 @@ static void ping_uplink(void *arg)
 
 		diff = CURRTIME - me.uplinkpong;
 
-		if (diff >= 600)
+		if (diff >= (10 * SECONDS_PER_MINUTE))
 		{
 			slog(LG_INFO, "ping_uplink(): uplink appears to be dead, disconnecting");
-			sts("ERROR :Closing Link: 127.0.0.1 (Ping timeout: %d seconds)", diff);
+			sts("ERROR :Closing Link: 127.0.0.1 (Ping timeout: %u seconds)", diff);
 			sendq_flush(curr_uplink->conn);
 			if (me.connected)
 			{
@@ -82,7 +74,8 @@ static void ping_uplink(void *arg)
 		ping_uplink_timer = NULL;
 }
 
-void irc_handle_connect(connection_t *cptr)
+void
+irc_handle_connect(struct connection *cptr)
 {
 	/* add our server */
 	{

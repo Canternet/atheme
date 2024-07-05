@@ -1,45 +1,27 @@
 /*
- * Copyright (c) 2005-2007 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 William Pitcock, et al.
  *
  * This file contains code for the CService FLAGS functions.
- *
  */
 
-#include "atheme.h"
-#include "template.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/flags", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_flags = { "FLAGS", N_("Manipulates specific permissions on a channel."),
-                        AC_NONE, 3, cs_cmd_flags, { .path = "cservice/flags" } };
-
-void _modinit(module_t *m)
+struct template_iter
 {
-	service_named_bind_command("chanserv", &cs_flags);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_flags);
-}
-
-typedef struct {
 	const char *res;
 	unsigned int level;
-} template_iter_t;
+};
 
-static int global_template_search(const char *key, void *data, void *privdata)
+static bool anope_flags_compat = true;
+
+static int
+global_template_search(const char *key, void *data, void *privdata)
 {
-	template_iter_t *iter = privdata;
-	default_template_t *def_t = data;
+	struct template_iter *iter = privdata;
+	struct default_template *def_t = data;
 
 	if (def_t->flags == iter->level)
 		iter->res = key;
@@ -47,14 +29,15 @@ static int global_template_search(const char *key, void *data, void *privdata)
 	return 0;
 }
 
-static const char *get_template_name(mychan_t *mc, unsigned int level)
+static const char *
+get_template_name(struct mychan *mc, unsigned int level)
 {
-	metadata_t *md;
+	struct metadata *md;
 	const char *p, *q, *r;
 	char *s;
 	char ss[40];
 	static char flagname[400];
-	template_iter_t iter;
+	struct template_iter iter;
 
 	md = metadata_find(mc, "private:templates");
 	if (md != NULL)
@@ -94,9 +77,10 @@ static const char *get_template_name(mychan_t *mc, unsigned int level)
 	return iter.res;
 }
 
-static void do_list(sourceinfo_t *si, mychan_t *mc, unsigned int flags)
+static void
+do_list(struct sourceinfo *si, struct mychan *mc, unsigned int flags)
 {
-	chanacs_t *ca;
+	struct chanacs *ca;
 	mowgli_node_t *n;
 	bool operoverride = false;
 	unsigned int i = 1;
@@ -107,21 +91,37 @@ static void do_list(sourceinfo_t *si, mychan_t *mc, unsigned int flags)
 			operoverride = true;
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
 
-	command_success_nodata(si, _("Entry Nickname/Host          Flags"));
-	command_success_nodata(si, "----- ---------------------- -----");
+	bool show_akicks = !chansvs.hide_flags_akicks;
+
+	if (show_akicks && chansvs.hide_pubacl_akicks)
+		show_akicks = ( chanacs_source_has_flag(mc, si, CA_ACLVIEW) || has_priv(si, PRIV_CHAN_AUSPEX) );
+
+	/* TRANSLATORS: Adjust these numbers only if the translated column
+	 * headers would exceed that length. Pay particular attention to
+	 * also changing the numbers in the format string inside the loop
+	 * below to match them, and beware that these format strings are
+	 * shared across multiple files!
+	 */
+	command_success_nodata(si, _("%-8s %-22s %s"), _("Entry"), _("Nickname/Host"), _("Flags"));
+	command_success_nodata(si, "----------------------------------------------------------------");
 
 	MOWGLI_ITER_FOREACH(n, mc->chanacs.head)
 	{
 		const char *template, *mod_ago;
-		struct tm tm;
+		struct tm *tm;
 		char mod_date[64];
+		struct myentity *setter;
+		const char *setter_name;
 
 		ca = n->data;
+
+		if (ca->level == CA_AKICK && !show_akicks)
+			continue;
 
 		if (flags && !(ca->level & flags))
 			continue;
@@ -129,19 +129,24 @@ static void do_list(sourceinfo_t *si, mychan_t *mc, unsigned int flags)
 		template = get_template_name(mc, ca->level);
 		mod_ago = ca->tmodified ? time_ago(ca->tmodified) : "?";
 
-		tm = *localtime(&ca->tmodified);
-		strftime(mod_date, sizeof mod_date, TIME_FORMAT, &tm);
+		tm = localtime(&ca->tmodified);
+		strftime(mod_date, sizeof mod_date, TIME_FORMAT, tm);
+
+		if (*ca->setter_uid != '\0' && (setter = myentity_find_uid(ca->setter_uid)))
+			setter_name = setter->name;
+		else
+			setter_name = "?";
 
 		if (template != NULL)
-			command_success_nodata(si, _("%-5d %-22s %-20s (%s) (%s) [modified %s ago, on %s]"),
-				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), template, mc->name, mod_ago, mod_date);
+			command_success_nodata(si, _("%-8u %-22s %-20s (%s) [modified %s ago, on %s, by %s]"),
+				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), template, mod_ago, mod_date, setter_name);
 		else
-			command_success_nodata(si, _("%-5d %-22s %-20s (%s) [modified %s ago, on %s]"),
-				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), mc->name, mod_ago, mod_date);
+			command_success_nodata(si, _("%-8u %-22s %-20s [modified %s ago, on %s, by %s]"),
+				i, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), mod_ago, mod_date, setter_name);
 		i++;
 	}
 
-	command_success_nodata(si, "----- ---------------------- -----");
+	command_success_nodata(si, "----------------------------------------------------------------");
 	command_success_nodata(si, _("End of \2%s\2 FLAGS listing."), mc->name);
 
 	if (operoverride)
@@ -150,36 +155,55 @@ static void do_list(sourceinfo_t *si, mychan_t *mc, unsigned int flags)
 		logcommand(si, CMDLOG_GET, "FLAGS: \2%s\2", mc->name);
 }
 
-/* FLAGS <channel> [user] [flags] */
-static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
+static void
+check_registration_keywords(struct hook_user_register_check *hdata)
 {
-	chanacs_t *ca;
+	if (hdata->approved || !anope_flags_compat)
+	{
+		return;
+	}
+
+	if (!strcasecmp(hdata->account, "LIST") || !strcasecmp(hdata->account, "CLEAR") || !strcasecmp(hdata->account, "MODIFY"))
+	{
+		command_fail(hdata->si, fault_badparams, _("The nickname \2%s\2 is reserved and cannot be registered."), hdata->account);
+		hdata->approved = 1;
+	}
+}
+
+// FLAGS <channel> [user] [flags]
+static void
+cs_cmd_flags(struct sourceinfo *si, int parc, char *parv[])
+{
+	struct chanacs *ca;
 	mowgli_node_t *n;
 	char *channel = parv[0];
 	char *target = sstrdup(parv[1]);
 	char *flagstr = parv[2];
 	const char *str1;
 	unsigned int addflags, removeflags, restrictflags;
-	hook_channel_acl_req_t req;
-	mychan_t *mc;
+	struct hook_channel_acl_req req;
+	struct mychan *mc;
 
 	if (parc < 1)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "FLAGS");
 		command_fail(si, fault_needmoreparams, _("Syntax: FLAGS <channel> [target] [flags]"));
+		sfree(target);
 		return;
 	}
 
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
+		sfree(target);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer") && (target || !has_priv(si, PRIV_CHAN_AUSPEX)))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), channel);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, channel);
+		sfree(target);
 		return;
 	}
 
@@ -188,6 +212,7 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		unsigned int flags = (target != NULL) ? flags_to_bitmask(target, 0) : 0;
 
 		do_list(si, mc, flags);
+		sfree(target);
 		return;
 	}
 
@@ -218,20 +243,19 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 	 *
 	 *   --nenolod
 	 */
-	else if (!strcasecmp(target, "LIST") && myentity_find_ext(target) == NULL)
+	else if (anope_flags_compat && !strcasecmp(target, "LIST") && myentity_find_ext(target) == NULL)
 	{
 		do_list(si, mc, 0);
-		free(target);
-
+		sfree(target);
 		return;
 	}
-	else if (!strcasecmp(target, "CLEAR") && myentity_find_ext(target) == NULL)
+	else if (anope_flags_compat && !strcasecmp(target, "CLEAR") && myentity_find_ext(target) == NULL)
 	{
-		free(target);
+		sfree(target);
 
 		if (!chanacs_source_has_flag(mc, si, CA_FOUNDER))
 		{
-			command_fail(si, fault_noprivs, "You are not authorized to perform this operation.");
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 
@@ -244,16 +268,16 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 			if (ca->level & CA_FOUNDER)
 				continue;
 
-			object_unref(ca);
+			atheme_object_unref(ca);
 		}
 
-		logcommand(si, CMDLOG_DO, "CLEAR:FLAGS: \2%s\2", mc->name);
+		logcommand(si, CMDLOG_SET, "CLEAR:FLAGS: \2%s\2", mc->name);
 		command_success_nodata(si, _("Cleared flags in \2%s\2."), mc->name);
 		return;
 	}
-	else if (!strcasecmp(target, "MODIFY") && myentity_find_ext(target) == NULL)
+	else if (anope_flags_compat && !strcasecmp(target, "MODIFY") && myentity_find_ext(target) == NULL)
 	{
-		free(target);
+		sfree(target);
 
 		if (parc < 3)
 		{
@@ -266,15 +290,16 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		if (flagstr)
 			*flagstr++ = '\0';
 
-		target = strdup(parv[2]);
+		target = sstrdup(parv[2]);
 	}
 
 	{
-		myentity_t *mt;
+		struct myentity *mt;
 
 		if (!si->smu)
 		{
-			command_fail(si, fault_noprivs, _("You are not logged in."));
+			command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
+			sfree(target);
 			return;
 		}
 
@@ -282,23 +307,31 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		{
 			if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))
 			{
-				command_fail(si, fault_noprivs, _("You are not authorized to execute this command."));
+				command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+				sfree(target);
 				return;
 			}
+
+			bool show_akicks = !chansvs.hide_flags_akicks;
+
+			if (show_akicks && chansvs.hide_pubacl_akicks)
+				show_akicks = chanacs_source_has_flag(mc, si, CA_ACLVIEW);
+
 			if (validhostmask(target))
 				ca = chanacs_find_host_literal(mc, target, 0);
 			else
 			{
 				if (!(mt = myentity_find_ext(target)))
 				{
-					command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+					command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
+					sfree(target);
 					return;
 				}
-				free(target);
+				sfree(target);
 				target = sstrdup(mt->name);
 				ca = chanacs_find_literal(mc, mt, 0);
 			}
-			if (ca != NULL)
+			if (ca != NULL && (ca->level != CA_AKICK || show_akicks))
 			{
 				str1 = bitmask_to_flags2(ca->level, 0);
 				command_success_string(si, str1, _("Flags for \2%s\2 in \2%s\2 are \2%s\2."),
@@ -309,10 +342,11 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 				command_success_string(si, "", _("No flags for \2%s\2 in \2%s\2."),
 						target, channel);
 			logcommand(si, CMDLOG_GET, "FLAGS: \2%s\2 on \2%s\2", mc->name, target);
+			sfree(target);
 			return;
 		}
 
-		/* founder may always set flags -- jilles */
+		// founder may always set flags -- jilles
 		restrictflags = chanacs_source_flags(mc, si);
 		if (restrictflags & CA_FOUNDER)
 			restrictflags = ca_all;
@@ -327,7 +361,8 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 						irccasecmp(target, entity(si->smu)->name) ||
 						strcmp(flagstr, "-*"))
 				{
-					command_fail(si, fault_noprivs, _("You are not authorized to execute this command."));
+					command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+					sfree(target);
 					return;
 				}
 			}
@@ -342,7 +377,9 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 			flags_make_bitmasks(flagstr, &addflags, &removeflags);
 			if (addflags == 0 && removeflags == 0)
 			{
-				command_fail(si, fault_badparams, _("No valid flags given, use /%s%s HELP FLAGS for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp);
+				command_fail(si, fault_badparams, _("No valid flags given, use \2/msg %s HELP FLAGS\2 "
+				                                    "for a list"), chansvs.me->disp);
+				sfree(target);
 				return;
 			}
 		}
@@ -351,11 +388,14 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 			addflags = get_template_flags(mc, flagstr);
 			if (addflags == 0)
 			{
-				/* Hack -- jilles */
+				// Hack -- jilles
 				if (*target == '+' || *target == '-' || *target == '=')
 					command_fail(si, fault_badparams, _("Usage: FLAGS %s [target] [flags]"), mc->name);
 				else
-					command_fail(si, fault_badparams, _("Invalid template name given, use /%s%s TEMPLATE %s for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp, mc->name);
+					command_fail(si, fault_badparams, _("Invalid template name given, use \2/msg "
+					                                    "%s TEMPLATE %s\2 for a list"),
+					                                    chansvs.me->disp, mc->name);
+				sfree(target);
 				return;
 			}
 			removeflags = ca_all & ~addflags;
@@ -365,10 +405,11 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		{
 			if (!(mt = myentity_find_ext(target)))
 			{
-				command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+				command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
+				sfree(target);
 				return;
 			}
-			free(target);
+			sfree(target);
 			target = sstrdup(mt->name);
 
 			ca = chanacs_open(mc, mt, NULL, true, entity(si->smu));
@@ -376,36 +417,46 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 			if (ca->level & CA_FOUNDER && removeflags & CA_FLAGS && !(removeflags & CA_FOUNDER))
 			{
 				command_fail(si, fault_noprivs, _("You may not remove a founder's +f access."));
+				sfree(target);
 				return;
 			}
 			if (ca->level & CA_FOUNDER && removeflags & CA_FOUNDER && mychan_num_founders(mc) == 1)
 			{
 				command_fail(si, fault_noprivs, _("You may not remove the last founder."));
+				sfree(target);
 				return;
 			}
 			if (!(ca->level & CA_FOUNDER) && addflags & CA_FOUNDER)
 			{
 				if (mychan_num_founders(mc) >= chansvs.maxfounders)
 				{
-					command_fail(si, fault_noprivs, _("Only %d founders allowed per channel."), chansvs.maxfounders);
+					command_fail(si, fault_noprivs, ngettext(N_("Only %u founder allowed per channel."),
+					                                         N_("Only %u founders allowed per channel."),
+					                                         chansvs.maxfounders), chansvs.maxfounders);
 					chanacs_close(ca);
+					sfree(target);
 					return;
 				}
 				if (!myentity_can_register_channel(mt))
 				{
 					command_fail(si, fault_toomany, _("\2%s\2 has too many channels registered."), mt->name);
 					chanacs_close(ca);
+					sfree(target);
 					return;
 				}
 				if (!myentity_allow_foundership(mt))
 				{
 					command_fail(si, fault_toomany, _("\2%s\2 cannot take foundership of a channel."), mt->name);
 					chanacs_close(ca);
+					sfree(target);
 					return;
 				}
 			}
 			if (addflags & CA_FOUNDER)
-				addflags |= CA_FLAGS, removeflags &= ~CA_FLAGS;
+			{
+				addflags |= CA_FLAGS;
+				removeflags &= ~CA_FLAGS;
+			}
 
 			/* If NEVEROP is set, don't allow adding new entries
 			 * except sole +b. Adding flags if the current level
@@ -416,23 +467,26 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 			{
 				command_fail(si, fault_noprivs, _("\2%s\2 does not wish to be added to channel access lists (NEVEROP set)."), mt->name);
 				chanacs_close(ca);
+				sfree(target);
 				return;
 			}
 
 			if (ca->level == 0 && chanacs_is_table_full(ca))
 			{
-				command_fail(si, fault_toomany, _("Channel %s access list is full."), mc->name);
+				command_fail(si, fault_toomany, _("Channel \2%s\2 access list is full."), mc->name);
 				chanacs_close(ca);
+				sfree(target);
 				return;
 			}
 
 			req.ca = ca;
 			req.oldlevel = ca->level;
 
-			if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))
+			if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags, si->smu))
 			{
 				command_fail(si, fault_noprivs, _("You are not allowed to set \2%s\2 on \2%s\2 in \2%s\2."), bitmask_to_flags2(addflags, removeflags), mt->name, mc->name);
 				chanacs_close(ca);
+				sfree(target);
 				return;
 			}
 
@@ -446,24 +500,27 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 			if (addflags & CA_FOUNDER)
 			{
 		                command_fail(si, fault_badparams, _("You may not set founder status on a hostmask."));
+				sfree(target);
 				return;
 			}
 
 			ca = chanacs_open(mc, NULL, target, true, entity(si->smu));
 			if (ca->level == 0 && chanacs_is_table_full(ca))
 			{
-				command_fail(si, fault_toomany, _("Channel %s access list is full."), mc->name);
+				command_fail(si, fault_toomany, _("Channel \2%s\2 access list is full."), mc->name);
 				chanacs_close(ca);
+				sfree(target);
 				return;
 			}
 
 			req.ca = ca;
 			req.oldlevel = ca->level;
 
-			if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))
+			if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags, si->smu))
 			{
 		                command_fail(si, fault_noprivs, _("You are not allowed to set \2%s\2 on \2%s\2 in \2%s\2."), bitmask_to_flags2(addflags, removeflags), target, mc->name);
 				chanacs_close(ca);
+				sfree(target);
 				return;
 			}
 
@@ -476,19 +533,51 @@ static void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		if ((addflags | removeflags) == 0)
 		{
 			command_fail(si, fault_nochange, _("Channel access to \2%s\2 for \2%s\2 unchanged."), channel, target);
+			sfree(target);
 			return;
 		}
+
 		flagstr = bitmask_to_flags2(addflags, removeflags);
 		command_success_nodata(si, _("Flags \2%s\2 were set on \2%s\2 in \2%s\2."), flagstr, target, channel);
 		logcommand(si, CMDLOG_SET, "FLAGS: \2%s\2 \2%s\2 \2%s\2", mc->name, target, flagstr);
 		verbose(mc, "\2%s\2 set flags \2%s\2 on \2%s\2", get_source_name(si), flagstr, target);
 	}
 
-	free(target);
+	sfree(target);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_flags = {
+	.name           = "FLAGS",
+	.desc           = N_("Manipulates specific permissions on a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_flags,
+	.help           = { .path = "cservice/flags" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	service_named_bind_command("chanserv", &cs_flags);
+
+	add_bool_conf_item("ANOPE_FLAGS_COMPAT", &chansvs.me->conf_table, 0, &anope_flags_compat, true);
+
+	hook_add_nick_can_register(check_registration_keywords);
+	hook_add_user_can_register(check_registration_keywords);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_flags);
+
+	hook_del_nick_can_register(check_registration_keywords);
+
+	hook_del_user_can_register(check_registration_keywords);
+
+	del_conf_item("ANOPE_FLAGS_COMPAT", &chansvs.me->conf_table);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/flags", MODULE_UNLOAD_CAPABILITY_OK)

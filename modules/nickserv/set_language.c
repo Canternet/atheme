@@ -1,51 +1,29 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Changes the language services uses to talk to you.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
 #ifdef ENABLE_NLS
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_language", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
-
-static void ns_cmd_set_language(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_language = { "LANGUAGE", N_("Changes the language services uses to talk to you."), AC_NONE, 1, ns_cmd_set_language, { .path = "nickserv/set_language" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_language, *ns_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_language, *ns_set_cmdtree);
-}
-
-/* SET LANGUAGE <language> */
-static void ns_cmd_set_language(sourceinfo_t *si, int parc, char *parv[])
+// SET LANGUAGE <language>
+static void
+ns_cmd_set_language(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *language = parv[0];
-	language_t *lang;
+	struct language *lang;
 
 	if (!language)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "LANGUAGE");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET LANGUAGE");
 		command_fail(si, fault_needmoreparams, _("Valid languages are: %s"), language_names());
 		return;
 	}
@@ -55,7 +33,7 @@ static void ns_cmd_set_language(sourceinfo_t *si, int parc, char *parv[])
 	if (strcmp(language, "default") &&
 			(lang == NULL || !language_is_valid(lang)))
 	{
-		command_fail(si, fault_badparams, _("Invalid language \2%s\2."), language);
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET LANGUAGE");
 		command_fail(si, fault_badparams, _("Valid languages are: %s"), language_names());
 		return;
 	}
@@ -69,10 +47,54 @@ static void ns_cmd_set_language(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-#endif /* ENABLE_NLS */
+static struct command ns_set_language = {
+	.name           = "LANGUAGE",
+	.desc           = N_("Changes the language services uses to talk to you."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_language,
+	.help           = { .path = "nickserv/set_language" },
+};
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_init(struct module *const restrict m)
+{
+	if (! languages_get_available())
+	{
+		(void) slog(LG_ERROR, "%s: language support is not available in this installation", m->name);
+		(void) slog(LG_ERROR, "%s: please check the log file for startup error messages", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	command_add(&ns_set_language, *ns_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_language, *ns_set_cmdtree);
+}
+
+#else /* ENABLE_NLS */
+
+static void
+mod_init(struct module *const restrict m)
+{
+	(void) slog(LG_ERROR, "Module %s requires NLS support, refusing to load.", m->name);
+
+	m->mflags |= MODFLAG_FAIL;
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	// Nothing To Do
+}
+
+#endif /* !ENABLE_NLS */
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_language", MODULE_UNLOAD_CAPABILITY_OK)

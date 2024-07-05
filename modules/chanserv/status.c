@@ -1,42 +1,22 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService STATUS function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/status", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_status(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_status = { "STATUS", N_("Displays your status in services."),
-                         AC_NONE, 1, cs_cmd_status, { .path = "cservice/status" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_status);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_status);
-}
-
-static void cs_cmd_status(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_status(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
 
 	if (chan)
 	{
-		mychan_t *mc = mychan_find(chan);
+		struct mychan *mc = mychan_find(chan);
 		unsigned int flags;
 
 		if (*chan != '#')
@@ -47,7 +27,7 @@ static void cs_cmd_status(sourceinfo_t *si, int parc, char *parv[])
 
 		if (!mc)
 		{
-			command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+			command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 			return;
 		}
 
@@ -55,7 +35,7 @@ static void cs_cmd_status(sourceinfo_t *si, int parc, char *parv[])
 
 		if (metadata_find(mc, "private:close:closer"))
 		{
-			command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+			command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 			return;
 		}
 
@@ -74,14 +54,14 @@ static void cs_cmd_status(sourceinfo_t *si, int parc, char *parv[])
 
 	logcommand(si, CMDLOG_GET, "STATUS");
 	if (!si->smu)
-		command_success_nodata(si, _("You are not logged in."));
+		command_success_nodata(si, STR_NOT_LOGGED_IN);
 	else
 	{
 		command_success_nodata(si, _("You are logged in as \2%s\2."), entity(si->smu)->name);
 
 		if (is_soper(si->smu))
 		{
-			soper_t *soper = si->smu->soper;
+			struct soper *soper = si->smu->soper;
 
 			command_success_nodata(si, _("You are a services operator of class %s."), soper->operclass ? soper->operclass->name : soper->classname);
 		}
@@ -89,7 +69,7 @@ static void cs_cmd_status(sourceinfo_t *si, int parc, char *parv[])
 
 	if (si->su != NULL)
 	{
-		mynick_t *mn;
+		struct mynick *mn;
 
 		mn = mynick_find(si->su->nick);
 		if (mn != NULL && mn->owner != si->smu &&
@@ -104,8 +84,27 @@ static void cs_cmd_status(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("You are an IRC operator."));
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_status = {
+	.name           = "STATUS",
+	.desc           = N_("Displays your status in services."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_status,
+	.help           = { .path = "cservice/status" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_status);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_status);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/status", MODULE_UNLOAD_CAPABILITY_OK)

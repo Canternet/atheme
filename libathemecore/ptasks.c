@@ -1,32 +1,23 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * ptasks.c: Implementation of common protocol tasks.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2016-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * ptasks.c: Implementation of common protocol tasks.
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
-#include "privs.h"
+#include <atheme.h>
+#include "internal.h"
 
-void handle_info(user_t *u)
+void
+handle_info(struct user *u)
 {
 	unsigned int i;
 
@@ -41,14 +32,42 @@ void handle_info(user_t *u)
 	numeric_sts(me.me, 374, u, ":End of /INFO list");
 }
 
-int get_version_string(char *buf, size_t bufsize)
+const char *
+get_build_date(void)
 {
-	const crypt_impl_t *ci = crypt_get_default_provider();
-	return snprintf(buf, bufsize, "%s. %s %s :%s [%s] [enc:%s] Build Date: %s",
-		PACKAGE_STRING, me.name, revision, get_conf_opts(), ircd->ircdname, ci->id, __DATE__);
+	const char *build_date = "<unknown>";
+
+#ifdef ATHEME_ENABLE_REPRODUCIBLE_BUILDS
+#  ifdef SOURCE_DATE_EPOCH
+	const time_t build_time = SOURCE_DATE_EPOCH;
+	const struct tm *const tm = localtime(&build_time);
+	static char datebuf[BUFSIZE];
+
+	if (tm && strftime(datebuf, sizeof datebuf, "%b %e %Y", tm) != 0)
+		build_date = datebuf;
+#  endif /* SOURCE_DATE_EPOCH */
+#else /* ATHEME_ENABLE_REPRODUCIBLE_BUILDS */
+#  ifdef __DATE__
+	build_date = __DATE__;
+#  endif
+#endif /* !ATHEME_ENABLE_REPRODUCIBLE_BUILDS */
+
+	return build_date;
 }
 
-void handle_version(user_t *u)
+int
+get_version_string(char *buf, size_t bufsize)
+{
+	const struct crypt_impl *const ci = crypt_get_default_provider();
+	const char *const ci_id = ci ? ci->id : "<none>";
+
+	return snprintf(buf, bufsize, "%s-%s %s :%s %s [%s] [enc:%s] Build Date: %s",
+	                              PACKAGE_TARNAME, PACKAGE_VERSION, me.name, revision,
+	                              get_conf_opts(), ircd->ircdname, ci_id, get_build_date());
+}
+
+void
+handle_version(struct user *u)
 {
 	if (u == NULL)
 		return;
@@ -60,7 +79,8 @@ void handle_version(user_t *u)
 	numeric_sts(me.me, 351, u, "%s", ver);
 }
 
-void handle_admin(user_t *u)
+void
+handle_admin(struct user *u)
 {
 
 	if (u == NULL)
@@ -71,33 +91,37 @@ void handle_admin(user_t *u)
 
 	numeric_sts(me.me, 256, u, ":Administrative info about %s", me.name);
 	numeric_sts(me.me, 257, u, ":%s", me.adminname);
-	numeric_sts(me.me, 258, u, ":Atheme IRC Services (%s)", PACKAGE_STRING);
+	numeric_sts(me.me, 258, u, ":%s (%s)", PACKAGE_NAME, PACKAGE_VERSION);
 	numeric_sts(me.me, 259, u, ":<%s>", me.adminemail);
 }
 
-static void dictionary_stats_cb(const char *line, void *privdata)
+static void
+dictionary_stats_cb(const char *line, void *privdata)
 {
-	numeric_sts(me.me, 249, ((user_t *)privdata), "B :%s", line);
+	numeric_sts(me.me, 249, ((struct user *)privdata), "B :%s", line);
 }
 
-static void connection_stats_cb(const char *line, void *privdata)
+static void
+connection_stats_cb(const char *line, void *privdata)
 {
-	numeric_sts(me.me, 249, ((user_t *)privdata), "F :%s", line);
+	numeric_sts(me.me, 249, ((struct user *)privdata), "F :%s", line);
 }
 
-void handle_stats(user_t *u, char req)
+void
+handle_stats(struct user *u, char req)
 {
-	kline_t *k;
-	xline_t *x;
-	qline_t *q;
+	struct kline *k;
+	struct xline *x;
+	struct qline *q;
 	mowgli_node_t *n;
-	uplink_t *uplink;
-	soper_t *soper;
+	struct uplink *uplink;
+	struct soper *soper;
 	int j;
 	char fl[10];
 
 	if (floodcheck(u, NULL))
 		return;
+
 	logcommand_user(NULL, u, CMDLOG_GET, "STATS: \2%c\2", req);
 
 	switch (req)
@@ -121,8 +145,8 @@ void handle_stats(user_t *u, char req)
 
 		  MOWGLI_ITER_FOREACH(n, uplinks.head)
 		  {
-			  uplink = (uplink_t *)n->data;
-			  numeric_sts(me.me, 213, u, "C *@127.0.0.1 A %s %d uplink", uplink->name, uplink->port);
+			  uplink = (struct uplink *)n->data;
+			  numeric_sts(me.me, 213, u, "C *@%s A %s %u uplink", uplink->host, uplink->name, uplink->port);
 		  }
 		  break;
 
@@ -144,8 +168,8 @@ void handle_stats(user_t *u, char req)
 
 		  break;
 
-	  case 'f':
 	  case 'F':
+	  case 'f':
 		  if (!has_priv_user(u, PRIV_SERVER_AUSPEX))
 			  break;
 
@@ -159,7 +183,7 @@ void handle_stats(user_t *u, char req)
 
 		  MOWGLI_ITER_FOREACH(n, uplinks.head)
 		  {
-			  uplink = (uplink_t *)n->data;
+			  uplink = (struct uplink *)n->data;
 			  numeric_sts(me.me, 244, u, "H * * %s", uplink->name);
 		  }
 		  break;
@@ -170,11 +194,11 @@ void handle_stats(user_t *u, char req)
 		  break;
 
 #ifdef OBJECT_DEBUG
-	  case 'j':
 	  case 'J':
+	  case 'j':
 		  MOWGLI_ITER_FOREACH(n, object_list.head)
 		  {
-			  object_t *obj = n->data;
+			  struct atheme_object *obj = n->data;
 			  numeric_sts(me.me, 249, u, "J :object:%p refs:%d destructor:%p",
 				      obj, obj->refcount, obj->destructor);
 		  }
@@ -188,7 +212,7 @@ void handle_stats(user_t *u, char req)
 
 		  MOWGLI_ITER_FOREACH(n, klnlist.head)
 		  {
-			  k = (kline_t *)n->data;
+			  k = (struct kline *)n->data;
 
 			  numeric_sts(me.me, 216, u, "%c %s * %s :%s",
 					  k->duration ? 'k' : 'K',
@@ -197,8 +221,8 @@ void handle_stats(user_t *u, char req)
 
 		  break;
 
-	  case 'o':
 	  case 'O':
+	  case 'o':
 		  if (!has_priv_user(u, PRIV_VIEWPRIVS))
 			  break;
 
@@ -222,34 +246,38 @@ void handle_stats(user_t *u, char req)
 
 	  case 'T':
 	  case 't':
+		  // These 3 are not sensitive; and can already be obtained with /LUSERS on IRC
+		  numeric_sts(me.me, 249, u, "T :server     %7u", cnt.server);
+		  numeric_sts(me.me, 249, u, "T :user       %7u", cnt.user);
+		  numeric_sts(me.me, 249, u, "T :chan       %7u", cnt.chan);
+
+		  // These 3 are not sensitive
+		  numeric_sts(me.me, 249, u, "T :myuser     %7u", cnt.myuser);
+		  numeric_sts(me.me, 249, u, "T :mynick     %7u", cnt.mynick);
+		  numeric_sts(me.me, 249, u, "T :mychan     %7u", cnt.mychan);
+
 		  if (!has_priv_user(u, PRIV_SERVER_AUSPEX))
 			  break;
 
-		  numeric_sts(me.me, 249, u, "T :event      %7d", claro_state.event);
-		  numeric_sts(me.me, 249, u, "T :node       %7d", claro_state.node);
-		  numeric_sts(me.me, 249, u, "T :connection %7d", connection_count());
-		  numeric_sts(me.me, 249, u, "T :operclass  %7d", cnt.operclass);
-		  numeric_sts(me.me, 249, u, "T :soper      %7d", cnt.soper);
-		  numeric_sts(me.me, 249, u, "T :tld        %7d", cnt.tld);
-		  numeric_sts(me.me, 249, u, "T :kline      %7d", cnt.kline);
-		  numeric_sts(me.me, 249, u, "T :xline      %7d", cnt.xline);
-		  numeric_sts(me.me, 249, u, "T :server     %7d", cnt.server);
-		  numeric_sts(me.me, 249, u, "T :user       %7d", cnt.user);
-		  numeric_sts(me.me, 249, u, "T :chan       %7d", cnt.chan);
-		  numeric_sts(me.me, 249, u, "T :chanuser   %7d", cnt.chanuser);
-		  numeric_sts(me.me, 249, u, "T :myuser     %7d", cnt.myuser);
-		  numeric_sts(me.me, 249, u, "T :myuser_acc %7d", cnt.myuser_access);
-		  numeric_sts(me.me, 249, u, "T :mynick     %7d", cnt.mynick);
-		  numeric_sts(me.me, 249, u, "T :myuser_nam %7d", cnt.myuser_name);
-		  numeric_sts(me.me, 249, u, "T :mychan     %7d", cnt.mychan);
-		  numeric_sts(me.me, 249, u, "T :chanacs    %7d", cnt.chanacs);
+		  numeric_sts(me.me, 249, u, "T :event      %7u", claro_state.event);
+		  numeric_sts(me.me, 249, u, "T :node       %7u", claro_state.node);
+		  numeric_sts(me.me, 249, u, "T :connection %7zu", connection_count());
+		  numeric_sts(me.me, 249, u, "T :operclass  %7u", cnt.operclass);
+		  numeric_sts(me.me, 249, u, "T :soper      %7u", cnt.soper);
+		  numeric_sts(me.me, 249, u, "T :tld        %7u", cnt.tld);
+		  numeric_sts(me.me, 249, u, "T :kline      %7u", cnt.kline);
+		  numeric_sts(me.me, 249, u, "T :xline      %7u", cnt.xline);
+		  numeric_sts(me.me, 249, u, "T :chanuser   %7u", cnt.chanuser);
+		  numeric_sts(me.me, 249, u, "T :myuser_acc %7u", cnt.myuser_access);
+		  numeric_sts(me.me, 249, u, "T :myuser_nam %7u", cnt.myuser_name);
+		  numeric_sts(me.me, 249, u, "T :chanacs    %7u", cnt.chanacs);
 
 #ifdef OBJECT_DEBUG
 		  numeric_sts(me.me, 249, u, "T :objects    %7zu", MOWGLI_LIST_LENGTH(&object_list));
 #endif
 
-		  numeric_sts(me.me, 249, u, "T :bytes sent %7.2f%s", bytes(cnt.bout), sbytes(cnt.bout));
-		  numeric_sts(me.me, 249, u, "T :bytes recv %7.2f%s", bytes(cnt.bin), sbytes(cnt.bin));
+		  numeric_sts(me.me, 249, u, "T :bytes sent %7.2f%s", (double) bytes(cnt.bout), sbytes(cnt.bout));
+		  numeric_sts(me.me, 249, u, "T :bytes recv %7.2f%s", (double) bytes(cnt.bin), sbytes(cnt.bin));
 		  break;
 
 	  case 'u':
@@ -268,14 +296,14 @@ void handle_stats(user_t *u, char req)
 				  timediff(CURRTIME - curr_uplink->conn->first_recv));
 		  break;
 
-	  case 'q':
 	  case 'Q':
+	  case 'q':
 		  if (!has_priv_user(u, PRIV_MASS_AKILL))
 			  break;
 
 		  MOWGLI_ITER_FOREACH(n, qlnlist.head)
 		  {
-			  q = (qline_t *)n->data;
+			  q = (struct qline *)n->data;
 
 			  numeric_sts(me.me, 217, u, "%c %d %s :%s",
 					  q->duration ? 'q' : 'Q',
@@ -285,14 +313,14 @@ void handle_stats(user_t *u, char req)
 
 		  break;
 
-	  case 'x':
 	  case 'X':
+	  case 'x':
 		  if (!has_priv_user(u, PRIV_MASS_AKILL))
 			  break;
 
 		  MOWGLI_ITER_FOREACH(n, xlnlist.head)
 		  {
-			  x = (xline_t *)n->data;
+			  x = (struct xline *)n->data;
 
 			  numeric_sts(me.me, 247, u, "%c %d %s :%s",
 					  x->duration ? 'x' : 'X',
@@ -302,8 +330,8 @@ void handle_stats(user_t *u, char req)
 
 		  break;
 
-	  case 'y':
 	  case 'Y':
+	  case 'y':
 		  if (!has_priv_user(u, PRIV_SERVER_AUSPEX))
 			  break;
 
@@ -318,9 +346,10 @@ void handle_stats(user_t *u, char req)
 	numeric_sts(me.me, 219, u, "%c :End of /STATS report", req);
 }
 
-void handle_whois(user_t *u, const char *target)
+void
+handle_whois(struct user *u, const char *target)
 {
-	user_t *t = user_find_named(target);
+	struct user *t = user_find_named(target);
 
 	if (u == NULL)
 		return;
@@ -334,8 +363,10 @@ void handle_whois(user_t *u, const char *target)
 		numeric_sts(me.me, 312, u, "%s %s :%s", t->nick, t->server->name, t->server->desc);
 		if (t->flags & UF_AWAY)
 			numeric_sts(me.me, 301, u, "%s :Gone", t->nick);
-		if (is_ircop(t))
-			numeric_sts(me.me, 313, u, "%s :%s", t->nick, is_service(t) ? "is a Network Service" : "is an IRC Operator");
+		if (is_service(t))
+			numeric_sts(me.me, 313, u, "%s :%s", t->nick, config_options.servicestring);
+		else if (is_ircop(t) && !config_options.hide_opers)
+			numeric_sts(me.me, 313, u, "%s :%s", t->nick, config_options.operstring);
 		if (t->myuser && !(t->myuser->flags & MU_WAITAUTH))
 			numeric_sts(me.me, 330, u, "%s %s :is logged in as", t->nick, entity(t->myuser)->name);
 	}
@@ -344,7 +375,8 @@ void handle_whois(user_t *u, const char *target)
 	numeric_sts(me.me, 318, u, "%s :End of WHOIS", target);
 }
 
-static void single_trace(user_t *u, user_t *t)
+static void
+single_trace(struct user *u, struct user *t)
 {
 	const char *classname;
 
@@ -358,11 +390,12 @@ static void single_trace(user_t *u, user_t *t)
 /* target -> object to trace
  * dest -> server to execute command on
  */
-void handle_trace(user_t *u, const char *target, const char *dest)
+void
+handle_trace(struct user *u, const char *target, const char *dest)
 {
-	user_t *t;
+	struct user *t;
 	mowgli_node_t *n;
-	int nusers;
+	unsigned int nusers;
 
 	if (u == NULL)
 		return;
@@ -379,7 +412,7 @@ void handle_trace(user_t *u, const char *target, const char *dest)
 			nusers--;
 		}
 		if (has_priv_user(u, PRIV_SERVER_AUSPEX))
-			numeric_sts(me.me, 206, u, "Serv uplink %dS %dC %s *!*@%s 0", cnt.server - 1, nusers, me.actual, me.name);
+			numeric_sts(me.me, 206, u, "Serv uplink %uS %uC %s *!*@%s 0", cnt.server - 1, nusers, me.actual, me.name);
 		target = me.name;
 	}
 	else
@@ -394,7 +427,8 @@ void handle_trace(user_t *u, const char *target, const char *dest)
 	numeric_sts(me.me, 262, u, "%s :End of TRACE", target);
 }
 
-void handle_motd(user_t *u)
+void
+handle_motd(struct user *u)
 {
 	FILE *f;
 	char lbuf[BUFSIZE];
@@ -416,11 +450,11 @@ void handle_motd(user_t *u)
 		return;
 	}
 
-	snprintf(nebuf, BUFSIZE, "%d", nicksvs.expiry / 86400);
-	snprintf(cebuf, BUFSIZE, "%d", chansvs.expiry / 86400);
-	snprintf(ubuf, BUFSIZE, "%d", cnt.myuser);
-	snprintf(nbuf, BUFSIZE, "%d", nicksvs.no_nick_ownership ? 0 : cnt.mynick);
-	snprintf(cbuf, BUFSIZE, "%d", cnt.mychan);
+	snprintf(nebuf, BUFSIZE, "%u", nicksvs.expiry / 86400);
+	snprintf(cebuf, BUFSIZE, "%u", chansvs.expiry / 86400);
+	snprintf(ubuf, BUFSIZE, "%u", cnt.myuser);
+	snprintf(nbuf, BUFSIZE, "%u", nicksvs.no_nick_ownership ? 0U : cnt.mynick);
+	snprintf(cbuf, BUFSIZE, "%u", cnt.mychan);
 
 	numeric_sts(me.me, 375, u, ":- %s Message of the Day -", me.name);
 
@@ -443,7 +477,8 @@ void handle_motd(user_t *u)
 	fclose(f);
 }
 
-void handle_away(user_t *u, const char *message)
+void
+handle_away(struct user *u, const char *message)
 {
 	if (message == NULL || *message == '\0')
 	{
@@ -464,13 +499,13 @@ void handle_away(user_t *u, const char *message)
 }
 
 static void
-handle_channel_message(sourceinfo_t *si, char *target, bool is_notice, char *message)
+handle_channel_message(struct sourceinfo *si, char *target, bool is_notice, char *message)
 {
 	char *vec[3];
-	hook_cmessage_data_t cdata;
+	struct hook_channel_message cdata;
 	mowgli_node_t *n, *tn;
 	mowgli_list_t l = { NULL, NULL, 0 };
-	service_t *svs;
+	struct service *svs;
 
 	/* Call hook here */
 	cdata.u = si->su;
@@ -489,7 +524,7 @@ handle_channel_message(sourceinfo_t *si, char *target, bool is_notice, char *mes
 
 	MOWGLI_ITER_FOREACH(n, cdata.c->members.head)
 	{
-		chanuser_t *cu = (chanuser_t *) n->data;
+		struct chanuser *cu = (struct chanuser *) n->data;
 
 		if (!is_internal_client(cu->user))
 			continue;
@@ -519,12 +554,13 @@ handle_channel_message(sourceinfo_t *si, char *target, bool is_notice, char *mes
 	}
 }
 
-void handle_message(sourceinfo_t *si, char *target, bool is_notice, char *message)
+void
+handle_message(struct sourceinfo *si, char *target, bool is_notice, char *message)
 {
 	char *vec[3];
-	user_t *u, *target_u;
+	struct user *u, *target_u;
 	char *p;
-	char name2[NICKLEN];
+	char name2[NICKLEN + 1];
 	char *sentinel;
 	mowgli_node_t *n;
 
@@ -610,9 +646,8 @@ void handle_message(sourceinfo_t *si, char *target, bool is_notice, char *messag
 
 	if (!is_notice && config_options.secure && irccasecmp(target, si->service->disp))
 	{
-		notice(si->service->me->nick, si->su->nick, "For security reasons, \2/msg %s\2 has been disabled."
-				" Use \2/%s%s <command>\2 to send a command.",
-				si->service->me->nick, (ircd->uses_rcommand ? "" : "msg "), si->service->disp);
+		notice(si->service->me->nick, si->su->nick, "For security reasons, \2/msg %s\2 has been disabled. "
+		       "Use \2/msg %s <command>\2 to send a command.", si->service->me->nick, si->service->disp);
 		return;
 	}
 
@@ -630,9 +665,10 @@ void handle_message(sourceinfo_t *si, char *target, bool is_notice, char *messag
 		si->service->handler(si, 2, vec);
 }
 
-void handle_topic_from(sourceinfo_t *si, channel_t *c, const char *setter, time_t ts, const char *topic)
+void
+handle_topic_from(struct sourceinfo *si, struct channel *c, const char *setter, time_t ts, const char *topic)
 {
-	hook_channel_topic_check_t hdata;
+	struct hook_channel_topic_check hdata;
 
 	if (topic != NULL && topic[0] == '\0')
 		topic = NULL;
@@ -673,9 +709,10 @@ void handle_topic_from(sourceinfo_t *si, channel_t *c, const char *setter, time_
 	}
 }
 
-void handle_topic(channel_t *c, const char *setter, time_t ts, const char *topic)
+void
+handle_topic(struct channel *c, const char *setter, time_t ts, const char *topic)
 {
-	char newsetter[HOSTLEN], *p;
+	char newsetter[HOSTLEN + 1], *p;
 
 	/* setter can be a nick, nick!user@host or server.
 	 * strip off !user@host part if it's there
@@ -691,23 +728,28 @@ void handle_topic(channel_t *c, const char *setter, time_t ts, const char *topic
 				(chansvs.nick && !irccasecmp(newsetter, chansvs.nick)) ||
 				ts == c->topicts))
 		return;
-	if (c->topic != NULL)
-		free(c->topic);
-	if (c->topic_setter != NULL)
-		free(c->topic_setter);
+
+	sfree(c->topic);
+	sfree(c->topic_setter);
+
 	if (topic != NULL && topic[0] != '\0')
 	{
 		c->topic = sstrdup(topic);
 		c->topic_setter = sstrdup(newsetter);
 	}
 	else
-		c->topic = c->topic_setter = NULL;
+	{
+		c->topic = NULL;
+		c->topic_setter = NULL;
+	}
+
 	c->topicts = ts;
 
 	hook_call_channel_topic(c);
 }
 
-static const char *skip_kill_path(const char *reason)
+static const char *
+skip_kill_path(const char *reason)
 {
 	const char *p;
 	bool have_dot = false;
@@ -724,11 +766,12 @@ static const char *skip_kill_path(const char *reason)
 	return have_dot ? p + 1 : reason;
 }
 
-void handle_kill(sourceinfo_t *si, const char *victim, const char *reason)
+void
+handle_kill(struct sourceinfo *si, const char *victim, const char *reason)
 {
 	const char *source, *source1, *origreason;
 	char qreason[512];
-	user_t *u;
+	struct user *u;
 	static time_t lastkill = 0;
 	static unsigned int killcount = 0;
 
@@ -760,16 +803,20 @@ void handle_kill(sourceinfo_t *si, const char *victim, const char *reason)
 	}
 	else if (u->server == me.me)
 	{
-		slog(LG_INFO, "handle_kill(): %s killed service %s (%s)", source, u->nick, reason);
+		// Can't reliably use slog() here, in case it's OperServ (source of message) that got killed!
+
+		wallops("%s killed service %s (%s)", source, u->nick, reason);
 		if (lastkill != CURRTIME && killcount < 5 + me.me->users)
-			killcount = 0, lastkill = CURRTIME;
+		{
+			killcount = 0;
+			lastkill = CURRTIME;
+		}
 		killcount++;
 		if (killcount < 5 + me.me->users)
 			reintroduce_user(u);
 		else
 		{
-			slog(LG_ERROR, "handle_kill(): services kill fight (\2%s\2 -> \2%s\2), shutting down", source, u->nick);
-			wallops(_("Services kill fight (%s -> %s), shutting down!"), source, u->nick);
+			wallops("Services kill fight (%s -> %s), shutting down!", source, u->nick);
 			runflags |= RF_SHUTDOWN;
 		}
 	}
@@ -780,10 +827,11 @@ void handle_kill(sourceinfo_t *si, const char *victim, const char *reason)
 	}
 }
 
-server_t *handle_server(sourceinfo_t *si, const char *name, const char *sid,
+struct server *
+handle_server(struct sourceinfo *si, const char *name, const char *sid,
 		int hops, const char *desc)
 {
-	server_t *s = NULL;
+	struct server *s = NULL;
 
 	if (si->s != NULL)
 	{
@@ -804,16 +852,17 @@ server_t *handle_server(sourceinfo_t *si, const char *name, const char *sid,
 	return s;
 }
 
-void handle_eob(server_t *s)
+void
+handle_eob(struct server *s)
 {
 	mowgli_node_t *n;
-	server_t *s2;
+	struct server *s2;
 
 	if (s == NULL)
 		return;
 	if (s->flags & SF_EOB)
 		return;
-	slog(LG_NETWORK, "handle_eob(): end of burst from %s (%d users)",
+	slog(LG_NETWORK, "handle_eob(): end of burst from %s (%u users)",
 			s->name, s->users);
 	hook_call_server_eob(s);
 	s->flags |= SF_EOB;
@@ -832,7 +881,8 @@ void handle_eob(server_t *s)
  * t - target of the message (to be used in warning the user, may be NULL
  *     to use the server name)
  */
-int floodcheck(user_t *u, user_t *t)
+int
+floodcheck(struct user *u, struct user *t)
 {
 	const char *from;
 	static time_t last_ignore_notice = 0;
@@ -928,9 +978,7 @@ int floodcheck(user_t *u, user_t *t)
 
 			if (u->offenses == 2)
 			{
-				kline_t *k;
-
-				k = kline_add_user(u, "ten minute ban - flooding services", 600, chansvs.nick);
+				kline_add_user(u, "ten minute ban - flooding services", 600, chansvs.nick);
 
 				slog(LG_INFO, "FLOOD:KLINE: \2%s\2", u->nick);
 
@@ -942,15 +990,17 @@ int floodcheck(user_t *u, user_t *t)
 	return 0;
 }
 
-void command_add_flood(sourceinfo_t *si, unsigned int amount)
+void
+command_add_flood(struct sourceinfo *si, unsigned int amount)
 {
 	if (si->su != NULL)
 		si->su->msgs += amount;
 }
 
-bool should_reg_umode(user_t *u)
+bool
+should_reg_umode(struct user *u)
 {
-	mynick_t *mn;
+	struct mynick *mn;
 
 	if (nicksvs.me == NULL || nicksvs.no_nick_ownership ||
 			u->myuser == NULL || u->myuser->flags & MU_WAITAUTH)

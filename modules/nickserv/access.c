@@ -1,39 +1,16 @@
 /*
- * Copyright (c) 2006-2007 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006-2007 Atheme Project (http://atheme.org/)
  *
  * Changes and shows nickname access lists.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/access", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_access = { "ACCESS", N_("Changes and shows your nickname access list."), AC_NONE, 2, ns_cmd_access, { .path = "nickserv/access" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("nickserv", &ns_access);
-
-	use_myuser_access++;
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_access);
-
-	use_myuser_access--;
-}
-
-static bool username_is_random(const char *name)
+static bool
+username_is_random(const char *name)
 {
 	const char *p;
 	int lower = 0, upper = 0, digit = 0;
@@ -60,9 +37,10 @@ static bool username_is_random(const char *name)
 	return true;
 }
 
-static char *construct_mask(user_t *u)
+static char *
+construct_mask(struct user *u)
 {
-	static char mask[USERLEN+HOSTLEN];
+	static char mask[USERLEN + 1 + HOSTLEN + 1];
 	const char *dynhosts[] = { "*dyn*.*", "*dial*.*.*", "*dhcp*.*.*",
 		"*.t-online.??", "*.t-online.???",
 		"*.t-dialin.??", "*.t-dialin.???",
@@ -77,7 +55,7 @@ static char *construct_mask(user_t *u)
 			hostisdyn = true;
 	if (hostisdyn)
 	{
-		/* note that all dyn patterns contain a dot */
+		// note that all dyn patterns contain a dot
 		p = u->host;
 		prevdot = u->host;
 		lastdot = strrchr(u->host, '.');
@@ -107,7 +85,8 @@ static char *construct_mask(user_t *u)
 	return mask;
 }
 
-static bool mangle_wildcard_to_cidr(const char *host, char *dest, size_t destlen)
+static bool
+mangle_wildcard_to_cidr(const char *host, char *dest, size_t destlen)
 {
 	int i;
 	const char *p;
@@ -153,15 +132,16 @@ static bool mangle_wildcard_to_cidr(const char *host, char *dest, size_t destlen
 	return false;
 }
 
-static void myuser_access_delete_enforce(myuser_t *mu, char *mask)
+static void
+myuser_access_delete_enforce(struct myuser *mu, char *mask)
 {
 	mowgli_list_t l = {NULL, NULL, 0};
 	mowgli_node_t *n, *tn;
-	mynick_t *mn;
-	user_t *u;
-	hook_nick_enforce_t hdata;
+	struct mynick *mn;
+	struct user *u;
+	struct hook_nick_enforce hdata;
 
-	/* find users who get access via the access list */
+	// find users who get access via the access list
 	MOWGLI_ITER_FOREACH(n, mu->nicks.head)
 	{
 		mn = n->data;
@@ -169,9 +149,11 @@ static void myuser_access_delete_enforce(myuser_t *mu, char *mask)
 		if (u != NULL && u->myuser != mu && myuser_access_verify(u, mu))
 			mowgli_node_add(u, mowgli_node_create(), &l);
 	}
-	/* remove mask */
+
+	// remove mask
 	myuser_access_delete(mu, mask);
-	/* check if those users still have access */
+
+	// check if those users still have access
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, l.head)
 	{
 		u = n->data;
@@ -190,14 +172,15 @@ static void myuser_access_delete_enforce(myuser_t *mu, char *mask)
 	}
 }
 
-static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_access(struct sourceinfo *si, int parc, char *parv[])
 {
-	myuser_t *mu;
+	struct myuser *mu;
 	mowgli_node_t *n;
 	char *mask;
 	char *host;
 	char *p;
-	char mangledmask[NICKLEN+HOSTLEN+10];
+	char mangledmask[NICKLEN + 1 + HOSTLEN + 1 + 10];
 
 	if (parc < 1)
 	{
@@ -213,7 +196,7 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 			mu = si->smu;
 			if (mu == NULL)
 			{
-				command_fail(si, fault_noprivs, _("You are not logged in."));
+				command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 				return;
 			}
 		}
@@ -227,7 +210,7 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 
 			if (!(mu = myuser_find_ext(parv[1])))
 			{
-				command_fail(si, fault_badparams, _("\2%s\2 is not registered."), parv[1]);
+				command_fail(si, fault_badparams, STR_IS_NOT_REGISTERED, parv[1]);
 				return;
 			}
 		}
@@ -265,12 +248,12 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 			mask = parv[1];
 		if (mu == NULL)
 		{
-			command_fail(si, fault_noprivs, _("You are not logged in."));
+			command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 			return;
 		}
 		if (mask[0] == '*' && mask[1] == '!')
 			mask += 2;
-		if (strlen(mask) >= USERLEN + HOSTLEN)
+		if (strlen(mask) > USERLEN + 1 + HOSTLEN)
 		{
 			command_fail(si, fault_badparams, _("Invalid mask \2%s\2."), parv[1]);
 			return;
@@ -286,19 +269,24 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 			p++;
 		}
 		host = strchr(mask, '@');
-		if (host == NULL) /* account name access masks? */
+		if (host == NULL) // account name access masks?
 		{
 			command_fail(si, fault_badparams, _("Invalid mask \2%s\2."), parv[1]);
 			return;
 		}
 		host++;
-		/* try mangling to cidr */
+
+		// try mangling to cidr
 		mowgli_strlcpy(mangledmask, mask, sizeof mangledmask);
 		if (mangle_wildcard_to_cidr(host, mangledmask + (host - mask), sizeof mangledmask - (host - mask)))
-			host = mangledmask + (host - mask), mask = mangledmask;
-		/* more checks */
+		{
+			host = mangledmask + (host - mask);
+			mask = mangledmask;
+		}
+
+		// more checks
 		if (si->su != NULL && (!strcasecmp(host, si->su->host) || !strcasecmp(host, si->su->vhost)))
-			; /* it's their host, allow it */
+			; // it's their host, allow it
 		else if (host[0] == '.' || host[0] == ':' || host[0] == '\0' || host[1] == '\0' || host == mask + 1 || strchr(host, '@') || strstr(host, ".."))
 		{
 			command_fail(si, fault_badparams, _("Invalid mask \2%s\2."), parv[1]);
@@ -306,7 +294,7 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 		}
 		else if ((strchr(host, '*') || strchr(host, '?')) && (mask[0] == '*' && mask[1] == '@'))
 		{
-			/* can't use * username and wildcarded host */
+			// can't use * username and wildcarded host
 			command_fail(si, fault_badparams, _("Too wide mask \2%s\2."), parv[1]);
 			return;
 		}
@@ -327,7 +315,7 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 		{
 			if (strchr(host, ':'))
 			{
-				/* No wildcarded IPs */
+				// No wildcarded IPs
 				if (strchr(host, '?') || strchr(host, '*'))
 				{
 					command_fail(si, fault_badparams, _("Too wide mask \2%s\2."), parv[1]);
@@ -340,14 +328,14 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 				if (p == NULL)
 					p = host;
 
-				/* No wildcarded IPs */
+				// No wildcarded IPs
 				if (isdigit((unsigned char)p[1]) && (strchr(host, '*') || strchr(host, '?')))
 				{
 					command_fail(si, fault_badparams, _("Too wide mask \2%s\2."), parv[1]);
 					return;
 				}
-				/* Require non-wildcard top and second level
-				 * domain */
+
+				// Require non-wildcard top and second level domain
 				if (strchr(p, '?') || strchr(p, '*'))
 				{
 					command_fail(si, fault_badparams, _("Too wide mask \2%s\2."), parv[1]);
@@ -393,7 +381,7 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 		mu = si->smu;
 		if (mu == NULL)
 		{
-			command_fail(si, fault_noprivs, _("You are not logged in."));
+			command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 			return;
 		}
 		if ((mask = myuser_access_find(mu, parv[1])) == NULL)
@@ -413,8 +401,31 @@ static void ns_cmd_access(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_access = {
+	.name           = "ACCESS",
+	.desc           = N_("Changes and shows your nickname access list."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_access,
+	.help           = { .path = "nickserv/access" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	service_named_bind_command("nickserv", &ns_access);
+
+	use_myuser_access++;
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_access);
+
+	use_myuser_access--;
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/access", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,48 +1,28 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService REGISTER function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanserv.h"
 
-DECLARE_MODULE_V1
-(
-	"chanserv/register", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static unsigned int ratelimit_count = 0;
+static time_t ratelimit_firsttime = 0;
 
-unsigned int ratelimit_count = 0;
-time_t ratelimit_firsttime = 0;
-
-static void cs_cmd_register(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_register = { "REGISTER", N_("Registers a channel."),
-                           AC_AUTHENTICATED, 3, cs_cmd_register, { .path = "cservice/register" } };
-
-void _modinit(module_t *m)
+static void
+cs_cmd_register(struct sourceinfo *si, int parc, char *parv[])
 {
-        service_named_bind_command("chanserv", &cs_register);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_register);
-}
-
-static void cs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
-{
-	channel_t *c;
-	chanuser_t *cu;
-	mychan_t *mc;
+	struct channel *c;
+	struct chanuser *cu;
+	struct mychan *mc;
 	char *name = parv[0];
 	char str[21];
-	hook_channel_register_check_t hdatac;
-	hook_channel_req_t hdata;
+	struct hook_channel_register_check hdatac;
+	struct hook_channel_req hdata;
 	unsigned int fl;
 
 	/* This command is not useful on registered channels, ignore it if
@@ -68,35 +48,35 @@ static void cs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 
 	if (si->smu->flags & MU_WAITAUTH)
 	{
-		command_fail(si, fault_notverified, _("You need to verify your email address before you may register channels."));
+		command_fail(si, fault_notverified, STR_EMAIL_NOT_VERIFIED);
 		return;
 	}
 
-	/* make sure it isn't already registered */
+	// make sure it isn't already registered
 	if ((mc = mychan_find(name)))
 	{
-		if (!use_channel_private || !(mc->flags & MC_PRIVATE))
+		if (! (mc->flags & MC_PRIVATE))
 			command_fail(si, fault_alreadyexists, _("\2%s\2 is already registered to \2%s\2."), mc->name, mychan_founder_names(mc));
 		else
 			command_fail(si, fault_alreadyexists, _("\2%s\2 is already registered."), mc->name);
 		return;
 	}
 
-	/* make sure the channel exists */
+	// make sure the channel exists
 	if (!(c = channel_find(name)))
 	{
 		command_fail(si, fault_nosuch_target, _("The channel \2%s\2 must exist in order to register it."), name);
 		return;
 	}
 
-	/* make sure they're in it */
+	// make sure they're in it
 	if (!(cu = chanuser_find(c, si->su)))
 	{
 		command_fail(si, fault_noprivs, _("You must be in \2%s\2 in order to register it."), name);
 		return;
 	}
 
-	/* make sure they're opped (or protected/owner on unreal/inspircd) */
+	// make sure they're opped (or protected/owner on unreal/inspircd)
 	if (!((CSTATUS_OP | CSTATUS_PROTECT | CSTATUS_OWNER) & cu->modes))
 	{
 		command_fail(si, fault_noprivs, _("You must be a channel operator in \2%s\2 in order to register it."), name);
@@ -110,7 +90,10 @@ static void cs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	if ((unsigned int)(CURRTIME - ratelimit_firsttime) > config_options.ratelimit_period)
-		ratelimit_count = 0, ratelimit_firsttime = CURRTIME;
+	{
+		ratelimit_count = 0;
+		ratelimit_firsttime = CURRTIME;
+	}
 
 	if (ratelimit_count > config_options.ratelimit_uses && !has_priv(si, PRIV_FLOOD))
 	{
@@ -141,12 +124,42 @@ static void cs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_add(name);
 	mc->registered = CURRTIME;
 	mc->used = CURRTIME;
-	mc->mlock_on |= (CMODE_NOEXT | CMODE_TOPIC);
+	mc->flags |= config_options.defcflags;
+
+	if (chansvs.default_mlock)
+	{
+		unsigned int dir = MTYPE_ADD;
+
+		for (const char *mchar = chansvs.default_mlock; *mchar; mchar++)
+		{
+			switch (*mchar)
+			{
+				case '+':
+					dir = MTYPE_ADD;
+					break;
+				case '-':
+					dir = MTYPE_DEL;
+					break;
+				default:
+					if (dir == MTYPE_ADD)
+						mc->mlock_on |= mode_to_flag(*mchar);
+					else
+						mc->mlock_off |= mode_to_flag(*mchar);
+					break;
+			}
+		}
+	}
+	else
+	{
+		mc->mlock_on |= (CMODE_NOEXT | CMODE_TOPIC);
+	}
+
 	if (c->limit == 0)
 		mc->mlock_off |= CMODE_LIMIT;
 	if (c->key == NULL)
 		mc->mlock_off |= CMODE_KEY;
-	mc->flags |= config_options.defcflags;
+
+	mc->mlock_off &= ~mc->mlock_on;
 
 	chanacs_add(mc, entity(si->smu), custom_founder_check(), CURRTIME, entity(si->smu));
 
@@ -165,7 +178,8 @@ static void cs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 	hdata.si = si;
 	hdata.mc = mc;
 	hook_call_channel_register(&hdata);
-	/* Allow the hook to override this. */
+
+	// Allow the hook to override this.
 	fl = chanacs_source_flags(mc, si);
 	cu = chanuser_find(mc->chan, si->su);
 	if (cu == NULL)
@@ -186,8 +200,27 @@ static void cs_cmd_register(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_register = {
+	.name           = "REGISTER",
+	.desc           = N_("Registers a channel."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_register,
+	.help           = { .path = "cservice/register" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_register);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_register);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/register", MODULE_UNLOAD_CAPABILITY_OK)

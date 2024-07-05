@@ -1,16 +1,311 @@
-Atheme Services 7.2 Development Notes
+Atheme Services 7.3 Development Notes
 =====================================
 
-This is the last ever release series of Atheme.  We would say some things about how this was a
-'fun' and 'exciting' experience, but at least for the last couple of years it really wasn't.
-So we won't.  Instead, we have this:
+There have been various changes since the last non-point release, most of which
+are not documented here yet.
 
-    01:32 <Argure> atheme dies today
-    01:32 <Argure> fuck yeah.
+GUARANTEED COMPATIBILITY BREAKAGE
+---------------------------------
 
-Atheme has already been forked multiple times in response to our announcement, so this doesn't
-mean the end of the world.  You can find a list of forks at <http://www.atheme.net> until the
-website is discontinued on October 31, 2016.
+- The `loadmodule` lines in the configuration file no longer take the
+  "modules/" prefix. The example configuration file at
+  `dist/atheme.conf.example` has been updated accordingly.
+
+  So, if you currently have: `loadmodule "modules/nickserv/cert";`
+  Then you will need to change this to: `loadmodule "nickserv/cert";`
+
+  This can be done en masse with a `sed(1)` invocation on your configuration
+  file. Please take a backup first:
+
+  ```
+  $ cp atheme.conf atheme.conf.bak
+  $ sed -r -i -e 's|^loadmodule "modules/|loadmodule "|g' atheme.conf
+  ```
+
+POTENTIAL COMPATIBILITY BREAKAGE
+--------------------------------
+
+- Services now accepts nicknames up to 50 characters in length, because some
+  IRCds like Charybdis do (if so configured). However, if you actually *use*
+  nicknames on your network greater than *31* characters, your database WILL
+  NOT be compatible with earlier versions of this software (<= 7.2). PLEASE
+  consider this VERY CAREFULLY! This closes issue #601.
+
+- The POSIX password crypto module has been removed. If you used this module on
+  Atheme <= 7.2, this module has been replaced with 4 other modules (2 of which
+  provide compatibility for the removed module). The module you need to load
+  depends upon the operating system Atheme was being used on; if it was Mac OS
+  then you need to load `crypto/crypt3-des` instead. If it was any other
+  operating system, then you need to load `crypto/crypt3-md5` instead. Note
+  that these 2 modules are compatibility modules; they can only verify existing
+  encrypted passwords, they cannot encrypt new ones. You must load an
+  encryption-capable crypto module. Please see the Password Hashing Modules
+  section of `dist/atheme.conf.example`.
+
+- If you (still) use legacy password crypto (verify-only) modules (`anope-*`,
+  `base64`, `crypt3-des`, `crypt3-md5`, `ircservices`, `raw*`), then you MUST
+  pass the `--enable-legacy-pwcrypto` flag to `./configure`, or these modules
+  will NOT be compiled or installed. The presence of this flag can be confirmed
+  at the bottom of the `configure` output; "Legacy Crypto Modules".
+
+- The `nickserv/cracklib` module has been renamed to `nickserv/pwquality`
+  because it is now capable of using `libpasswdqc` as well. The corresponding
+  configuration item `nickserv::cracklib_warn` has been renamed to
+  `nickserv::pwquality_warn_only` too.
+
+- The `gameserv/happyfarm` module has been removed, as it was never completely
+  finished and never worked anyway. Please remove this module from your
+  configuration file, regardless of the version of services you are using.
+
+- The `operserv/override` module has been removed. It did not provide
+  sufficient transparency to users while providing a great potential for abuse.
+  Additionally, it caused crashes if used with certain commands. Any legitimate
+  use of this module should be possible to replace with a more specific command
+  (such as `chanserv/fflags`). If you encounter a use case that cannot be
+  replaced, please report a bug to let us know.
+
+- The `operserv/set` module has been broken up into individual modules.
+  Existing loadmodule configurations will continue to work, but you will
+  receive a module deprecation warning if you load it. Please see the
+  `dist/atheme.conf.example` file for the new submodule names.
+
+- The `operserv/modinspect`, `operserv/modload`, `operserv/modreload` and
+  `operserv/modunload` modules have been removed, and replaced with a single
+  module `operserv/modmanager`. Please migrate your configuration if you were
+  previously using any of these 4 modules, and rely upon the `operserv::access`
+  configuration block to restrict usage of commands if you were e.g. previously
+  running without `operserv/modload` loaded.
+
+- The NickServ DROP command no longer requires the user's account password as
+  an argument.
+
+- Configuration options for all crypto modules have now been merged into a
+  single top `crypto {}` block. Please see `dist/atheme.conf.example` for how
+  to adapt your current crypto module configuration, if any.
+
+- The `crypto/pbkdf2` module has been made verify-only, as it has been
+  superseded by `crypto/pbkdf2v2`. Migration instructions are located in the
+  `crypto {}` section comments in `dist/atheme.conf.example`. This module *is*
+  still compiled and installed by default; it is *not* considered a legacy
+  module for the purposes of `./configure --enable-legacy-pwcrypto` (above)
+  because it does not use weak cryptographic primitives.
+
+- The `crypto/argon2d` module has been removed, and replaced with a more
+  generic `crypto/argon2` module that links against `libargon2` and supports
+  more features, including pseudo-threading and different subtypes (Argon2i
+  and Argon2id) too. If you were using this module on version 7.2, please see
+  the `dist/atheme.conf.example` file for migration instructions. The names of
+  the configuration options have changed! You will need libargon2 available at
+  configure-time (`--with-argon2`).
+
+- Services' `MU` & `MN` lines in the database (registered accounts & grouped
+  nicknames) last seen times are now written as 0 if they are currently logged
+  in, rather than using the current timestamp. The commit timestamp is written
+  to the database as well, to allow services to reconstruct the last seen
+  timestamps when it is restarted. This is to put less load on incremental
+  backup systems, as the overwhelming majority of changes to each such line
+  were always just the last seen timestamps. These changes break compatibility
+  with previous versions of this software; so if you wish to downgrade your
+  version of services after using this version, you will need to edit the
+  database before it will start successfully. A migration script is located in
+  this repository; please see the comment block in `contrib/database-ts.pl`.
+
+- The service oper privilege previously called `user:regnolimit` has been
+  changed to `user:exceedlimits`, and `user:regnolimit` now refers to the
+  ability to use the nickserv command `REGNOLIMIT`.
+
+Security
+--------
+- Services now accepts email addresses that may contain shell metacharacters.
+  If your `mta` setting points at a shell script, please ensure that it
+  properly handles email addresses with special characters in them.
+
+- Services will now refuse to encrypt new passwords with older compatibility
+  modules. You must load an encryption-capable password crypto module if you
+  want new user registrations and changed passwords to be encrypted; you will
+  receive an error message every time encryption is attempted if you do not.
+  Please see `dist/atheme.conf.example` and the Password Cryptography section
+  below for more information.
+
+- When generating passwords on behalf of users (e.g. NickServ RESETPASS),
+  services now allows you to configure the password's length.
+
+- Services will now refuse to run as root.
+
+- Services no longer prints plaintext passwords back to you for NickServ
+  `SETPASS` and `SET PASSWORD`. This allows IRC client password redaction
+  (where supported, e.g. in WeeChat) to achieve its purpose of preventing the
+  user's account password from persisting in on-disk log files.
+
+- Services will now automatically invalidate SETPASS tokens after a successful
+  login.
+
+- Services now has a much more rigorous random number generation interface
+  and will e.g. refuse to use `arc4random(3)` unless we are actually on
+  OpenBSD (which is the only platform that uses a secure algorithm for it).
+  Support for libsodium random number generation was added, and the new
+  preferred order for random number generation frontends (which can be over-
+  ridden by an argument to `./configure`) is:
+
+  - OpenBSD `arc4random(3)`, or
+  - libsodium `randombytes(3)`, or
+  - OpenSSL `RAND_bytes(3)`, or
+  - ARM mbedTLS `hmac_drbg_random(3)` with SHA2-512, or
+  - ARM mbedTLS `hmac_drbg_random(3)` with SHA2-256, or
+  - Internal ChaCha20-based Fallback RNG, seeded by
+    - `getentropy(3)`, or
+    - `getrandom(2)`, or
+    - `urandom(4)`
+
+SASL
+----
+- SASLServ and its modules have been almost entirely re-written
+- Advertise SASL mechanism list to UnrealIRCd servers
+- Use a parameter vector to allow an arbitrary number of S2S arguments
+- Indicate whether the client is on a plaintext connection or not.
+  - This can be used by user_can_login hooks.
+- Add support for SASL SCRAM logins (see `doc/SASL-SCRAM`)
+- Add support for Curve25519 ECDH-based challenge-response logins
+  - This is a private SASL mechanism that does not have widespread client
+    support yet, but it is expected to eventually replace the older
+    `ECDSA-NIST256P-CHALLENGE` mechanism, due to concerns within the
+    cryptographic community about the safety of the NIST curves.
+  - A complete mechanism documentation, including the protocol, and a design
+    rationale, is located in `modules/saslserv/ecdh-x25519-challenge.c`. This
+    will enable client authors to integrate the functionality into their IRC
+    clients.
+  - A tool, `atheme-ecdh-x25519-tool`, is provided (and is installed into
+    `bin/` by `make install`) to enable users to generate private keys, obtain
+    their public keys in base64 format (to pass to `NickServ SET`), encode
+    keypairs as a QR-Code (should mobile clients end up implementing this
+    functionality, and users wish to easily transfer their private keys), and
+    serve as a reference tool to generate server challenges, and responses to
+    server challenges, for client authors to verify their implementations
+    against. Note that the QR-Code printing support requires a UTF-8-capable
+    terminal emulator, with a monospace font supporting Unicode box-drawing
+    characters.
+  - If you wish to build and install the tool without building and installing
+    everything, simply execute the following commands in the source directory:
+    - `./configure --with-libmowgli=no`
+    - `make libathemecore`
+    - `make -C libathemecore/ install`
+    - `make -C src/ecdh-x25519-tool/ install`
+    - `~/atheme/bin/atheme-ecdh-x25519-tool -h`
+
+MemoServ
+--------
+- MemoServ: let user know when their inbox is full
+- Request: Add silent rejection feature and no subsequent requests feature
+  - This will be useful on networks that have a bot to handle vhost requests
+    automatically. Please see the `HELP` output for `REJECT`, and the comments
+    on the `no_subsequent_requests` option in `dist/atheme.conf.example`.
+
+ChanServ
+--------
+- Save `PUBACL` flag to database so it isn't lost when services restarts
+- Add `default_mlock` option to adjust the default MLOCK value, similar
+  to the existing `contrib/mlocktweaker` module
+
+NickServ
+--------
+- Port `contrib/ns_waitreg` to `nickserv/waitreg`
+- Port `contrib/ns_listlogins` to `nickserv/listlogins`
+- Blame a specific channel when a NickServ `REGAIN` fails due to a channel ban
+- NickServ `RETURN` now enables the `HIDEMAIL` flag if the email was changed
+  (unless the flag is unset by default)
+
+IRCds
+-----
+- Support `chm_nonotice.so` (Block channel notices) extension in charybdis IRCd
+- Support cmode +M in charybdis (and make it oper-only)
+- Support cmode +T in UnrealIRCd
+- Support cmode +D in UnrealIRCd 4
+- Add protocol module for ChatIRCd 1.1.x
+- Check for NULL send/receive password on connection to IRCd
+
+Misc
+----
+- Replace Base-64 codec to fix erroneous failures and add a raw encoder
+- `dist/atheme.conf.example`: document `SET NOPASSWORD` module
+- Services will no longer begin a new database unless passed the `-b` option
+- Make the OperServ `MODLIST` command available to everyone
+- Document the `special:authenticated` privilege
+- Add a Turkish translation
+
+Build System
+------------
+- `m4/`: don't check for warning flags that `gcc -Wall` enables
+- `m4/`: don't check for warning flags that `gcc -Wextra` enables
+- `m4/`: check for more warning flags
+- `m4/`: support `clang`'s `-Weverything` flag
+- `m4/atheme-libtest-*.m4`: ensure most called functions are actually linkable
+- `m4/atheme-libtest-*.m4`: use pkg-config to look for libraries where possible
+- `configure`: don't venture outside the build directory for headers if
+  using the in-tree libmowgli-2 submodule
+- `configure`: Detect PCRE support automatically instead of requiring the
+  user to ask us to build against it (`--with-pcre`)
+- `buildsys.mk.in`: clearly indicate link output file for `make V=1` text
+- Makefiles: remove PCRE `CFLAGS` and `LIBS` from programs that don't use it
+- Makefiles: separate `LDFLAGS` from `LIBS`
+- Makefiles: build source files in alphabetical order
+- Makefiles: tidy up everything and document authorship
+- `configure`: conditionally compile `libathemecore/qrcode.c`
+- `configure`: add `--with(out)-qrencode` flag to allow controlling detection
+- `configure`: Make `--enable-ssl` now `--with-openssl` to match libmowgli
+- `configure`: If `--with-openssl`, only build against libcrypto, not libssl
+- `configure`: cleanly separate `CFLAGS` from `CPPFLAGS`
+- `configure`: don't add `MOWGLI_CFLAGS` and `MOWGLI_LIBS` twice
+- `configure`: print expanded directories
+- `configure`: print final configuration in a nicer, grouped, format
+- `configure`: print `CC`/`CFLAGS`/`CPPFLAGS`/`LD`/`LDFLAGS`
+- `configure`: indicate if `--enable-warnings` was given
+- `configure`: detect support for `-Wl,-z,relro`, `-Wl,-z,now`, `-Wl,--as-needed`
+- `configure`: don't link everything against `-lcrypt`
+- `configure`: add `--enable-compiler-sanitizers` flag for ASan, UBSan, etc.
+- Update third-party files (`ABOUT-NLS`, `autoconf/*`, `m4/*.m4`)
+- Fix building contrib modules on non-Linux machines
+- Clarify that `GIT-Access` is a file by renaming it to `GIT-Access.txt`
+
+Password Cryptography
+---------------------
+- The existing crypto modules no longer need OpenSSL (or any crypto library)
+- Add support for scrypt password encryption with `crypto/scrypt`.
+  The scrypt module requires libsodium (`--with-sodium`).
+- Add support for bcrypt password encryption with `crypto/bcrypt`.
+- `libathemecore/crypto.c`: log current crypto provider on mod(un/re)load
+- `libathemecore/crypto.c`: rip out plaintext fallback implementation
+- Make old modules (`ircservices`, `pbkdf2`, `rawmd5`, `rawsha1`) verify-only
+  - If you are still using pbkdf2, it is recommended to migrate to pbkdf2v2.
+  - A migration script is included in the contrib/ directory.
+- Add verify-only `rawsha2-256` and `rawsha2-512` modules to verify more
+  password hashes from other sources.
+- Warn admin if no encryption-capable crypto modules are loaded
+- Generating new encrypted passwords is now much more efficient
+- Try encrypting a password with each module in turn instead of giving up
+- Indicating whether a password needs re-encrypting is now much more efficient
+- Verifying a password hash no longer wastes CPU time on modules that didn't
+  produce it if the module that did produce it fails to verify it
+- A new core module `operserv/genhash` is available to generate password hashes
+  suitable for use as services operator passwords. This alleviates the need to
+  build contrib module support and use `contrib/ns_generatehash`.
+- The `crypto/posix` module has been replaced with individual `crypt3-*` modules.
+  Please see the Password Hashing Modules section of `dist/atheme.conf.example`.
+- Legacy password crypto modules are now not compiled or installed by default.
+
+
+
+Atheme Services 7.2 Release Notes
+=================================
+
+Since late February 2016, Atheme is being brought back to development (managed and
+maintained by a few of the fork maintainers). Atheme 7.2.7 is the first release
+since that change. The 7.2 line includes various fixes, some backported from the forks.
+
+security
+--------
+
+- [CVE-2014-9773](https://www.cvedetails.com/cve/CVE-2014-9773/): Remote attackers could modify the behavior of the Anope FLAGS compatibility code by registering the keyword nicks LIST, CLEAR, or MODIFY. Reported by ToBeFree.
+- [CVE-2016-4478](https://www.cvedetails.com/cve/CVE-2016-4478/): Buffer overflow in XMLRPC code. Reported by hc.
 
 nickserv
 --------
@@ -19,6 +314,20 @@ nickserv
 - Make `REGAIN` log you in if successful.
 - Allow implementing custom filters for `LIST`
 - nickserv/multimark: new module which allows multiple MARK entries per nickname.
+- wallops when vhosting a marked account
+- nickserv/vhost: update usercloak metadata on vhost removal
+- nickserv/{enforce,ghost}: respect frozen accounts
+- nickserv/set_accountname: disallow change if RESTRICTed
+- nickserv/set_pubkey: new module (keeping backwards compatibility with old syntax)
+- nickserv/set_nopassword: new module
+- nickserv/{reset,set,send}pass: various fixes
+- nickserv/regain: the target user's bannedness shouldn't matter
+- nickserv: Verify that the nick being regained is valid.
+- nickserv/enforce: prevent regaining reserved nicks
+- nickserv/cert: Add CLEAR command
+- nickserv/set_email: relax verification requirements so that typo'd email addresses can be fixed (closes #441)
+- nickserv/list: new criterion VACATION
+- nickserv/info: show "Channels" line if the source user also is the target
 
 chanserv
 --------
@@ -29,6 +338,18 @@ chanserv
 - Allow users with +O or +V flags to op/voice themselves, since they can regain op/voice
   by cycling the channel anyway.
 - chanserv/clear_akicks: new module providing a `CLEAR AKICKS` command.
+- Always move on to the next nick in case of an error in /cs op etc.
+- Tell the user who they failed to op/voice if they don't have enough privs
+- +e added to chanserv{} templates and founder_flags
+- chanserv: remove set_founder
+- chanserv: use myentity_allow_foundership() to control whether or not an entity can take +F (ref #427)
+- chanserv/set_*: announce changes via verbose()
+- chanserv/flags: make Anope FLAGS compatibility an option (addresses CVE-2014-9773)
+- fix an issue where activating a channel in the moderation queue would op the wrong person
+- chanserv: move libathemecore component of bouncing mode changes on secure channels to chanserv (closes #449)
+- chanserv/clone: do not clone HOLD, and ANTIFLOOD AKILL flags
+- MC_SECURE: do not deop services
+- help: mention INFO instead of RECOVER
 
 gameserv
 --------
@@ -38,15 +359,23 @@ groupserv
 ---------
 - Hook into `sasl_may_impersonate` to support group-membership checks
 - groupserv/set_groupname: new module allowing renaming a groupserv group
+- Added group_register and group_drop hooks (addresses #428)
+- groupserv: Rewrite flags parser to use ga_flags
+- groupserv: Fix incorrect behaviour for flags +*
+- groupserv: Fix inconsistencies with FLAGS
+- groupserv/main: allow groups to take +F (ref #427)
+- Add unverified user check
 
 helpserv
 --------
 - helpserv/ticket: optionally accept a close reason and send a memo to an offline user
+- helpserv/ticket: mention possibility of using close reason in the help file, and log it
 
 operserv
 --------
 - operserv/rwatch: allow creation of RWATCH rules which k-line if 'K' is a modifier on the
   provided regexp.
+- some commands now use kline_add instead of kline_sts to allow easier management of automated klines
 
 saslserv
 --------
@@ -54,6 +383,11 @@ saslserv
 - Add a `sasl_may_impersonate` hook
 - The DH-AES and DH-BLOWFISH mechanisms were removed in their entirety.
 - Add support for IRCv3.2-draft SASL mechanism list caching, implemented by InspIRCd 2.2.
+- saslserv/ecdsa-nist256p-challenge: add backwards compatibility for old pubkey syntax
+- saslserv: call bad_password on SASL authentication failure
+- saslserv: use message source to get the source server
+- saslserv: try to include source host in SASL failure message
+- SASL: Log mechanism used by authenticated clients
 
 alis
 ----
@@ -62,6 +396,7 @@ alis
 perl api
 --------
 - Export SaslServ's `sasl_may_impersonate` hook
+- Forward compatibility for hooks
 
 ircd protocol
 -------------
@@ -77,6 +412,23 @@ ircd protocol
 - ngircd: Implement oper-wallops, using individual notices
 - unreal: Request MLOCK messages when linking to the network
 - sporksircd: Nuke obsolete module
+- clean up the mix of spaces & tabs
+- convert ircd_t to C99 struct syntax
+- unreal: fix checking of +f syntax
+- ts6-generic: add DLINE/UNDLINE implementation
+- ts6-generic: add support for sending mechlists
+- unreal: Add support for unreal 4 in a separate module
+- hybrid: remove obsolete module
+- undernet: remove obsolete module
+- ShadowIRCd: remove obsolete module
+- inspircd: add ZLINE/UNZLINE implementation
+- inspircd: use DELLINE for XLine removal
+- inspircd: properly recognize CSTATUS_IMMUNE (+Y)
+- inspircd: Only set hideoper mode on oper pseudoclients
+- charybdis: Support chm_nonotice.so (Block channel notices) extension
+- charybdis: Support cmode +M in charybdis and make it oper-only
+- charybdis: Setting CMODE_IMMUNE as .oimmune_mode
+- inspircd: Fix atoi logic error preventing maximum rejoindelay value
 
 other
 -----
@@ -87,11 +439,50 @@ other
 - contrib/cap_sasl.pl: Fix crash if irssi has ICB or SILC plugins loaded
 - contrib/cap_sasl.pl: Fix crash if disconnected while waiting for SASL reply
 - transport/jsonrpc: new module implementing JSONRPC transport
+- contrib/cap_sasl.pl: various other improvements
+- time_format: show the timezone
+- exttarget: explicitly disallow foundership for exttargets (closes #427)
+- help: various updates to reflect changes
+- help: clarify some behavior
+- [database] Make services respect an external umask when saving
+- transport/xmlrpc: Do not copy more bytes than were allocated (addresses CVE-2016-4478)
+- add a user_can_login(si, mu) hook
+- Add an option to strip build date for reproducible builds
+- botserv/set_saycaller: (optionally) give caller-nick
+- chanfix/fix: stay in log channel after fixes
+- various: code style fixes, fix some memory leaks and some warnings
+- i18n: mark more strings as translatable
+- atheme.conf example: updated to reflect changes
+- proxyscan/dnsbl: Improve the module and fix multiple crashes
+- i18n: update po/POTFILES.in
 
 crypto
 ------
+- argon2d:  New module implementing algorithm that won the Password
+            Hashing Competition (2015).
 - pbkdf2v2: Newer module implementing PBKDF2-HMAC digest scheme
             with backward compatibility and limited forward compatibility
+
+libathemecore
+-------------
+
+- add dline/undline core interface
+- user_is_channel_banned(): respect +e if applicable
+- user_is_channel_banned(): check for voice/op/etc.
+- do not allow entities under restriction to take +F at all (closes #439)
+- fix issue where pretty_mask would return host!*@*
+- chanacs_user_flags(): do not grant effective flags other than +b to unverified users (closes #416).
+- flags: update_chanacs_flags(): do not assume that a protocol module is loaded.
+- try_kick(): add support for inspircd-style per-user kick immunity the right way
+- entity: add new entity validator for taking +F (ref #427)
+- logger: use ISO 8601 in log files
+
+hostserv
+--------
+
+- hostserv: Remove group-specific offered vhosts when group dropped
+- Add DROP command
+- hostserv/request: Ignore request if requested vhost already set
 
 Atheme Services 7.1 Release Notes
 =================================

@@ -1,41 +1,31 @@
 /*
- * Copyright (c) 2005-2007 Patrick Fish, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 Patrick Fish, et al.
  *
  * Gives services the ability to freeze nicknames
- *
  */
 
-#include "atheme.h"
-#include "authcookie.h"
+#include <atheme.h>
 #include "list_common.h"
 #include "list.h"
 
-DECLARE_MODULE_V1
-(
-	"nickserv/freeze", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_freeze(sourceinfo_t *si, int parc, char *parv[]);
-
-/* FREEZE ON|OFF -- don't pollute the root with THAW */
-command_t ns_freeze = { "FREEZE", N_("Freezes an account."), PRIV_USER_ADMIN, 3, ns_cmd_freeze, { .path = "nickserv/freeze" } };
-
-static bool is_frozen(const mynick_t *mn, const void *arg)
+static bool
+is_frozen(const struct mynick *mn, const void *arg)
 {
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 
 	return !!metadata_find(mu, "private:freeze:freezer");
 }
 
-static bool frozen_match(const mynick_t *mn, const void *arg)
+static bool
+frozen_match(const struct mynick *mn, const void *arg)
 {
 	const char *frozenpattern = (const char*)arg;
-	metadata_t *mdfrozen;
+	struct metadata *mdfrozen;
 
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 	mdfrozen = metadata_find(mu, "private:freeze:reason");
 
 	if (mdfrozen != NULL && !match(frozenpattern, mdfrozen->value))
@@ -44,39 +34,15 @@ static bool frozen_match(const mynick_t *mn, const void *arg)
 	return false;
 }
 
-void _modinit(module_t *m)
+// FREEZE ON|OFF -- don't pollute the root with THAW
+static void
+ns_cmd_freeze(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("nickserv", &ns_freeze);
-
-	use_nslist_main_symbols(m);
-
-	static list_param_t frozen;
-	frozen.opttype = OPT_BOOL;
-	frozen.is_match = is_frozen;
-
-	static list_param_t frozen_reason;
-	frozen_reason.opttype = OPT_STRING;
-	frozen_reason.is_match = frozen_match;
-
-	list_register("frozen", &frozen);
-	list_register("frozen-reason", &frozen_reason);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_freeze);
-
-	list_unregister("frozen");
-	list_unregister("frozen-reason");
-}
-
-static void ns_cmd_freeze(sourceinfo_t *si, int parc, char *parv[])
-{
-	myuser_t *mu;
-	char *target = parv[0];
-	char *action = parv[1];
-	char *reason = parv[2];
-	user_t *u;
+	struct myuser *mu;
+	const char *target = parv[0];
+	const char *action = parv[1];
+	const char *reason = parv[2];
+	struct user *u;
 	mowgli_node_t *n, *tn;
 
 	if (!target || !action)
@@ -90,9 +56,11 @@ static void ns_cmd_freeze(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!mu)
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
+
+	target = entity(mu)->name;
 
 	if (!strcasecmp(action, "ON"))
 	{
@@ -118,11 +86,12 @@ static void ns_cmd_freeze(sourceinfo_t *si, int parc, char *parv[])
 		metadata_add(mu, "private:freeze:freezer", get_oper_name(si));
 		metadata_add(mu, "private:freeze:reason", reason);
 		metadata_add(mu, "private:freeze:timestamp", number_to_string(CURRTIME));
-		/* log them out */
+
+		// log them out
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, mu->logins.head)
 		{
-			u = (user_t *)n->data;
-			if (!ircd_on_logout(u, entity(mu)->name))
+			u = (struct user *)n->data;
+			if (!ircd_logout_or_kill(u, target))
 			{
 				u->myuser = NULL;
 				mowgli_node_delete(n, &mu->logins);
@@ -132,7 +101,7 @@ static void ns_cmd_freeze(sourceinfo_t *si, int parc, char *parv[])
 		mu->flags |= MU_NOBURSTLOGIN;
 		authcookie_destroy_all(mu);
 
-		wallops("%s froze the account \2%s\2 (%s).", get_oper_name(si), target, reason);
+		wallops("\2%s\2 froze the account \2%s\2 (%s).", get_oper_name(si), target, reason);
 		logcommand(si, CMDLOG_ADMIN, "FREEZE:ON: \2%s\2 (reason: \2%s\2)", target, reason);
 		command_success_nodata(si, _("\2%s\2 is now frozen."), target);
 	}
@@ -148,7 +117,7 @@ static void ns_cmd_freeze(sourceinfo_t *si, int parc, char *parv[])
 		metadata_delete(mu, "private:freeze:reason");
 		metadata_delete(mu, "private:freeze:timestamp");
 
-		wallops("%s thawed the account \2%s\2.", get_oper_name(si), target);
+		wallops("\2%s\2 thawed the account \2%s\2.", get_oper_name(si), target);
 		logcommand(si, CMDLOG_ADMIN, "FREEZE:OFF: \2%s\2", target);
 		command_success_nodata(si, _("\2%s\2 has been thawed"), target);
 	}
@@ -159,8 +128,43 @@ static void ns_cmd_freeze(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_freeze = {
+	.name           = "FREEZE",
+	.desc           = N_("Freezes an account."),
+	.access         = PRIV_USER_ADMIN,
+	.maxparc        = 3,
+	.cmd            = &ns_cmd_freeze,
+	.help           = { .path = "nickserv/freeze" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	use_nslist_main_symbols(m);
+
+	service_named_bind_command("nickserv", &ns_freeze);
+
+	static struct list_param frozen;
+	frozen.opttype = OPT_BOOL;
+	frozen.is_match = is_frozen;
+
+	static struct list_param frozen_reason;
+	frozen_reason.opttype = OPT_STRING;
+	frozen_reason.is_match = frozen_match;
+
+	list_register("frozen", &frozen);
+	list_register("frozen-reason", &frozen_reason);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_freeze);
+
+	list_unregister("frozen");
+	list_unregister("frozen-reason");
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/freeze", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,70 +1,64 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * This file contains the main() routine.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"helpserv/main", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static struct service *helpsvs = NULL;
 
-service_t *helpserv;
-
-static void helpserv_cmd_help(sourceinfo_t *si, const int parc, char *parv[]);
-
-command_t helpserv_help = { "HELP", N_(N_("Displays contextual help information.")), AC_NONE, 2, helpserv_cmd_help, { .path = "help" } };
-
-/* HELP <command> [params] */
-void helpserv_cmd_help(sourceinfo_t *si, int parc, char *parv[])
+static void
+hs_cmd_help(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc, char **const restrict parv)
 {
-	char *command = parv[0];
-
-	if (!command)
+	if (parv[0])
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), si->service->nick);
-		command_success_nodata(si, _("\2%s\2 allows users to request help from network staff."), si->service->nick);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more information on a command, type:"));
-		command_success_nodata(si, "\2/%s%s help <command>\2", (ircd->uses_rcommand == false) ? "msg " : "", helpserv->disp);
-		command_success_nodata(si, " ");
-
-		command_help(si, si->service->commands);
-
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
+		(void) help_display(si, si->service, parv[0], si->service->commands);
 		return;
 	}
 
-	/* take the command through the hash table */
-	help_display(si, si->service, command, si->service->commands);
+	(void) help_display_prefix(si, si->service);
+
+	(void) command_success_nodata(si, _("\2%s\2 allows users to request help from network staff."),
+	                              si->service->nick);
+
+	(void) help_display_newline(si);
+	(void) command_help(si, si->service->commands);
+	(void) help_display_moreinfo(si, si->service, NULL);
+	(void) help_display_suffix(si);
 }
 
-void _modinit(module_t *m)
+static struct command hs_help = {
+	.name           = "HELP",
+	.desc           = STR_HELP_DESCRIPTION,
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &hs_cmd_help,
+	.help           = { .path = "help" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
-	helpserv = service_add("helpserv", NULL);
-
-	service_bind_command(helpserv, &helpserv_help);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_unbind_command(helpserv, &helpserv_help);
-
-	if (helpserv)
+	if (! (helpsvs = service_add("helpserv", NULL)))
 	{
-		service_delete(helpserv);
-		helpserv = NULL;
+		(void) slog(LG_ERROR, "%s: service_add() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
 	}
+
+	(void) service_bind_command(helpsvs, &hs_help);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_delete(helpsvs);
+}
+
+SIMPLE_DECLARE_MODULE_V1("helpserv/main", MODULE_UNLOAD_CAPABILITY_OK)

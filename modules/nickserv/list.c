@@ -1,56 +1,52 @@
 /*
- * Copyright (c) 2005-2007 Robin Burchell, et al.
- * Copyright (c) 2010 William Pitcock <nenolod@atheme.org>.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 Robin Burchell, et al.
+ * Copyright (C) 2010 William Pitcock <nenolod@dereferenced.org>
  *
  * This file contains code for the NickServ LIST function.
  * Based on Alex Lambert's LISTEMAIL.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "list_common.h"
 
-DECLARE_MODULE_V1
-(
-	"nickserv/list", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+// Imported by many other modules
+extern void list_register(const char *, struct list_param *);
+extern void list_unregister(const char *);
 
-static void ns_cmd_list(sourceinfo_t *si, int parc, char *parv[]);
 static mowgli_patricia_t *list_params;
 
-command_t ns_list = { "LIST", N_("Lists nicknames registered matching a given pattern."), PRIV_USER_AUSPEX, 10, ns_cmd_list, { .path = "nickserv/list" } };
-
-void list_register(const char *param_name, list_param_t *param);
-void list_unregister(const char *param_name);
-
-static bool email_match(const mynick_t *mn, const void *arg)
+static bool
+email_match(const struct mynick *mn, const void *arg)
 {
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 	const char *cmpr = (const char*)arg;
 
 	return !match(cmpr, mu->email);
 }
 
-static bool lastlogin_match(const mynick_t *mn, const void *arg)
+static bool
+lastlogin_match(const struct mynick *mn, const void *arg)
 {
-	myuser_t *mu = mn->owner;
-	const time_t lastlogin = *(time_t *)arg;
+	struct myuser *mu = mn->owner;
+	const time_t lastlogin = *((const time_t *) arg);
 
 	return (CURRTIME - mu->lastlogin) > lastlogin;
 }
 
-static bool pattern_match(const mynick_t *mn, const void *arg)
+static bool
+pattern_match(const struct mynick *mn, const void *arg)
 {
 	const char *pattern = (const char*)arg;
 
 	char pat[512], *nickpattern = NULL, *hostpattern = NULL, *p;
-	metadata_t *md;
+	struct metadata *md;
 
 	bool hostmatch;
 
-	myuser_t *mu = mn->owner;
+	struct myuser *mu = mn->owner;
 
 	if (pattern != NULL)
 	{
@@ -91,93 +87,59 @@ static bool pattern_match(const mynick_t *mn, const void *arg)
 	return true;
 }
 
-static bool registered_match(const mynick_t *mn, const void *arg)
+static bool
+registered_match(const struct mynick *mn, const void *arg)
 {
-	myuser_t *mu = mn->owner;
-	const time_t age = *(time_t *)arg;
+	struct myuser *mu = mn->owner;
+	const time_t age = *((const time_t *) arg);
 
 	return (CURRTIME - mu->registered) > age;
 }
 
-static bool has_waitauth(const mynick_t *mn, const void *arg) {
-	myuser_t *mu = mn->owner;
+static bool
+primary_match(const struct mynick *mn, const void *arg)
+{
+	struct myuser *mu = mn->owner;
+	(void) arg;
+
+	return !irccasecmp(mn->nick, entity(mn->owner)->name);
+}
+
+static bool
+has_waitauth(const struct mynick *mn, const void *arg)
+{
+	struct myuser *mu = mn->owner;
 
 	return ( mu->flags & MU_WAITAUTH ) == MU_WAITAUTH;
 }
 
-void _modinit(module_t *m)
+void
+list_register(const char *param_name, struct list_param *param)
 {
-	list_params = mowgli_patricia_create(strcasecanon);
-	service_named_bind_command("nickserv", &ns_list);
-
-	/* list email */
-	static list_param_t email;
-	email.opttype = OPT_STRING;
-	email.is_match = email_match;
-
-	static list_param_t lastlogin;
-	lastlogin.opttype = OPT_AGE;
-	lastlogin.is_match = lastlogin_match;
-
-	static list_param_t pattern;
-	pattern.opttype = OPT_STRING;
-	pattern.is_match = pattern_match;
-
-	static list_param_t registered;
-	registered.opttype = OPT_AGE;
-	registered.is_match = registered_match;
-
-	list_register("email", &email);
-	list_register("lastlogin", &lastlogin);
-	list_register("mail", &email);
-
-	list_register("pattern", &pattern);
-	list_register("registered", &registered);
-
-	static list_param_t waitauth;
-	waitauth.opttype = OPT_BOOL;
-	waitauth.is_match = has_waitauth;
-
-	list_register("waitauth", &waitauth);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_list);
-
-	list_unregister("email");
-	list_unregister("lastlogin");
-	list_unregister("mail");
-
-	list_unregister("pattern");
-	list_unregister("registered");
-
-	list_unregister("waitauth");
-}
-
-void list_register(const char *param_name, list_param_t *param) {
 	mowgli_patricia_add(list_params, param_name, param);
 }
 
-void list_unregister(const char *param_name) {
+void
+list_unregister(const char *param_name)
+{
 	mowgli_patricia_delete(list_params, param_name);
 }
 
-
-static time_t parse_age(char *s)
+static time_t
+parse_age(char *s)
 {
 	time_t duration;
 
-	duration = (atol(s) * 60);
+	duration = (atol(s) * SECONDS_PER_MINUTE);
 	while (isdigit((unsigned char)*s))
 		s++;
 
 	if (*s == 'h' || *s == 'H')
-		duration *= 60;
+		duration *= MINUTES_PER_HOUR;
 	else if (*s == 'd' || *s == 'D')
-		duration *= 1440;
+		duration *= MINUTES_PER_DAY;
 	else if (*s == 'w' || *s == 'W')
-		duration *= 10080;
+		duration *= MINUTES_PER_WEEK;
 	else if (*s == '\0')
 		;
 	else
@@ -186,7 +148,8 @@ static time_t parse_age(char *s)
 	return duration;
 }
 
-static void build_criteriastr(char *buf, int parc, char *parv[])
+static void
+build_criteriastr(char *buf, int parc, char *parv[])
 {
 	int i;
 
@@ -200,7 +163,8 @@ static void build_criteriastr(char *buf, int parc, char *parv[])
 	}
 }
 
-static void list_one(sourceinfo_t *si, myuser_t *mu, mynick_t *mn)
+static void
+list_one(struct sourceinfo *si, struct myuser *mu, struct mynick *mn)
 {
 	char buf[BUFSIZE];
 
@@ -239,15 +203,16 @@ static void list_one(sourceinfo_t *si, myuser_t *mu, mynick_t *mn)
 		command_success_nodata(si, "- %s (%s) (%s) %s", mn->nick, mu->email, entity(mu)->name, buf);
 }
 
-static void ns_cmd_list(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_list(struct sourceinfo *si, int parc, char *parv[])
 {
 	char criteriastr[BUFSIZE];
 
 	mowgli_patricia_iteration_state_t state;
-	myentity_iteration_state_t mestate;
-	mynick_t *mn;
+	struct myentity_iteration_state mestate;
+	struct mynick *mn;
 
-	int matches = 0;
+	unsigned int matches = 0;
 
 	int i;
 	bool error = false;
@@ -259,7 +224,7 @@ static void ns_cmd_list(sourceinfo_t *si, int parc, char *parv[])
 
 		for (i = 0; i < parc; i++)
 		{
-			list_param_t *param = mowgli_patricia_retrieve(list_params, parv[i]);
+			struct list_param *param = mowgli_patricia_retrieve(list_params, parv[i]);
 
 			if (param == NULL) {
 				command_fail(si, fault_badparams, _("\2%s\2 is not a recognized LIST criterion"), parv[i]);
@@ -328,15 +293,81 @@ static void ns_cmd_list(sourceinfo_t *si, int parc, char *parv[])
 
 	build_criteriastr(criteriastr, parc, parv);
 
-	logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 (\2%d\2 matches)", criteriastr, matches);
+	logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 (\2%u\2 matches)", criteriastr, matches);
 	if (matches == 0)
 		command_success_nodata(si, _("No nicknames matched criteria \2%s\2"), criteriastr);
 	else
-		command_success_nodata(si, ngettext(N_("\2%d\2 match for criteria \2%s\2"), N_("\2%d\2 matches for criteria \2%s\2"), matches), matches, criteriastr);
+		command_success_nodata(si, ngettext(N_("\2%u\2 match for criteria \2%s\2."),
+		                                    N_("\2%u\2 matches for criteria \2%s\2."), matches),
+		                                    matches, criteriastr);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_list = {
+	.name           = "LIST",
+	.desc           = N_("Lists nicknames registered matching a given pattern."),
+	.access         = PRIV_USER_AUSPEX,
+	.maxparc        = 10,
+	.cmd            = &ns_cmd_list,
+	.help           = { .path = "nickserv/list" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	list_params = mowgli_patricia_create(strcasecanon);
+	service_named_bind_command("nickserv", &ns_list);
+
+	// list email
+	static struct list_param email;
+	email.opttype = OPT_STRING;
+	email.is_match = email_match;
+
+	static struct list_param lastlogin;
+	lastlogin.opttype = OPT_AGE;
+	lastlogin.is_match = lastlogin_match;
+
+	static struct list_param pattern;
+	pattern.opttype = OPT_STRING;
+	pattern.is_match = pattern_match;
+
+	static struct list_param registered;
+	registered.opttype = OPT_AGE;
+	registered.is_match = registered_match;
+
+	static struct list_param primary;
+	primary.opttype = OPT_BOOL;
+	primary.is_match = primary_match;
+
+	list_register("email", &email);
+	list_register("lastlogin", &lastlogin);
+	list_register("mail", &email);
+
+	list_register("pattern", &pattern);
+	list_register("registered", &registered);
+	list_register("primary", &primary);
+
+	static struct list_param waitauth;
+	waitauth.opttype = OPT_BOOL;
+	waitauth.is_match = has_waitauth;
+
+	list_register("waitauth", &waitauth);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_list);
+
+	list_unregister("email");
+	list_unregister("lastlogin");
+	list_unregister("mail");
+
+	list_unregister("pattern");
+	list_unregister("registered");
+
+	list_unregister("waitauth");
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/list", MODULE_UNLOAD_CAPABILITY_OK)

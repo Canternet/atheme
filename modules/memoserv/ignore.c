@@ -1,94 +1,39 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * This file contains code for the Memoserv IGNORE functions
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"memoserv/ignore", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t *ms_ignore_cmds = NULL;
 
-static void ms_cmd_ignore(sourceinfo_t *si, int parc, char *parv[]);
-static void ms_cmd_ignore_add(sourceinfo_t *si, int parc, char *parv[]);
-static void ms_cmd_ignore_del(sourceinfo_t *si, int parc, char *parv[]);
-static void ms_cmd_ignore_clear(sourceinfo_t *si, int parc, char *parv[]);
-static void ms_cmd_ignore_list(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ms_ignore = { "IGNORE", N_(N_("Ignores memos.")), AC_AUTHENTICATED, 2, ms_cmd_ignore, { .path = "memoserv/ignore" } };
-command_t ms_ignore_add = { "ADD", N_(N_("Ignores memos from a user.")), AC_AUTHENTICATED, 1, ms_cmd_ignore_add, { .path = "" } };
-command_t ms_ignore_del = { "DEL", N_(N_("Stops ignoring memos from a user.")), AC_AUTHENTICATED, 1, ms_cmd_ignore_del, { .path = "" } };
-command_t ms_ignore_clear = { "CLEAR", N_(N_("Clears your memo ignore list.")), AC_AUTHENTICATED, 1, ms_cmd_ignore_clear, { .path = "" } };
-command_t ms_ignore_list = { "LIST", N_(N_("Shows all users you are ignoring memos from.")), AC_AUTHENTICATED, 1, ms_cmd_ignore_list, { .path = "" } };
-
-mowgli_patricia_t *ms_ignore_cmds;
-
-void _modinit(module_t *m)
+static void
+ms_cmd_ignore(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
 {
-	service_named_bind_command("memoserv", &ms_ignore);
-
-	ms_ignore_cmds = mowgli_patricia_create(strcasecanon);
-
-	/* Add sub-commands */
-	command_add(&ms_ignore_add, ms_ignore_cmds);
-	command_add(&ms_ignore_del, ms_ignore_cmds);
-	command_add(&ms_ignore_clear, ms_ignore_cmds);
-	command_add(&ms_ignore_list, ms_ignore_cmds);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("memoserv", &ms_ignore);
-
-	/* Delete sub-commands */
-	command_delete(&ms_ignore_add, ms_ignore_cmds);
-	command_delete(&ms_ignore_del, ms_ignore_cmds);
-	command_delete(&ms_ignore_clear, ms_ignore_cmds);
-	command_delete(&ms_ignore_list, ms_ignore_cmds);
-
-	mowgli_patricia_destroy(ms_ignore_cmds, NULL, NULL);
-}
-
-static void ms_cmd_ignore(sourceinfo_t *si, int parc, char *parv[])
-{
-	/* Grab args */
-	char *cmd = parv[0];
-	command_t *c;
-
-	/* Bad/missing arg */
-	if (!cmd)
+	if (parc < 1)
 	{
-		command_fail(si, fault_needmoreparams,
-			STR_INSUFFICIENT_PARAMS, "IGNORE");
-
-		command_fail(si, fault_needmoreparams, _("Syntax: IGNORE ADD|DEL|LIST|CLEAR [account]"));
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "IGNORE");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: IGNORE ADD|DEL|LIST|CLEAR [account]"));
 		return;
 	}
 
-	c = command_find(ms_ignore_cmds, cmd);
-	if (c == NULL)
-	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-		return;
-	}
-
-	command_exec(si->service, si, c, parc - 1, parv + 1);
+	(void) subcommand_dispatch_simple(si->service, si, parc, parv, ms_ignore_cmds, "IGNORE");
 }
 
-static void ms_cmd_ignore_add(sourceinfo_t *si, int parc, char *parv[])
+static void
+ms_cmd_ignore_add(struct sourceinfo *si, int parc, char *parv[])
 {
-	myuser_t *tmu;
+	struct myuser *tmu;
 	mowgli_node_t *n;
 	const char *newnick;
 	char *temp;
 
-	/* Arg check */
+	// Arg check
 	if (parc < 1)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "IGNORE");
@@ -97,34 +42,34 @@ static void ms_cmd_ignore_add(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* User attempting to ignore themself? */
+	// User attempting to ignore themself?
 	if (!irccasecmp(parv[0], entity(si->smu)->name))
 	{
-		command_fail(si, fault_badparams, _("Silly wabbit, you can't ignore yourself."));
+		command_fail(si, fault_badparams, _("You cannot ignore yourself."));
 		return;
 	}
 
-	/* Does the target account exist? */
+	// Does the target account exist?
 	if (!(tmu = myuser_find_ext(parv[0])))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), parv[0]);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, parv[0]);
 		return;
 	}
 	newnick = entity(tmu)->name;
 
-	/* Ignore list is full */
+	// Ignore list is full
 	if (si->smu->memo_ignores.count >= MAXMSIGNORES)
 	{
 		command_fail(si, fault_toomany, _("Your ignore list is full, please DEL an account."));
 		return;
 	}
 
-	/* Iterate through list, make sure target not in it, if last node append */
+	// Iterate through list, make sure target not in it, if last node append
 	MOWGLI_ITER_FOREACH(n, si->smu->memo_ignores.head)
 	{
 		temp = (char *)n->data;
 
-		/* Already in the list */
+		// Already in the list
 		if (!irccasecmp(temp, newnick))
 		{
 			command_fail(si, fault_nochange, _("Account \2%s\2 is already in your ignore list."), temp);
@@ -132,7 +77,7 @@ static void ms_cmd_ignore_add(sourceinfo_t *si, int parc, char *parv[])
 		}
 	}
 
-	/* Add to ignore list */
+	// Add to ignore list
 	temp = sstrdup(newnick);
 	mowgli_node_add(temp, mowgli_node_create(), &si->smu->memo_ignores);
 	logcommand(si, CMDLOG_SET, "IGNORE:ADD: \2%s\2", newnick);
@@ -140,12 +85,13 @@ static void ms_cmd_ignore_add(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-static void ms_cmd_ignore_del(sourceinfo_t *si, int parc, char *parv[])
+static void
+ms_cmd_ignore_del(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n, *tn;
 	char *temp;
 
-	/* Arg check */
+	// Arg check
 	if (parc < 1)
 	{
 		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "IGNORE");
@@ -153,19 +99,19 @@ static void ms_cmd_ignore_del(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* Iterate through list, make sure they're not in it, if last node append */
+	// Iterate through list, make sure they're not in it, if last node append
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, si->smu->memo_ignores.head)
 	{
 		temp = (char *)n->data;
 
-		/* Not using list or clear, but we've found our target in the ignore list */
+		// Not using list or clear, but we've found our target in the ignore list
 		if (!irccasecmp(temp, parv[0]))
 		{
 			logcommand(si, CMDLOG_SET, "IGNORE:DEL: \2%s\2", temp);
 			command_success_nodata(si, _("Account \2%s\2 removed from ignore list."), temp);
 			mowgli_node_delete(n, &si->smu->memo_ignores);
 			mowgli_node_free(n);
-			free(temp);
+			sfree(temp);
 
 			return;
 		}
@@ -175,7 +121,8 @@ static void ms_cmd_ignore_del(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-static void ms_cmd_ignore_clear(sourceinfo_t *si, int parc, char *parv[])
+static void
+ms_cmd_ignore_clear(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n, *tn;
 
@@ -187,43 +134,113 @@ static void ms_cmd_ignore_clear(sourceinfo_t *si, int parc, char *parv[])
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, si->smu->memo_ignores.head)
 	{
-		free(n->data);
+		sfree(n->data);
 		mowgli_node_delete(n,&si->smu->memo_ignores);
 		mowgli_node_free(n);
 	}
 
-	/* Let them know list is clear */
+	// Let them know list is clear
 	command_success_nodata(si, _("Ignore list cleared."));
 	logcommand(si, CMDLOG_SET, "IGNORE:CLEAR");
 	return;
 }
 
-static void ms_cmd_ignore_list(sourceinfo_t *si, int parc, char *parv[])
+static void
+ms_cmd_ignore_list(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
 	unsigned int i = 1;
 
-	/* Throw in list header */
+	// Throw in list header
 	command_success_nodata(si, _("Ignore list:"));
-	command_success_nodata(si, "-------------------------");
+	command_success_nodata(si, "--------------------------------");
 
-	/* Iterate through list, make sure they're not in it, if last node append */
+	// Iterate through list, make sure they're not in it, if last node append
 	MOWGLI_ITER_FOREACH(n, si->smu->memo_ignores.head)
 	{
-		command_success_nodata(si, "%d - %s", i, (char *)n->data);
+		command_success_nodata(si, "%u - %s", i, (char *)n->data);
 		i++;
 	}
 
-	/* Ignore list footer */
+	// Ignore list footer
 	if (i == 1)
-		command_success_nodata(si, _("list empty"));
+		command_success_nodata(si, _("List empty."));
 
-	command_success_nodata(si, "-------------------------");
-	return;
+	command_success_nodata(si, "--------------------------------");
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ms_ignore = {
+	.name           = "IGNORE",
+	.desc           = N_("Ignores memos."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &ms_cmd_ignore,
+	.help           = { .path = "memoserv/ignore" },
+};
+
+static struct command ms_ignore_add = {
+	.name           = "ADD",
+	.desc           = N_("Ignores memos from a user."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &ms_cmd_ignore_add,
+	.help           = { .path = "" },
+};
+
+static struct command ms_ignore_del = {
+	.name           = "DEL",
+	.desc           = N_("Stops ignoring memos from a user."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &ms_cmd_ignore_del,
+	.help           = { .path = "" },
+};
+
+static struct command ms_ignore_clear = {
+	.name           = "CLEAR",
+	.desc           = N_("Clears your memo ignore list."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &ms_cmd_ignore_clear,
+	.help           = { .path = "" },
+};
+
+static struct command ms_ignore_list = {
+	.name           = "LIST",
+	.desc           = N_("Shows all users you are ignoring memos from."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &ms_cmd_ignore_list,
+	.help           = { .path = "" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "memoserv/main")
+
+	if (! (ms_ignore_cmds = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) command_add(&ms_ignore_add, ms_ignore_cmds);
+	(void) command_add(&ms_ignore_del, ms_ignore_cmds);
+	(void) command_add(&ms_ignore_clear, ms_ignore_cmds);
+	(void) command_add(&ms_ignore_list, ms_ignore_cmds);
+
+	(void) service_named_bind_command("memoserv", &ms_ignore);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_named_unbind_command("memoserv", &ms_ignore);
+
+	(void) mowgli_patricia_destroy(ms_ignore_cmds, &command_delete_trie_cb, ms_ignore_cmds);
+}
+
+SIMPLE_DECLARE_MODULE_V1("memoserv/ignore", MODULE_UNLOAD_CAPABILITY_OK)

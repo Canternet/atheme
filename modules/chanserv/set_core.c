@@ -1,99 +1,110 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * This file contains routines to handle the CService SET command.
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2010 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
+ * This file contains routines to handle the ChanServ SET command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/set_core", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+// This is imported by other modules/chanserv/set_*.so
+extern mowgli_patricia_t *cs_set_cmdtree;
+mowgli_patricia_t *cs_set_cmdtree = NULL;
 
-static void cs_help_set(sourceinfo_t *si, const char *subcmd);
-static void cs_cmd_set(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_set = { "SET", N_("Sets various control flags."), AC_NONE, 3, cs_cmd_set, { .func = cs_help_set } };
-
-mowgli_patricia_t *cs_set_cmdtree;
-
-void _modinit(module_t *m)
+static void
+cs_help_set(struct sourceinfo *const restrict si, const char *const restrict subcmd)
 {
-	service_named_bind_command("chanserv", &cs_set);
-
-	cs_set_cmdtree = mowgli_patricia_create(strcasecanon);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_set);
-
-	mowgli_patricia_destroy(cs_set_cmdtree, NULL, NULL);
-}
-
-static void cs_help_set(sourceinfo_t *si, const char *subcmd)
-{
-	if (!subcmd)
+	if (subcmd)
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), chansvs.me->disp);
-		command_success_nodata(si, _("Help for \2SET\2:"));
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("SET allows you to set various control flags\n"
-					"for channels that change the way certain\n"
-					"operations are performed on them."));
-		command_success_nodata(si, " ");
-		command_help(si, cs_set_cmdtree);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more specific help use \2/msg %s HELP SET \37command\37\2."), chansvs.me->disp);
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
+		(void) help_display_as_subcmd(si, chansvs.me, "SET", subcmd, cs_set_cmdtree);
+		return;
 	}
-	else
-		help_display_as_subcmd(si, si->service, "SET", subcmd, cs_set_cmdtree);
+
+	(void) help_display_prefix(si, chansvs.me);
+	(void) command_success_nodata(si, _("Help for \2SET\2:"));
+	(void) help_display_newline(si);
+
+	(void) command_success_nodata(si, _("SET allows you to set various control flags for\n"
+	                                    "channels that change the way certain operations\n"
+	                                    "are performed on them."));
+
+	(void) help_display_newline(si);
+	(void) command_help(si, cs_set_cmdtree);
+	(void) help_display_moreinfo(si, chansvs.me, "SET");
+	(void) help_display_suffix(si);
 }
 
-/* SET <#channel> <setting> <parameters> */
-static void cs_cmd_set(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_set(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
 {
-	char *chan;
-	char *cmd;
-	command_t *c;
-
 	if (parc < 2)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET");
-		command_fail(si, fault_needmoreparams, _("Syntax: SET <#channel> <setting> [parameters]"));
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: SET <#channel> <setting> [parameters]"));
 		return;
 	}
+
+	char *subcmd;
+	char *target;
 
 	if (parv[0][0] == '#')
-		chan = parv[0], cmd = parv[1];
+	{
+		subcmd = parv[1];
+		target = parv[0];
+	}
 	else if (parv[1][0] == '#')
-		cmd = parv[0], chan = parv[1];
+	{
+		subcmd = parv[0];
+		target = parv[1];
+	}
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET");
-		command_fail(si, fault_badparams, _("Syntax: SET <#channel> <setting> [parameters]"));
+		(void) command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET");
+		(void) command_fail(si, fault_badparams, _("Syntax: SET <#channel> <setting> [parameters]"));
 		return;
 	}
 
-	c = command_find(cs_set_cmdtree, cmd);
-	if (c == NULL)
-	{
-		command_fail(si, fault_badparams, _("Invalid command. Use \2/%s%s help\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", chansvs.me->disp);
-		return;
-	}
+	parv[0] = subcmd;
+	parv[1] = target;
 
-	parv[1] = chan;
-	command_exec(si->service, si, c, parc - 1, parv + 1);
+	(void) subcommand_dispatch_simple(chansvs.me, si, parc, parv, cs_set_cmdtree, "SET");
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_set = {
+	.name           = "SET",
+	.desc           = N_("Sets various control flags."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_set,
+	.help           = { .func = &cs_help_set },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	if (! (cs_set_cmdtree = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) service_named_bind_command("chanserv", &cs_set);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_named_unbind_command("chanserv", &cs_set);
+
+	(void) mowgli_patricia_destroy(cs_set_cmdtree, &command_delete_trie_cb, cs_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/set_core", MODULE_UNLOAD_CAPABILITY_OK)

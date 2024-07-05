@@ -1,46 +1,71 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2006-2010 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2006-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the CService SET RESTRICTED command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/set_restricted", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **cs_set_cmdtree = NULL;
 
-static void cs_cmd_set_restricted(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_set_restricted = { "RESTRICTED", N_("Restricts access to the channel to users on the access list. (Other users are kickbanned.)"), AC_NONE, 2, cs_cmd_set_restricted, { .path = "cservice/set_restricted" } };
-
-mowgli_patricia_t **cs_set_cmdtree;
-
-void _modinit(module_t *m)
+static void
+chanuser_sync(struct hook_chanuser_sync *hdata)
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, cs_set_cmdtree, "chanserv/set_core", "cs_set_cmdtree");
+	struct chanuser *cu    = hdata->cu;
+	bool             take  = hdata->take_prefixes;
+	unsigned int     flags = hdata->flags;
 
-	command_add(&cs_set_restricted, *cs_set_cmdtree);
+	if (!cu)
+		return;
+
+	struct channel *chan = cu->chan;
+	struct user    *u    = cu->user;
+	struct mychan  *mc   = chan->mychan;
+
+	return_if_fail(mc != NULL);
+
+	if ((mc->flags & MC_RESTRICTED) && !(flags & CA_ALLPRIVS) && !has_priv_user(u, PRIV_JOIN_STAFFONLY))
+	{
+		// Stay on channel if this would empty it -- jilles
+		if (chan->nummembers - chan->numsvcmembers == 1)
+		{
+			mc->flags |= MC_INHABIT;
+			if (chan->numsvcmembers == 0)
+				join(chan->name, chansvs.nick);
+		}
+		if (mc->mlock_on & CMODE_INVITE || chan->modes & CMODE_INVITE)
+		{
+			if (!(chan->modes & CMODE_INVITE))
+				check_modes(mc, true);
+			remove_banlike(chansvs.me->me, chan, ircd->invex_mchar, u);
+			modestack_flush_channel(chan);
+		}
+		else
+		{
+			ban(chansvs.me->me, chan, u);
+			remove_ban_exceptions(chansvs.me->me, chan, u);
+		}
+
+		if (try_kick(chansvs.me->me, chan, u, "You are not authorized to be on this channel"))
+		{
+			hdata->cu = NULL;
+			return;
+		}
+	}
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+cs_cmd_set_restricted(struct sourceinfo *si, int parc, char *parv[])
 {
-	command_delete(&cs_set_restricted, *cs_set_cmdtree);
-}
-
-static void cs_cmd_set_restricted(sourceinfo_t *si, int parc, char *parv[])
-{
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (!(mc = mychan_find(parv[0])))
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), parv[0]);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, parv[0]);
 		return;
 	}
 
@@ -52,7 +77,13 @@ static void cs_cmd_set_restricted(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!chanacs_source_has_flag(mc, si, CA_SET))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this command."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+		return;
+	}
+
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, parv[0]);
 		return;
 	}
 
@@ -65,6 +96,7 @@ static void cs_cmd_set_restricted(sourceinfo_t *si, int parc, char *parv[])
 		}
 
 		logcommand(si, CMDLOG_SET, "SET:RESTRICTED:ON: \2%s\2", mc->name);
+		verbose(mc, "\2%s\2 enabled the RESTRICTED flag", get_source_name(si));
 
 		mc->flags |= MC_RESTRICTED;
 
@@ -80,6 +112,7 @@ static void cs_cmd_set_restricted(sourceinfo_t *si, int parc, char *parv[])
 		}
 
 		logcommand(si, CMDLOG_SET, "SET:RESTRICTED:OFF: \2%s\2", mc->name);
+		verbose(mc, "\2%s\2 disabled the RESTRICTED flag", get_source_name(si));
 
 		mc->flags &= ~MC_RESTRICTED;
 
@@ -88,13 +121,34 @@ static void cs_cmd_set_restricted(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "RESTRICTED");
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET RESTRICTED");
 		return;
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_set_restricted = {
+	.name           = "RESTRICTED",
+	.desc           = N_("Restricts access to the channel to users on the access list. (Other users are kickbanned.)"),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_set_restricted,
+	.help           = { .path = "cservice/set_restricted" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, cs_set_cmdtree, "chanserv/set_core", "cs_set_cmdtree")
+
+	command_add(&cs_set_restricted, *cs_set_cmdtree);
+	hook_add_first_chanuser_sync(&chanuser_sync);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	hook_del_chanuser_sync(&chanuser_sync);
+	command_delete(&cs_set_restricted, *cs_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/set_restricted", MODULE_UNLOAD_CAPABILITY_OK)

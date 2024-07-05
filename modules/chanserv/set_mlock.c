@@ -1,48 +1,27 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2006-2010 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2006-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the CService SET MLOCK command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/set_mlock", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **cs_set_cmdtree = NULL;
 
-static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_set_mlock = { "MLOCK", N_("Sets channel mode lock."), AC_NONE, 2, cs_cmd_set_mlock, { .path = "cservice/set_mlock" } };
-
-mowgli_patricia_t **cs_set_cmdtree;
-
-void _modinit(module_t *m)
+static void
+cs_cmd_set_mlock(struct sourceinfo *si, int parc, char *parv[])
 {
-	MODULE_TRY_REQUEST_SYMBOL(m, cs_set_cmdtree, "chanserv/set_core", "cs_set_cmdtree");
-
-	command_add(&cs_set_mlock, *cs_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&cs_set_mlock, *cs_set_cmdtree);
-}
-
-static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
-{
-	mychan_t *mc;
+	struct mychan *mc;
 	char modebuf[32], *end, c;
 	int dir = MTYPE_NUL;
 	int newlock_on = 0, newlock_off = 0, newlock_limit = 0, flag = 0;
 	unsigned int mask, changed;
 	bool mask_ext;
-	char newlock_key[KEYLEN];
+	char newlock_key[KEYLEN + 1];
 	char newlock_ext[ignore_mode_list_size][512];
 	bool newlock_ext_off[ignore_mode_list_size];
 	char newext[512];
@@ -51,11 +30,11 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 	size_t i;
 	char *letters = strtok(parv[1], " ");
 	char *arg;
-	metadata_t *md;
+	struct metadata *md;
 
 	if (!(mc = mychan_find(parv[0])))
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), parv[0]);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, parv[0]);
 		return;
 	}
 
@@ -65,7 +44,7 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 				!has_priv(si, PRIV_CHAN_CMODES) ||
 				!has_priv(si, PRIV_CHAN_ADMIN))
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this command."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 		mask = ~ircd->oper_only_modes;
@@ -76,6 +55,12 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 		mask = has_priv(si, PRIV_CHAN_CMODES) ? 0 : ircd->oper_only_modes;
 		mask_ext = false;
 
+	}
+
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, parv[0]);
+		return;
 	}
 
 	for (i = 0; i < ignore_mode_list_size; i++)
@@ -112,9 +97,9 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 					  command_fail(si, fault_badparams, _("You need to specify a value for mode +%c."), 'k');
 					  return;
 				  }
-				  else if (strlen(arg) >= KEYLEN)
+				  else if (strlen(arg) > KEYLEN)
 				  {
-					  command_fail(si, fault_badparams, _("MLOCK key is too long (%d > %d)."), (int)strlen(arg), KEYLEN - 1);
+					  command_fail(si, fault_badparams, _("MLOCK key is too long (%zu > %u)."), strlen(arg), KEYLEN);
 					  return;
 				  }
 				  else if (strchr(arg, ',') || arg[0] == ':')
@@ -167,9 +152,15 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 			  if (flag)
 			  {
 				  if (dir == MTYPE_ADD)
-					  newlock_on |= flag, newlock_off &= ~flag;
+				  {
+					  newlock_on |= flag;
+					  newlock_off &= ~flag;
+				  }
 				  else
-					  newlock_off |= flag, newlock_on &= ~flag;
+				  {
+					  newlock_off |= flag;
+					  newlock_on &= ~flag;
+				  }
 				  break;
 			  }
 
@@ -208,9 +199,10 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 		}
 	}
 
-	/* note: the following does not treat +lk and extmodes correctly */
+	// note: the following does not treat +lk and extmodes correctly
 	changed = ((newlock_on ^ mc->mlock_on) | (newlock_off ^ mc->mlock_off));
 	changed &= ~mask;
+
 	/* if they're only allowed to alter oper only modes, require
 	 * them to actually change such modes -- jilles */
 	if (!changed && mask_ext)
@@ -219,15 +211,16 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* save it to mychan */
-	/* leave the modes in mask unchanged -- jilles */
+	// save it to mychan, leave the modes in mask unchanged -- jilles
 	mc->mlock_on = (newlock_on & ~mask) | (mc->mlock_on & mask);
 	mc->mlock_off = (newlock_off & ~mask) | (mc->mlock_off & mask);
+
 	if (!(mask & CMODE_LIMIT))
 		mc->mlock_limit = newlock_limit;
+
 	if (!(mask & CMODE_KEY))
 	{
-		free(mc->mlock_key);
+		sfree(mc->mlock_key);
 		mc->mlock_key = *newlock_key != '\0' ? sstrdup(newlock_key) : NULL;
 	}
 
@@ -293,6 +286,7 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 	{
 		command_success_nodata(si, _("The MLOCK for \2%s\2 has been set to \2%s\2."), mc->name, modebuf);
 		logcommand(si, CMDLOG_SET, "SET:MLOCK: \2%s\2 to \2%s\2", mc->name, modebuf);
+		verbose(mc, "\2%s\2 set the mode lock to \2%s\2", get_source_name(si), modebuf);
 	}
 	else
 	{
@@ -300,7 +294,7 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_SET, "SET:MLOCK:NONE: \2%s\2", mc->name);
 	}
 	if (changed & ircd->oper_only_modes)
-		logcommand(si, CMDLOG_SET, _("SET:MLOCK: \2%s\2 to \2%s\2 by \2%s\2"), mc->name, *modebuf != '\0' ? modebuf : "+", get_oper_name(si));
+		logcommand(si, CMDLOG_SET, "SET:MLOCK: \2%s\2 to \2%s\2 by \2%s\2", mc->name, *modebuf != '\0' ? modebuf : "+", get_oper_name(si));
 
 	check_modes(mc, true);
 	if (mc->chan != NULL)
@@ -309,8 +303,27 @@ static void cs_cmd_set_mlock(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_set_mlock = {
+	.name           = "MLOCK",
+	.desc           = N_("Sets channel mode lock."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_set_mlock,
+	.help           = { .path = "cservice/set_mlock" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, cs_set_cmdtree, "chanserv/set_core", "cs_set_cmdtree")
+
+	command_add(&cs_set_mlock, *cs_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&cs_set_mlock, *cs_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/set_mlock", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,24 +1,28 @@
-#ifndef ATHEME_PERL_H
-#define ATHEME_PERL_H
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2010-2013 Atheme Project (http://atheme.org/)
+ */
+
+#ifndef ATHEME_MOD_SCRIPTING_PERL_API_ATHEME_PERL_H
+#define ATHEME_MOD_SCRIPTING_PERL_API_ATHEME_PERL_H 1
+
+#include <atheme.h>
 
 #include <EXTERN.h>
 #include <perl.h>
 #include <XSUB.h>
 
-#undef _
-
-#include "atheme.h"
-
-struct perl_command_ {
-	command_t command;
+struct perl_command
+{
+	struct command command;
 	SV * handler;
 	SV * help_func;
 };
 
-typedef struct perl_command_ perl_command_t;
-
-void perl_command_handler(sourceinfo_t *si, const int parc, char **parv);
-void perl_command_help_func(sourceinfo_t *si, const char *subcmd);
+void perl_command_handler(struct sourceinfo *si, const int parc, char **parv);
+void perl_command_help_func(struct sourceinfo *si, const char *subcmd);
 
 #define PERL_MODULE_NAME "scripting/perl"
 static const IV invalid_object_pointer = -1;
@@ -34,16 +38,16 @@ void free_object_list(void);
  * knowledge of which Perl package to bless the contents into.
  */
 
-struct perl_list_ {
+struct perl_list
+{
 	mowgli_list_t *list;
 	const char *package_name;
 };
 
-typedef struct perl_list_ perl_list_t;
-
-static inline perl_list_t * perl_list_create(mowgli_list_t *list, const char *package)
+static inline struct perl_list * ATHEME_FATTR_MALLOC
+perl_list_create(mowgli_list_t *list, const char *package)
 {
-	perl_list_t *ret = smalloc(sizeof(perl_list_t));
+	struct perl_list *ret = smalloc(sizeof(struct perl_list));
 	ret->list = list;
 	ret->package_name = sstrdup(package);
 	return ret;
@@ -55,4 +59,4 @@ static inline perl_list_t * perl_list_create(mowgli_list_t *list, const char *pa
 
 SV * bless_pointer_to_package(void *data, const char *package);
 
-#endif
+#endif /* !ATHEME_MOD_SCRIPTING_PERL_API_ATHEME_PERL_H */

@@ -1,51 +1,31 @@
 /*
- * Copyright (c) 2006 Stephen Bennett
- * Copyright (c) 2008 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006 Stephen Bennett
+ * Copyright (C) 2008 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality which implements the OService IDENTIFY command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/identify", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_identify(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_identify = { "IDENTIFY", N_("Authenticate for services operator privileges."), AC_AUTHENTICATED, 1, os_cmd_identify, { .path = "oservice/identify" } };
-command_t os_id = { "ID", N_("Alias for IDENTIFY"), AC_AUTHENTICATED, 1, os_cmd_identify, { .path = "oservice/identify" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("operserv", &os_identify);
-        service_named_bind_command("operserv", &os_id);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_identify);
-	service_named_unbind_command("operserv", &os_id);
-}
-
-static bool verify_operserv_password(soper_t *so, char *password)
+static bool
+verify_operserv_password(struct soper *so, char *password)
 {
 	if (so == NULL || password == NULL)
 		return false;
 
-	return crypt_verify_password(password, so->password) != NULL;
+	return crypt_verify_password(password, so->password, NULL) != NULL;
 }
 
-static void os_cmd_identify(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_identify(struct sourceinfo *si, int parc, char *parv[])
 {
-	/* XXX use this with authcookie also */
+	// XXX use this with authcookie also
 	if (si->su == NULL)
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 can only be executed via IRC."), "IDENTIFY");
+		command_fail(si, fault_noprivs, STR_IRC_COMMAND_ONLY, "IDENTIFY");
 		return;
 	}
 
@@ -87,8 +67,38 @@ static void os_cmd_identify(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_ADMIN, "IDENTIFY");
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_identify = {
+	.name           = "IDENTIFY",
+	.desc           = N_("Authenticate for services operator privileges."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_identify,
+	.help           = { .path = "oservice/identify" },
+};
+
+static struct command os_id = {
+	.name           = "ID",
+	.desc           = N_("Alias for IDENTIFY"),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_identify,
+	.help           = { .path = "oservice/identify" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+        service_named_bind_command("operserv", &os_identify);
+        service_named_bind_command("operserv", &os_id);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_identify);
+	service_named_unbind_command("operserv", &os_id);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/identify", MODULE_UNLOAD_CAPABILITY_OK)

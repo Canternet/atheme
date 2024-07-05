@@ -1,33 +1,24 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the GroupServ HELP command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/set_public", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_set_public(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_set_public = { "PUBLIC", N_("Sets the group as public."), AC_AUTHENTICATED, 2, gs_cmd_set_public, { .path = "groupserv/set_public" } };
-
-static void gs_cmd_set_public(sourceinfo_t *si, int parc, char *parv[])
+static void
+gs_cmd_set_public(struct sourceinfo *si, int parc, char *parv[])
 {
-	mygroup_t *mg;
+	struct mygroup *mg;
 
 	if (!parv[0] || !parv[1])
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "PUBLIC");
-		command_fail(si, fault_needmoreparams, _("Syntax: PUBLIC <!group> <ON|OFF>"));
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET PUBLIC");
+		command_fail(si, fault_needmoreparams, _("Syntax: SET <!group> PUBLIC <ON|OFF>"));
 		return;
 	}
 
@@ -39,7 +30,7 @@ static void gs_cmd_set_public(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!groupacs_sourceinfo_has_flag(mg, si, GA_FOUNDER))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to execute this command."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -71,12 +62,22 @@ static void gs_cmd_set_public(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "PUBLIC");
-		command_fail(si, fault_badparams, _("Syntax: PUBLIC <!group> <ON|OFF>"));
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET PUBLIC");
+		command_fail(si, fault_badparams, _("Syntax: SET <!group> PUBLIC <ON|OFF>"));
 	}
 }
 
-void _modinit(module_t *m)
+static struct command gs_set_public = {
+	.name           = "PUBLIC",
+	.desc           = N_("Sets the group as public."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &gs_cmd_set_public,
+	.help           = { .path = "groupserv/set_public" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
 	use_groupserv_main_symbols(m);
 	use_groupserv_set_symbols(m);
@@ -84,8 +85,10 @@ void _modinit(module_t *m)
 	command_add(&gs_set_public, gs_set_cmdtree);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	command_delete(&gs_set_public, gs_set_cmdtree);
 }
 
+SIMPLE_DECLARE_MODULE_V1("groupserv/set_public", MODULE_UNLOAD_CAPABILITY_OK)

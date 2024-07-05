@@ -1,46 +1,57 @@
-/* main.c - rpgserv main() routine.
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+ *
+ * main.c - rpgserv main() routine.
  * based on elly's rpgserv for atheme-6.x --nenolod
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"rpgserv/help", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void rs_cmd_help(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t rs_help = { "HELP", N_("Displays contextual help information."),
-                      AC_NONE, 2, rs_cmd_help, { .path = "help" } };
-
-static void rs_cmd_help(sourceinfo_t *si, int parc, char *parv[])
+static void
+rs_cmd_help(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc, char **const restrict parv)
 {
-	char *command = parv[0];
-	if (!command)
+	if (parv[0])
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), si->service->nick);
-		command_success_nodata(si, _("\2%s\2 allows users to search for game channels by matching on properties."), si->service->nick);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more information on a command, type:"));
-		command_success_nodata(si, "\2/%s%s help <command>\2", (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-		command_success_nodata(si, " ");
-		command_help(si, si->service->commands);
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
+		(void) help_display(si, si->service, parv[0], si->service->commands);
 		return;
 	}
 
-	help_display(si, si->service, command, si->service->commands);
+	(void) help_display_prefix(si, si->service);
+
+	(void) command_success_nodata(si, _("\2%s\2 allows users to search for game channels by matching\n"
+	                                    "channels against certain criteria."), si->service->nick);
+
+	(void) help_display_newline(si);
+	(void) command_help(si, si->service->commands);
+	(void) help_display_moreinfo(si, si->service, NULL);
+	(void) help_display_locations(si);
+	(void) help_display_suffix(si);
 }
 
-void _modinit(module_t *m)
+static struct command rs_help = {
+	.name           = "HELP",
+	.desc           = STR_HELP_DESCRIPTION,
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &rs_cmd_help,
+	.help           = { .path = "help" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
-	service_named_bind_command("rpgserv", &rs_help);
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "rpgserv/main")
+
+	(void) service_named_bind_command("rpgserv", &rs_help);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-	service_named_unbind_command("rpgserv", &rs_help);
+	(void) service_named_unbind_command("rpgserv", &rs_help);
 }
+
+SIMPLE_DECLARE_MODULE_V1("rpgserv/help", MODULE_UNLOAD_CAPABILITY_OK)

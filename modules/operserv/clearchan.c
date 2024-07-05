@@ -1,50 +1,33 @@
 /*
- * Copyright (c) 2006 Robin Burchell <surreal.w00t@gmail.com>
- * Rights to this code are documented in doc/LICENCE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006 Robin Burchell <surreal.w00t@gmail.com>
  *
  * This file contains functionality implementing OperServ CLEARCHAN.
  *
+ * Default AKILL time is 7 days (604800 seconds)
  */
 
-#include "atheme.h"
-
-DECLARE_MODULE_V1
-(
-	"operserv/clearchan", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Robin Burchell <surreal.w00t@gmail.com>"
-);
+#include <atheme.h>
 
 #define CLEAR_KICK 1
 #define CLEAR_KILL 2
 #define CLEAR_AKILL 3
 
-static void os_cmd_clearchan(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_clearchan = { "CLEARCHAN", N_("Clears a channel via KICK, KILL or AKILL"), PRIV_CHAN_ADMIN, 3, os_cmd_clearchan, { .path = "oservice/clearchan" } };
-
-void _modinit(module_t *m)
+static void
+os_cmd_clearchan(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("operserv", &os_clearchan);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_clearchan);
-}
-
-static void os_cmd_clearchan(sourceinfo_t *si, int parc, char *parv[])
-{
-	chanuser_t *cu = NULL;
+	struct chanuser *cu = NULL;
 	mowgli_node_t *n, *tn;
-	channel_t *c = NULL;
+	struct channel *c = NULL;
 	int action;
 	char *actionstr = parv[0];
 	char *targchan = parv[1];
 	char *treason = parv[2];
 	char reason[512];
-	int matches = 0;
-	int ignores = 0;
+	unsigned int matches = 0;
+	unsigned int ignores = 0;
 
 	if (!actionstr || !targchan || !treason)
 	{
@@ -61,7 +44,7 @@ static void os_cmd_clearchan(sourceinfo_t *si, int parc, char *parv[])
  		return;
 	}
 
-	/* check what they are doing is valid */
+	// check what they are doing is valid
 	if (!strcasecmp(actionstr, "KICK"))
 		action = CLEAR_KICK;
 	else if (!strcasecmp(actionstr, "KILL"))
@@ -70,8 +53,8 @@ static void os_cmd_clearchan(sourceinfo_t *si, int parc, char *parv[])
 		action = CLEAR_AKILL;
 	else
 	{
-		/* not valid! */
-		command_fail(si, fault_badparams, _("\2%s\2 is not a valid action"), actionstr);
+		// not valid!
+		command_fail(si, fault_badparams, _("\2%s\2 is not a valid action."), actionstr);
  		return;
 	}
 
@@ -90,7 +73,7 @@ static void os_cmd_clearchan(sourceinfo_t *si, int parc, char *parv[])
 			get_oper_name(si), targchan, actionstr);
 	command_success_nodata(si, _("Clearing \2%s\2 with \2%s\2"), targchan, actionstr);
 
-	/* iterate over the users in channel */
+	// iterate over the users in channel
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, c->members.head)
 	{
 		cu = n->data;
@@ -121,7 +104,7 @@ static void os_cmd_clearchan(sourceinfo_t *si, int parc, char *parv[])
 								cu->user->nick, cu->user->user, cu->user->host);
 					} else {
 						if (! (cu->user->flags & UF_KLINESENT)) {
-							kline_sts("*", "*", cu->user->host, 604800, reason);
+							kline_add(cu->user->user, cu->user->host, reason, SECONDS_PER_WEEK, si->su->nick);
 							cu->user->flags |= UF_KLINESENT;
 						}
 					}
@@ -129,12 +112,31 @@ static void os_cmd_clearchan(sourceinfo_t *si, int parc, char *parv[])
 		}
 	}
 
-	command_success_nodata(si, _("\2%d\2 matches, \2%d\2 ignores for \2%s\2 on \2%s\2"), matches, ignores, actionstr, targchan);
-	logcommand(si, CMDLOG_ADMIN, "CLEARCHAN: \2%s\2 \2%s\2 (reason: \2%s\2) (\2%d\2 matches, \2%d\2 ignores)", actionstr, targchan, treason, matches, ignores);
+	command_success_nodata(si, _("\2%u\2 match(es), \2%u\2 ignore(s) for \2%s\2 on \2%s\2"), matches, ignores, actionstr, targchan);
+	logcommand(si, CMDLOG_ADMIN, "CLEARCHAN: \2%s\2 \2%s\2 (reason: \2%s\2) (\2%u\2 matches, \2%u\2 ignores)", actionstr, targchan, treason, matches, ignores);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_clearchan = {
+	.name           = "CLEARCHAN",
+	.desc           = N_("Clears a channel via KICK, KILL or AKILL"),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 3,
+	.cmd            = &os_cmd_clearchan,
+	.help           = { .path = "oservice/clearchan" }
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	service_named_bind_command("operserv", &os_clearchan);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_clearchan);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/clearchan", MODULE_UNLOAD_CAPABILITY_OK)

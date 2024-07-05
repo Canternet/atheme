@@ -1,41 +1,25 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * culture.c: Translation framework.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2009 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * culture.c: Translation framework.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "internal.h"
-
-#include <dirent.h>
-
-struct translation_
-{
-	char *name;
-	char *replacement;
-};
-
-typedef struct translation_ translation_t;
 
 static mowgli_patricia_t *itranslation_tree; /* internal translations, userserv/nickserv etc */
 static mowgli_patricia_t *translation_tree; /* language translations */
+
+static bool languages_available = false;
 
 /*
  * translation_init()
@@ -52,7 +36,8 @@ static mowgli_patricia_t *translation_tree; /* language translations */
  *     - on success, nothing
  *     - on failure, the program will abort
  */
-void translation_init(void)
+void
+translation_init(void)
 {
 	itranslation_tree = mowgli_patricia_create(noopcanon);
 	translation_tree = mowgli_patricia_create(noopcanon);
@@ -71,9 +56,10 @@ void translation_init(void)
  * Side Effects:
  *     - none
  */
-const char *translation_get(const char *str)
+const char *
+translation_get(const char *str)
 {
-	translation_t *t;
+	struct translation *t;
 
 	/* See if an internal substitution is present. */
 	if ((t = mowgli_patricia_retrieve(itranslation_tree, str)) != NULL)
@@ -97,9 +83,10 @@ const char *translation_get(const char *str)
  * Side Effects:
  *     - a new translation is added to the cache
  */
-void itranslation_create(const char *str, const char *trans)
+void
+itranslation_create(const char *str, const char *trans)
 {
-	translation_t *t = smalloc(sizeof(translation_t));
+	struct translation *const t = smalloc(sizeof *t);
 
 	t->name = sstrdup(str);
 	t->replacement = sstrdup(trans);
@@ -119,16 +106,17 @@ void itranslation_create(const char *str, const char *trans)
  * Side Effects:
  *     - a string is removed from the translation cache
  */
-void itranslation_destroy(const char *str)
+void
+itranslation_destroy(const char *str)
 {
-	translation_t *t = mowgli_patricia_delete(itranslation_tree, str);
+	struct translation *t = mowgli_patricia_delete(itranslation_tree, str);
 
 	if (t == NULL)
 		return;
 
-	free(t->name);
-	free(t->replacement);
-	free(t);
+	sfree(t->name);
+	sfree(t->replacement);
+	sfree(t);
 }
 
 /*
@@ -143,10 +131,11 @@ void itranslation_destroy(const char *str)
  * Side Effects:
  *     - a new translation is added to the cache
  */
-void translation_create(const char *str, const char *trans)
+void
+translation_create(const char *str, const char *trans)
 {
 	char buf[BUFSIZE];
-	translation_t *t = smalloc(sizeof(translation_t));
+	struct translation *const t = smalloc(sizeof *t);
 
 	mowgli_strlcpy(buf, str, BUFSIZE);
 	replace(buf, BUFSIZE, "\\2", "\2");
@@ -173,28 +162,22 @@ void translation_create(const char *str, const char *trans)
  * Side Effects:
  *     - a string is removed from the translation cache
  */
-void translation_destroy(const char *str)
+void
+translation_destroy(const char *str)
 {
-	translation_t *t = mowgli_patricia_delete(translation_tree, str);
+	struct translation *t = mowgli_patricia_delete(translation_tree, str);
 
 	if (t == NULL)
 		return;
 
-	free(t->name);
-	free(t->replacement);
-	free(t);
+	sfree(t->name);
+	sfree(t->replacement);
+	sfree(t);
 }
 
 enum
 {
 	LANG_VALID = 1		/* have catalogs for this */
-};
-
-struct language_
-{
-	char *name;
-	unsigned int flags; /* LANG_* */
-	mowgli_node_t node;
 };
 
 static mowgli_list_t language_list;
@@ -204,7 +187,7 @@ language_init(void)
 {
 	DIR *dir;
 	struct dirent *ent;
-	language_t *lang;
+	struct language *lang;
 
 	lang = language_add("en");
 	lang->flags |= LANG_VALID;
@@ -226,28 +209,30 @@ language_init(void)
 	}
 }
 
-language_t *
+struct language *
 language_add(const char *name)
 {
-	language_t *lang;
+	struct language *lang;
 
 	if (name == NULL || !strcmp(name, "default"))
 		return NULL;
+
 	lang = language_find(name);
 	if (lang != NULL)
 		return lang;
+
 	slog(LG_DEBUG, "language_add(): %s", name);
-	lang = smalloc(sizeof(*lang));
+	lang = smalloc(sizeof *lang);
 	lang->name = sstrdup(name);
 	mowgli_node_add(lang, &lang->node, &language_list);
 	return lang;
 }
 
-language_t *
+struct language *
 language_find(const char *name)
 {
 	mowgli_node_t *n;
-	language_t *lang;
+	struct language *lang;
 
 	if (name == NULL)
 		return NULL;
@@ -266,7 +251,7 @@ language_names(void)
 {
 	static char names[512];
 	mowgli_node_t *n;
-	language_t *lang;
+	struct language *lang;
 
 	names[0] = '\0';
 	MOWGLI_ITER_FOREACH(n, language_list.head)
@@ -283,7 +268,7 @@ language_names(void)
 }
 
 const char *
-language_get_name(const language_t *lang)
+language_get_name(const struct language *lang)
 {
 	if (lang == NULL)
 		return "default";
@@ -291,7 +276,7 @@ language_get_name(const language_t *lang)
 }
 
 const char *
-language_get_real_name(const language_t *lang)
+language_get_real_name(const struct language *lang)
 {
 	if (lang == NULL)
 		return config_options.language;
@@ -299,7 +284,7 @@ language_get_real_name(const language_t *lang)
 }
 
 bool
-language_is_valid(const language_t *lang)
+language_is_valid(const struct language *lang)
 {
 	if (lang == NULL)
 		return true;
@@ -307,10 +292,13 @@ language_is_valid(const language_t *lang)
 }
 
 void
-language_set_active(language_t *lang)
+language_set_active(struct language *lang)
 {
 #ifdef ENABLE_NLS
-	static language_t *currlang;
+	if (! languages_available)
+		return;
+
+	static struct language *currlang;
 
 	if (lang == NULL)
 	{
@@ -324,11 +312,23 @@ language_set_active(language_t *lang)
 			currlang != NULL ? currlang->name : "default",
 			lang->name);
 	setlocale(LC_MESSAGES, lang->name);
-	textdomain(PACKAGE_NAME);
-	bindtextdomain(PACKAGE_NAME, LOCALEDIR);
+	textdomain(PACKAGE_TARNAME);
+	bindtextdomain(PACKAGE_TARNAME, LOCALEDIR);
 	currlang = lang;
 	setenv("LANGUAGE", currlang->name, 1);
 #endif
+}
+
+bool
+languages_get_available(void)
+{
+	return languages_available;
+}
+
+void
+languages_set_available(const bool avail)
+{
+	languages_available = avail;
 }
 
 /* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs

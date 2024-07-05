@@ -1,33 +1,26 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * flags.c: Functions to convert a flags table into a bitmask.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2010 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2017 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * flags.c: Functions to convert a flags table into a bitmask.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
 #define FLAGS_ADD       0x1
 #define FLAGS_DEL       0x2
 
 unsigned int ca_all = CA_ALL_ALL;
-unsigned int ca_all_enable = CA_ALL_ALL;
+static unsigned int ca_all_enable = CA_ALL_ALL;
 
 static char flags_buf[128];
 
@@ -52,7 +45,7 @@ struct flags_table chanacs_flags[256] = {
 	['e'] = {CA_EXEMPT, 0, true,     "exempt"},
 };
 
-gflags_t mu_flags[] = {
+const struct gflags mu_flags[] = {
 	{ 'h', MU_HOLD },
 	{ 'n', MU_NEVEROP },
 	{ 'o', MU_NOOP },
@@ -70,10 +63,12 @@ gflags_t mu_flags[] = {
 	{ 'r', MU_REGNOLIMIT },
 	{ 'N', MU_NEVERGROUP },
 	{ 'S', MU_NOPASSWORD },
+	{ 'l', MU_LOGINNOLIMIT },
 	{ 0, 0 },
 };
 
-gflags_t mc_flags[] = {
+const struct gflags mc_flags[] = {
+	{ 'a', MC_PUBACL },
 	{ 'h', MC_HOLD },
 	{ 'o', MC_NOOP },
 	{ 'l', MC_LIMITFLAGS },
@@ -90,12 +85,34 @@ gflags_t mc_flags[] = {
 	{ 0, 0 },
 };
 
-gflags_t soper_flags[] = {
+const struct gflags mg_flags[] = {
+	{ 'r', MG_REGNOLIMIT },
+	{ 'a', MG_ACSNOLIMIT },
+	{ 'o', MG_OPEN },
+	{ 'p', MG_PUBLIC },
+	{ 0, 0 }
+};
+
+const struct gflags ga_flags[] = {
+	{ 'F', GA_FOUNDER },
+	{ 'f', GA_FLAGS },
+	{ 's', GA_SET },
+	{ 'c', GA_CHANACS },
+	{ 'm', GA_MEMOS },
+	{ 'v', GA_VHOST },
+	{ 'i', GA_INVITE },
+	{ 'b', GA_BAN },
+	{ 'A', GA_ACLVIEW },
+	{ 0, 0 }
+};
+
+const struct gflags soper_flags[] = {
 	{ 'c', SOPER_CONF },
 	{ 0, 0 },
 };
 
-unsigned int flags_associate(unsigned char flag, unsigned int restrictflags, bool def, const char *name)
+unsigned int
+flags_associate(unsigned char flag, unsigned int restrictflags, bool def, const char *name)
 {
 	if (chanacs_flags[flag].value && chanacs_flags[flag].value != 0xFFFFFFFF)
 		return 0;
@@ -110,7 +127,8 @@ unsigned int flags_associate(unsigned char flag, unsigned int restrictflags, boo
 	return chanacs_flags[flag].value;
 }
 
-void flags_clear(unsigned char flag)
+void
+flags_clear(unsigned char flag)
 {
 	/* 0xFFFFFFFF = orphaned flag */
 	chanacs_flags[flag].value = 0xFFFFFFFF;
@@ -119,7 +137,8 @@ void flags_clear(unsigned char flag)
 	chanacs_flags[flag].name = NULL;
 }
 
-unsigned int flags_find_slot(void)
+unsigned int
+flags_find_slot(void)
 {
 	unsigned int flag, i;
 	unsigned int all_flags = 0;
@@ -135,7 +154,8 @@ unsigned int flags_find_slot(void)
 /* Construct bitmasks to be added and removed
  * Postcondition *addflags & *removeflags == 0
  * -- jilles */
-void flags_make_bitmasks(const char *string, unsigned int *addflags, unsigned int *removeflags)
+void
+flags_make_bitmasks(const char *string, unsigned int *addflags, unsigned int *removeflags)
 {
 	unsigned int flag;
 	bool shortflag = false;
@@ -218,7 +238,8 @@ void flags_make_bitmasks(const char *string, unsigned int *addflags, unsigned in
 	return;
 }
 
-unsigned int flags_to_bitmask(const char *string, unsigned int flags)
+unsigned int
+flags_to_bitmask(const char *string, unsigned int flags)
 {
 	unsigned int bitmask = (flags ? flags : 0x0);
 	int status = FLAGS_ADD;
@@ -264,7 +285,8 @@ unsigned int flags_to_bitmask(const char *string, unsigned int flags)
 	return bitmask & ca_all;
 }
 
-char *bitmask_to_flags(unsigned int flags)
+char *
+bitmask_to_flags(unsigned int flags)
 {
 	char *bptr;
 	unsigned int i = 0;
@@ -282,7 +304,8 @@ char *bitmask_to_flags(unsigned int flags)
 	return flags_buf;
 }
 
-char *bitmask_to_flags2(unsigned int addflags, unsigned int removeflags)
+char *
+bitmask_to_flags2(unsigned int addflags, unsigned int removeflags)
 {
 	char *bptr;
 	unsigned int i = 0;
@@ -310,7 +333,8 @@ char *bitmask_to_flags2(unsigned int addflags, unsigned int removeflags)
 }
 
 /* flags a non-founder with +f and these flags is allowed to set -- jilles */
-unsigned int allow_flags(mychan_t *mc, unsigned int theirflags)
+unsigned int
+allow_flags(struct mychan *mc, unsigned int theirflags)
 {
 	unsigned int flags;
 
@@ -334,7 +358,8 @@ unsigned int allow_flags(mychan_t *mc, unsigned int theirflags)
 	return flags;
 }
 
-void update_chanacs_flags(void)
+void
+update_chanacs_flags(void)
 {
 	unsigned int i;
 
@@ -346,15 +371,19 @@ void update_chanacs_flags(void)
 			ca_all_enable |= chanacs_flags[i].value;
 	}
 
-	if (!ircd->uses_halfops)
-		ca_all &= ~(CA_HALFOP | CA_AUTOHALFOP);
-	if (!ircd->uses_protect)
-		ca_all &= ~CA_USEPROTECT;
-	if (!ircd->uses_owner)
-		ca_all &= ~CA_USEOWNER;
+	if (ircd != NULL)
+	{
+		if (!ircd->uses_halfops)
+			ca_all &= ~(CA_HALFOP | CA_AUTOHALFOP);
+		if (!ircd->uses_protect)
+			ca_all &= ~CA_USEPROTECT;
+		if (!ircd->uses_owner)
+			ca_all &= ~CA_USEOWNER;
+	}
 }
 
-unsigned int xflag_lookup(const char *name)
+unsigned int
+xflag_lookup(const char *name)
 {
 	unsigned int i;
 
@@ -370,7 +399,8 @@ unsigned int xflag_lookup(const char *name)
 	return 0;
 }
 
-unsigned int xflag_apply(unsigned int in, const char *name)
+unsigned int
+xflag_apply(unsigned int in, const char *name)
 {
 	unsigned int out, flag;
 	int status = FLAGS_ADD;
@@ -399,7 +429,8 @@ unsigned int xflag_apply(unsigned int in, const char *name)
 	return out;
 }
 
-const char *xflag_tostr(unsigned int flags)
+const char *
+xflag_tostr(unsigned int flags)
 {
 	unsigned int i;
 	static char buf[BUFSIZE];
@@ -423,7 +454,8 @@ const char *xflag_tostr(unsigned int flags)
 	return buf;
 }
 
-char *gflags_tostr(gflags_t *gflags, unsigned int flags)
+char *
+gflags_tostr(const struct gflags *gflags, unsigned int flags)
 {
 	static char buf[257];
 	char *p = buf;
@@ -436,7 +468,8 @@ char *gflags_tostr(gflags_t *gflags, unsigned int flags)
 	return buf;
 }
 
-static bool gflag_fromchar(gflags_t *gflags, char f, unsigned int *res)
+static bool
+gflag_fromchar(const struct gflags *gflags, char f, unsigned int *res)
 {
 	int i;
 	if (f == '+') return true;
@@ -449,7 +482,8 @@ static bool gflag_fromchar(gflags_t *gflags, char f, unsigned int *res)
 	return false;
 }
 
-bool gflags_fromstr(gflags_t *gflags, const char *f, unsigned int *res)
+bool
+gflags_fromstr(const struct gflags *gflags, const char *f, unsigned int *res)
 {
 	*res = 0;
 	while (*f)

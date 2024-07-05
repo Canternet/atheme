@@ -1,46 +1,24 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Prevent a bot from being assigned to a channel.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"botserv/set_nobot", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **bs_set_cmdtree = NULL;
 
-mowgli_patricia_t **bs_set_cmdtree;
-
-static void bs_cmd_set_nobot(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t bs_set_nobot = { "NOBOT", N_("Prevent a bot from being assigned to a channel."), PRIV_CHAN_ADMIN, 2, bs_cmd_set_nobot, { .path = "botserv/set_nobot" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, bs_set_cmdtree, "botserv/set_core", "bs_set_cmdtree");
-
-	command_add(&bs_set_nobot, *bs_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&bs_set_nobot, *bs_set_cmdtree);
-}
-
-static void bs_cmd_set_nobot(sourceinfo_t *si, int parc, char *parv[])
+static void
+bs_cmd_set_nobot(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *channel = parv[0];
 	char *option = parv[1];
-	mychan_t *mc;
-	metadata_t *md;
+	struct mychan *mc;
+	struct metadata *md;
 
 	if (parc < 2 || !channel || !option)
 	{
@@ -52,19 +30,19 @@ static void bs_cmd_set_nobot(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
 	if (!si->smu)
 	{
-		command_fail(si, fault_noprivs, _("You are not logged in."));
+		command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 		return;
 	}
 
 	if (!has_priv(si, PRIV_CHAN_ADMIN))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -98,8 +76,27 @@ static void bs_cmd_set_nobot(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command bs_set_nobot = {
+	.name           = "NOBOT",
+	.desc           = N_("Prevent a bot from being assigned to a channel."),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 2,
+	.cmd            = &bs_cmd_set_nobot,
+	.help           = { .path = "botserv/set_nobot" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, bs_set_cmdtree, "botserv/set_core", "bs_set_cmdtree")
+
+	command_add(&bs_set_nobot, *bs_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&bs_set_nobot, *bs_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("botserv/set_nobot", MODULE_UNLOAD_CAPABILITY_OK)

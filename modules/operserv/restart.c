@@ -1,35 +1,16 @@
 /*
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 Atheme Project (http://atheme.org/)
  *
  * This file contains functionality which implements the OService RAW command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/restart", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_restart(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_restart = { "RESTART", N_("Restart services."), PRIV_ADMIN, 0, os_cmd_restart, { .path = "oservice/restart" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("operserv", &os_restart);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_restart);
-}
-
-static void os_cmd_restart(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_restart(struct sourceinfo *si, int parc, char *parv[])
 {
 	logcommand(si, CMDLOG_ADMIN, "RESTART");
 	wallops("Restarting by request of \2%s\2.", get_oper_name(si));
@@ -37,8 +18,27 @@ static void os_cmd_restart(sourceinfo_t *si, int parc, char *parv[])
 	runflags |= RF_RESTART;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_restart = {
+	.name           = "RESTART",
+	.desc           = N_("Restart services."),
+	.access         = PRIV_ADMIN,
+	.maxparc        = 0,
+	.cmd            = &os_cmd_restart,
+	.help           = { .path = "oservice/restart" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+        service_named_bind_command("operserv", &os_restart);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_restart);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/restart", MODULE_UNLOAD_CAPABILITY_OK)

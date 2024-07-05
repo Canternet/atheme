@@ -1,36 +1,28 @@
 /*
- * Copyright (c) 2012 William Pitcock <nenolod@dereferenced.org>.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2012 William Pitcock <nenolod@dereferenced.org>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "atheme.h"
-#include "libathemecore.h"
+#include <atheme.h>
+#include <atheme/libathemecore.h>
 
-static unsigned int verify_entity_uids(void)
+static unsigned int
+verify_entity_uids(void)
 {
 	unsigned int errcnt = 0;
 	mowgli_patricia_t *known = mowgli_patricia_create(strcasecanon);
-	myentity_iteration_state_t state;
-	myentity_t *mt;
+	struct myentity_iteration_state state;
+	struct myentity *mt;
 
 	MYENTITY_FOREACH_T(mt, &state, ENT_ANY)
 	{
-		myentity_t *mt2;
+		struct myentity *mt2;
 
 		if ((mt2 = mowgli_patricia_retrieve(known, mt->id)) != NULL)
 		{
@@ -50,10 +42,11 @@ static unsigned int verify_entity_uids(void)
 	return errcnt;
 }
 
-static void verify_channel_registrations(void)
+static void
+verify_channel_registrations(void)
 {
 	mowgli_patricia_iteration_state_t state;
-	mychan_t *mc;
+	struct mychan *mc;
 
 	MOWGLI_PATRICIA_FOREACH(mc, &state, mclist)
 	{
@@ -64,7 +57,7 @@ static void verify_channel_registrations(void)
 
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, mc->chanacs.head)
 		{
-			chanacs_t *ca = n->data, *ca2;
+			struct chanacs *ca = n->data, *ca2;
 			stringref key = ca->entity != NULL ? ca->entity->name : ca->host;
 
 			if (key == NULL)
@@ -81,15 +74,6 @@ static void verify_channel_registrations(void)
 				continue;
 			}
 
-			if ((ca->level & CA_AKICK) && ca->level != CA_AKICK)
-			{
-				unsigned int flags = ca->level & ~CA_AKICK;
-
-				ca->level = CA_AKICK;
-				slog(LG_INFO, "*** phase 3: %s: chanacs entry '%s' (%p) is an AKICK but has other flags -- removing %s from it",
-				     mc->name, ca->entity != NULL ? ca->entity->name : ca->host, ca, bitmask_to_flags(flags));
-			}
-
 			mowgli_patricia_add(known, key, ca);
 		}
 
@@ -97,30 +81,35 @@ static void verify_channel_registrations(void)
 	}
 }
 
-static void handle_mdep(database_handle_t *db, const char *type)
+static void
+handle_mdep(struct database_handle *db, const char *type)
 {
 	const char *modname = db_sread_word(db);
 
-	module_load(modname);
+	if (! module_request(modname))
+		exit(EXIT_FAILURE);
 }
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
+	if (! libathemecore_early_init())
+		return EXIT_FAILURE;
+
 	atheme_bootstrap();
 	atheme_init(argv[0], LOGDIR "/dbverify.log");
 	atheme_setup();
-	module_t *m;
-	unsigned int errcnt;
-	char *filename = argv[1] ? argv[1] : "services.db";
 
 	runflags = RF_LIVE;
 	datadir = DATADIR;
 	strict_mode = false;
 	offline_mode = true;
 
+	char *filename = argv[1] ? argv[1] : "services.db";
 	slog(LG_INFO, "dbverify is operating on %s", filename);
 
-	m = module_load("backend/opensex");
+	if (! module_load("backend/opensex"))
+		return EXIT_FAILURE;
 
 	db_unregister_type_handler("MDEP");
 	db_register_type_handler("MDEP", handle_mdep);
@@ -141,12 +130,13 @@ int main(int argc, char *argv[])
 
 	slog(LG_INFO, "*** phase 4: verifying entity UID integrity");
 
+	unsigned int errcnt;
 	while ((errcnt = verify_entity_uids()) != 0)
 		slog(LG_INFO, "*** phase 4: %u error(s) were found; running another pass", errcnt);
 
 	slog(LG_INFO, "*** phase 5: writing corrected state to object store");
 
-	db_save(filename);
+	db_save(filename, DB_SAVE_BLOCKING);
 
 	return EXIT_SUCCESS;
 }

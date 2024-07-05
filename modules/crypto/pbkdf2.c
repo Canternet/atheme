@@ -1,140 +1,90 @@
 /*
- * Copyright (c) 2012 William Pitcock <nenolod@dereferenced.org>.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2012 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2017-2019 Aaron M. D. Jones <me@aaronmdjones.net>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-#ifdef HAVE_OPENSSL
+#define CRYPTO_MODULE_NAME PBKDF2_LEGACY_MODULE_NAME
 
-DECLARE_MODULE_V1("crypto/pbkdf2", false, _modinit, _moddeinit, PACKAGE_VERSION, "Atheme Development Group <http://www.atheme.org>");
-
-#include <openssl/evp.h>
-#include <openssl/sha.h>
-#include <openssl/hmac.h>
-
-#define ROUNDS		(128000)
-#define SALTLEN		(16)
-
-/* This is an implementation of PKCS#5 v2.0 password based encryption key
- * derivation function PBKDF2.
- * SHA1 version verified against test vectors posted by Peter Gutmann
- * <pgut001@cs.auckland.ac.nz> to the PKCS-TNG <pkcs-tng@rsa.com> mailing list.
- */
-int PKCS5_PBKDF2_HMAC(const char *pass, int passlen,
-			   const unsigned char *salt, int saltlen, int iter,
-			   const EVP_MD *digest,
-			   int keylen, unsigned char *out)
+static void
+atheme_pbkdf2_config_ready(void ATHEME_VATTR_UNUSED *const restrict unused)
 {
-	unsigned char digtmp[EVP_MAX_MD_SIZE], *p, itmp[4];
-	int cplen, j, k, tkeylen, mdlen;
-	unsigned long i = 1;
-	HMAC_CTX hctx;
-
-	mdlen = EVP_MD_size(digest);
-
-	HMAC_CTX_init(&hctx);
-	p = out;
-	tkeylen = keylen;
-	if(!pass)
-		passlen = 0;
-	else if(passlen == -1)
-		passlen = strlen(pass);
-	while(tkeylen)
-	{
-		if(tkeylen > mdlen)
-			cplen = mdlen;
-		else
-			cplen = tkeylen;
-		/* We are unlikely to ever use more than 256 blocks (5120 bits!)
-		 * but just in case...
-		 */
-		itmp[0] = (unsigned char)((i >> 24) & 0xff);
-		itmp[1] = (unsigned char)((i >> 16) & 0xff);
-		itmp[2] = (unsigned char)((i >> 8) & 0xff);
-		itmp[3] = (unsigned char)(i & 0xff);
-		HMAC_Init_ex(&hctx, pass, passlen, digest, NULL);
-		HMAC_Update(&hctx, salt, saltlen);
-		HMAC_Update(&hctx, itmp, 4);
-		HMAC_Final(&hctx, digtmp, NULL);
-		memcpy(p, digtmp, cplen);
-		for(j = 1; j < iter; j++)
-		{
-			HMAC(digest, pass, passlen,
-				 digtmp, mdlen, digtmp, NULL);
-			for(k = 0; k < cplen; k++)
-				p[k] ^= digtmp[k];
-		}
-		tkeylen-= cplen;
-		i++;
-		p+= cplen;
-	}
-	HMAC_CTX_cleanup(&hctx);
-	return 1;
+	(void) slog(LG_INFO, "%s: this module has been superseded by %s; please see the contrib/pbkdf2-convert.pl "
+	                     "script in the source directory.", CRYPTO_MODULE_NAME, PBKDF2V2_CRYPTO_MODULE_NAME);
 }
 
-/*******************************************************************************************/
-
-static const char *pbkdf2_salt(void)
+static bool ATHEME_FATTR_WUR
+atheme_pbkdf2_verify(const char *const restrict password, const char *const restrict parameters,
+                     unsigned int ATHEME_VATTR_UNUSED *const restrict flags)
 {
-	static char buf[SALTLEN + 1];
-	char *randstr = random_string(SALTLEN);
+	if (strlen(parameters) != PBKDF2_LEGACY_PARAMLEN)
+		return false;
 
-	mowgli_strlcpy(buf, randstr, sizeof buf);
+	for (size_t i = 0; i < PBKDF2_LEGACY_SALTLEN; i++)
+		if (! isalnum(parameters[i]))
+			return false;
 
-	free(randstr);
+	for (size_t i = PBKDF2_LEGACY_SALTLEN; i < PBKDF2_LEGACY_PARAMLEN; i++)
+		if (! isxdigit(parameters[i]))
+			return false;
 
-	return buf;
+	/* Note that this module's output string (from previous versions of services)
+	 * has no defined format, so we can't reliably use PWVERIFY_FLAG_MYMODULE here
+	 * (as per doc/CRYPTO-API). The most we can do is the sanitising above, to save
+	 * some CPU time sometimes. This is partly why crypto/pbkdf2v2 was created.
+	 *   -- amdj
+	 */
+
+	unsigned char rawdigest[DIGEST_MDLEN_SHA2_512];
+	char hexdigest[(2 * sizeof rawdigest) + 1];
+
+	const bool digest_ok = digest_oneshot_pbkdf2(DIGALG_SHA2_512, password, strlen(password), parameters,
+	                                             PBKDF2_LEGACY_SALTLEN, PBKDF2_LEGACY_ITERCNT, rawdigest,
+	                                             sizeof rawdigest);
+	if (! digest_ok)
+		return false;
+
+	for (size_t i = 0; i < sizeof rawdigest; i++)
+		(void) sprintf(hexdigest + (i * 2), "%02x", 255 & rawdigest[i]);
+
+	const int ret = smemcmp(hexdigest, parameters + PBKDF2_LEGACY_SALTLEN, sizeof hexdigest);
+
+	(void) smemzero(rawdigest, sizeof rawdigest);
+	(void) smemzero(hexdigest, sizeof hexdigest);
+
+	return (ret == 0);
 }
 
-static const char *pbkdf2_crypt(const char *key, const char *salt)
-{
-	static char outbuf[PASSLEN];
-	static unsigned char digestbuf[SHA512_DIGEST_LENGTH];
-	int res, iter;
+static const struct crypt_impl crypto_pbkdf2_impl = {
 
-	if (strlen(salt) < SALTLEN)
-		salt = pbkdf2_salt();
-
-	memcpy(outbuf, salt, SALTLEN);
-
-	res = PKCS5_PBKDF2_HMAC(key, strlen(key), (const unsigned char *)salt, SALTLEN, ROUNDS, EVP_sha512(), SHA512_DIGEST_LENGTH, digestbuf);
-
-	for (iter = 0; iter < SHA512_DIGEST_LENGTH; iter++)
-		sprintf(outbuf + SALTLEN + (iter * 2), "%02x", 255 & digestbuf[iter]);
-
-	return outbuf;
-}
-
-static crypt_impl_t pbkdf2_crypt_impl = {
-	.id = "pbkdf2",
-	.crypt = &pbkdf2_crypt,
-	.salt = &pbkdf2_salt
+	.id         = CRYPTO_MODULE_NAME,
+	.verify     = &atheme_pbkdf2_verify,
 };
 
-void _modinit(module_t *m)
+static void
+mod_init(struct module *const restrict m)
 {
-	crypt_register(&pbkdf2_crypt_impl);
+	(void) hook_add_config_ready(&atheme_pbkdf2_config_ready);
+
+	(void) crypt_register(&crypto_pbkdf2_impl);
+
+	m->mflags |= MODFLAG_DBCRYPTO;
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-	crypt_unregister(&pbkdf2_crypt_impl);
+	(void) hook_del_config_ready(&atheme_pbkdf2_config_ready);
+
+	(void) crypt_unregister(&crypto_pbkdf2_impl);
 }
 
-#endif
+SIMPLE_DECLARE_MODULE_V1(CRYPTO_MODULE_NAME, MODULE_UNLOAD_CAPABILITY_OK)

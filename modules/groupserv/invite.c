@@ -1,38 +1,27 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2012 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the GroupServ INVITE command.
- *
  */
 
-/* TODO:
- * We should probably add a way for the target user to remove pending invites
- */
+// TODO: We should probably add a way for the target user to remove pending invites
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/invite", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_invite(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_invite = { "INVITE", N_("Invites a user to a group."), AC_AUTHENTICATED, 2, gs_cmd_invite, { .path = "groupserv/invite" } };
-
-static void gs_cmd_invite(sourceinfo_t *si, int parc, char *parv[])
+static void
+gs_cmd_invite(struct sourceinfo *si, int parc, char *parv[])
 {
-	mygroup_t *mg;
-	myuser_t *mu;
-	groupacs_t *ga;
+	struct mygroup *mg;
+	struct myuser *mu;
+	struct groupacs *ga;
 	char *group = parv[0];
 	char *user = parv[1];
 	char buf[BUFSIZE];
-	service_t *svs;
+	struct service *svs;
 
 	if (!group || !user)
 	{
@@ -49,7 +38,7 @@ static void gs_cmd_invite(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!groupacs_sourceinfo_has_flag(mg, si, GA_INVITE))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -95,15 +84,27 @@ static void gs_cmd_invite(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("\2%s\2 has been invited to \2%s\2"), user, group);
 }
 
-void _modinit(module_t *m)
+static struct command gs_invite = {
+	.name           = "INVITE",
+	.desc           = N_("Invites a user to a group."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &gs_cmd_invite,
+	.help           = { .path = "groupserv/invite" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
 	use_groupserv_main_symbols(m);
 
 	service_named_bind_command("groupserv", &gs_invite);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("groupserv", &gs_invite);
 }
 
+SIMPLE_DECLARE_MODULE_V1("groupserv/invite", MODULE_UNLOAD_CAPABILITY_OK)

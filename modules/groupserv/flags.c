@@ -1,31 +1,22 @@
 /*
- * Copyright (c) 2005 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2010 Atheme Project (http://atheme.org/)
  *
  * This file contains routines to handle the GroupServ HELP command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "groupserv.h"
 
-DECLARE_MODULE_V1
-(
-	"groupserv/flags", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t gs_flags = { "FLAGS", N_("Sets flags on a user in a group."), AC_AUTHENTICATED, 3, gs_cmd_flags, { .path = "groupserv/flags" } };
-
-static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
+static void
+gs_cmd_flags(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_node_t *n;
-	mygroup_t *mg;
-	myentity_t *mt;
-	groupacs_t *ga;
+	struct mygroup *mg;
+	struct myentity *mt;
+	struct groupacs *ga;
 	unsigned int flags = 0, oldflags = 0;
 	unsigned int dir = 0;
 	char *c;
@@ -50,29 +41,35 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 			operoverride = true;
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
 
 	if (!parv[1])
 	{
-		int i = 1;
+		unsigned int i = 1;
 
-		command_success_nodata(si, _("Entry Account                Flags"));
-		command_success_nodata(si, "----- ---------------------- -----");
+		/* TRANSLATORS: Adjust these numbers only if the translated column
+		 * headers would exceed that length. Pay particular attention to
+		 * also changing the numbers in the format string inside the loop
+		 * below to match them, and beware that these format strings are
+		 * shared across multiple files!
+		 */
+		command_success_nodata(si, _("%-8s %-22s %s"), _("Entry"), _("Account"), _("Flags"));
+		command_success_nodata(si, "----------------------------------------------------------------");
 
 		MOWGLI_ITER_FOREACH(n, mg->acs.head)
 		{
 			ga = n->data;
 
-			command_success_nodata(si, "%-5d %-22s %s", i, ga->mt->name,
+			command_success_nodata(si, _("%-8u %-22s %s"), i, ga->mt->name,
 					       gflags_tostr(ga_flags, ga->flags));
 
 			i++;
 		}
 
-		command_success_nodata(si, "----- ---------------------- -----");
+		command_success_nodata(si, "----------------------------------------------------------------");
 		command_success_nodata(si, _("End of \2%s\2 FLAGS listing."), parv[0]);
 
 		if (operoverride)
@@ -83,10 +80,10 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* simple check since it's already checked above */
+	// simple check since it's already checked above
 	if (operoverride)
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -116,7 +113,7 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 	oldflags = flags;
 	flags = gs_flags_parser(parv[2], 1, flags);
 
-	/* check for MU_NEVEROP and forbid committing the change if it's enabled */
+	// check for MU_NEVEROP and forbid committing the change if it's enabled
 	if (!(oldflags & GA_CHANACS) && (flags & GA_CHANACS))
 	{
 		if (isuser(mt) && user(mt)->flags & MU_NEVEROP)
@@ -138,7 +135,7 @@ static void gs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else if ((oldflags & GA_FOUNDER) && !(flags & GA_FOUNDER) && !(groupacs_sourceinfo_flags(mg, si) & GA_FOUNDER))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -192,30 +189,42 @@ no_founder:
 
 	MOWGLI_ITER_FOREACH(n, entity(mg)->chanacs.head)
 	{
-		chanacs_t *ca = n->data;
+		struct chanacs *ca = n->data;
 
 		verbose(ca->mychan, "\2%s\2 now has flags \2%s\2 in the group \2%s\2 which communally has \2%s\2 on \2%s\2.",
 			mt->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name,
 			bitmask_to_flags(ca->level), ca->mychan->name);
 
-		hook_call_channel_acl_change(&(hook_channel_acl_req_t){ .ca = ca });
+		hook_call_channel_acl_change(&(struct hook_channel_acl_req){ .ca = ca });
 	}
 
 	command_success_nodata(si, _("\2%s\2 now has flags \2%s\2 on \2%s\2."), mt->name, gflags_tostr(ga_flags, ga->flags), entity(mg)->name);
 
-	/* XXX */
+	// XXX
 	logcommand(si, CMDLOG_SET, "FLAGS: \2%s\2 now has flags \2%s\2 on \2%s\2", mt->name, gflags_tostr(ga_flags,  ga->flags), entity(mg)->name);
 }
 
-void _modinit(module_t *m)
+static struct command gs_flags = {
+	.name           = "FLAGS",
+	.desc           = N_("Sets flags on a user in a group."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 3,
+	.cmd            = &gs_cmd_flags,
+	.help           = { .path = "groupserv/flags" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
 	use_groupserv_main_symbols(m);
 
 	service_named_bind_command("groupserv", &gs_flags);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("groupserv", &gs_flags);
 }
 
+SIMPLE_DECLARE_MODULE_V1("groupserv/flags", MODULE_UNLOAD_CAPABILITY_OK)

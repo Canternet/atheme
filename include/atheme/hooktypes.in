@@ -1,0 +1,102 @@
+# Atheme hooks system
+#
+#   hook_call_NAME(argument)
+#   hook_add_NAME(handler)
+#   hook_add_first_NAME(handler)
+#   hook_del_NAME(handler)
+#
+# Hooks that take a direct pointer to an object may not destroy that object.
+# If this is necessary, it must be done in an event added from the hook.
+#
+# Hooks with _can_ or _check_ in the name may fill in a field in the argument
+# structure to indicate what should happen. They are not allowed to destroy
+# the object.
+#
+# The hooks channel_join, chanuser_sync, user_add, and user_nickchange,
+# may destroy the object by setting the pointer in the argument structure
+# to NULL, deleting the object from Atheme's state and sending an appropriate
+# message to ircd.
+# Note that channel_join may kick the user, but may not clear the channel.
+#
+# Most other hooks may not destroy the object or prevent the action.
+#
+# Current list of hooks:
+
+# (main)
+config_purge                    void
+config_ready                    void
+db_saved                        void
+db_write                        struct database_handle *
+# XXX: for groupserv.  remove when we have proper dependency resolution in opensex.
+db_write_pre_ca                 struct database_handle *
+shutdown                        void
+
+# (ircd)
+channel_add                     struct channel *
+channel_can_change_topic        struct hook_channel_topic_check *
+channel_delete                  struct channel *
+channel_join                    struct hook_channel_joinpart *
+channel_message                 struct hook_channel_message *
+channel_mode                    struct hook_channel_mode *
+channel_mode_change             struct hook_channel_mode_change *
+channel_part                    struct hook_channel_joinpart *
+channel_topic                   struct channel *
+channel_tschange                struct channel *
+server_add                      struct server *
+server_delete                   struct hook_server_delete *
+server_eob                      struct server *
+user_add                        struct hook_user_nick *
+user_away                       struct user *
+user_delete                     struct user *
+user_delete_info                struct hook_user_delete_info *
+user_deoper                     struct user *
+user_nickchange                 struct hook_user_nick *
+user_oper                       struct user *
+
+# (services)
+channel_acl_change              struct hook_channel_acl_req *
+channel_can_register            struct hook_channel_register_check *
+channel_check_expire            struct hook_expiry_req *
+channel_drop                    struct mychan *
+channel_info                    struct hook_channel_req *
+channel_pick_successor          struct hook_channel_succession_req *
+channel_register                struct hook_channel_req *
+channel_succession              struct hook_channel_succession_req *
+chanuser_sync                   struct hook_chanuser_sync *
+group_drop                      struct mygroup *
+group_register                  struct mygroup *
+host_request                    struct hook_host_request *
+metadata_change                 struct hook_metadata_change *
+module_load                     struct hook_module_load *
+myentity_find                   struct hook_myentity_req *
+myuser_changed_password_or_hash struct myuser *
+myuser_delete                   struct myuser *
+nick_can_register               struct hook_user_register_check *
+nick_check                      struct user *
+nick_check_expire               struct hook_expiry_req *
+nick_enforce                    struct hook_nick_enforce *
+nick_group                      struct hook_user_req *
+nick_ungroup                    struct hook_user_req *
+operserv_info                   struct sourceinfo *
+service_introduce               struct service *
+user_can_change_password        struct hook_user_change_password_check *
+user_can_login                  struct hook_user_login_check *
+user_can_logout                 struct hook_user_logout_check *
+user_can_register               struct hook_user_register_check *
+user_can_rename                 struct hook_user_rename_check *
+user_certfp_add                 struct hook_user_certfp *
+user_certfp_del                 struct hook_user_certfp *
+user_check_expire               struct hook_expiry_req *
+user_drop                       struct myuser *
+user_identify                   struct user *
+user_info                       struct hook_user_req *
+user_info_noexist               struct hook_info_noexist_req *
+user_needforce                  struct hook_user_needforce *
+user_register                   struct myuser *
+user_rename                     struct hook_user_rename *
+user_sethost                    struct user *
+user_verify_register            struct hook_user_req *
+
+# (sasl)
+sasl_input                      struct sasl_message *
+sasl_may_impersonate            struct hook_sasl_may_impersonate *

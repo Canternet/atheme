@@ -1,49 +1,27 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Changes your e-mail address.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_email", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
-
-static void ns_cmd_set_email(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_email = { "EMAIL", N_("Changes your e-mail address."), AC_NONE, 1, ns_cmd_set_email, { .path = "nickserv/set_email" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_email, *ns_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_email, *ns_set_cmdtree);
-}
-
-/* SET EMAIL <new address> */
-static void ns_cmd_set_email(sourceinfo_t *si, int parc, char *parv[])
+// SET EMAIL <new address>
+static void
+ns_cmd_set_email(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *email = parv[0];
-	metadata_t *md;
+	struct metadata *md;
 
 	if (!email)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "EMAIL");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET EMAIL");
 		command_fail(si, fault_needmoreparams, _("Syntax: SET EMAIL <new e-mail>"));
 		return;
 	}
@@ -65,7 +43,7 @@ static void ns_cmd_set_email(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!validemail(email))
 	{
-		command_fail(si, fault_badparams, _("\2%s\2 is not a valid email address."), email);
+		command_fail(si, fault_badparams, _("\2%s\2 is not a valid e-mail address."), email);
 		return;
 	}
 
@@ -104,8 +82,27 @@ static void ns_cmd_set_email(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("The email address for account \2%s\2 has been changed to \2%s\2."), entity(si->smu)->name, si->smu->email);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_set_email = {
+	.name           = "EMAIL",
+	.desc           = N_("Changes your e-mail address."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_email,
+	.help           = { .path = "nickserv/set_email" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	command_add(&ns_set_email, *ns_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_email, *ns_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_email", MODULE_UNLOAD_CAPABILITY_OK)

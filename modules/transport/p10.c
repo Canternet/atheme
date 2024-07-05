@@ -1,41 +1,24 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * parse.c: Parsing of IRC messages.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2011 Atheme Project (http://atheme.org/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * parse.c: Parsing of IRC messages.
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"transport/p10", true, _modinit, _moddeinit,
-	PACKAGE_VERSION,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-/* parses a P10 IRC stream */
-static void p10_parse(char *line)
+// parses a P10 IRC stream
+static void
+p10_parse(char *line)
 {
-	sourceinfo_t *si;
+	struct sourceinfo *si;
 	char *pos;
 	char *origin = NULL;
 	char *command = NULL;
@@ -44,9 +27,9 @@ static void p10_parse(char *line)
 	static char coreLine[BUFSIZE];
 	int parc = 0;
 	unsigned int i;
-	pcommand_t *pcmd;
+	struct proto_cmd *pcmd;
 
-	/* clear the parv */
+	// clear the parv
 	for (i = 0; i <= MAXPARC; i++)
 		parv[i] = NULL;
 
@@ -64,17 +47,18 @@ static void p10_parse(char *line)
 		if (*line == '\000')
 			goto cleanup;
 
-		/* copy the original line so we know what we crashed on */
+		// copy the original line so we know what we crashed on
 		memset((char *)&coreLine, '\0', BUFSIZE);
 		mowgli_strlcpy(coreLine, line, BUFSIZE);
 
 		slog(LG_RAWDATA, "-> %s", line);
 
-		/* find the first space */
+		// find the first space
 		if ((pos = strchr(line, ' ')))
 		{
 			*pos = '\0';
 			pos++;
+
 			/* if it starts with a : we have a prefix/origin
 			 * pull the origin off into `origin', and have pos for the
 			 * command, message will be the part afterwards
@@ -115,7 +99,7 @@ static void p10_parse(char *line)
 
                 if (!si->s && !si->su && me.recvsvr)
                 {
-                        slog(LG_DEBUG, "p10_parse(): got message from nonexistant user or server: %s", origin);
+                        slog(LG_DEBUG, "p10_parse(): got message from nonexistent user or server: %s", origin);
                         goto cleanup;
                 }
 		if (si->s == me.me)
@@ -157,7 +141,7 @@ static void p10_parse(char *line)
 			goto cleanup;
 		}
 
-		/* take the command through the hash table */
+		// take the command through the hash table
 		if ((pcmd = pcommand_find(command)))
 		{
 			if (si->su && !(pcmd->sourcetype & MSRC_USER))
@@ -188,26 +172,21 @@ static void p10_parse(char *line)
 	}
 
 cleanup:
-	object_unref(si);
+	atheme_object_unref(si);
 }
 
-void (*default_parse)(char *line) = NULL;
-
-void _modinit(module_t *m)
+static void
+mod_init(struct module *const restrict m)
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "transport/rfc1459");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "transport/rfc1459")
 
-	default_parse = parse;
 	parse = &p10_parse;
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-	parse = default_parse;
+
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("transport/p10", MODULE_UNLOAD_CAPABILITY_NEVER)

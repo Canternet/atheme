@@ -1,43 +1,33 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * account.c: Account management
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2015-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * account.c: Account management
  */
 
-#include "atheme.h"
-#include "uplink.h" /* XXX, for sendq_flush(curr_uplink->conn); */
-#include "datastream.h"
-#include "privs.h"
-#include "authcookie.h"
+#include <atheme.h>
+#include "internal.h"
 
 mowgli_patricia_t *nicklist;
 mowgli_patricia_t *oldnameslist;
 mowgli_patricia_t *mclist;
-mowgli_patricia_t *certfplist;
 
-mowgli_heap_t *myuser_heap;   /* HEAP_USER */
-mowgli_heap_t *mynick_heap;   /* HEAP_USER */
-mowgli_heap_t *mycertfp_heap; /* HEAP_USER */
-mowgli_heap_t *myuser_name_heap;	/* HEAP_USER / 2 */
-mowgli_heap_t *mychan_heap;	/* HEAP_CHANNEL */
-mowgli_heap_t *chanacs_heap;	/* HEAP_CHANACS */
+static mowgli_patricia_t *certfplist;
+
+static mowgli_heap_t *myuser_heap;   /* HEAP_USER */
+static mowgli_heap_t *mynick_heap;   /* HEAP_USER */
+static mowgli_heap_t *mycertfp_heap; /* HEAP_USER */
+static mowgli_heap_t *myuser_name_heap;	/* HEAP_USER / 2 */
+static mowgli_heap_t *mychan_heap;	/* HEAP_CHANNEL */
+static mowgli_heap_t *chanacs_heap;	/* HEAP_CHANACS */
 
 /*
  * init_accounts()
@@ -53,14 +43,15 @@ mowgli_heap_t *chanacs_heap;	/* HEAP_CHANACS */
  * Side Effects:
  *      - if the DTree initialization fails, services will abort.
  */
-void init_accounts(void)
+void
+init_accounts(void)
 {
-	myuser_heap = sharedheap_get(sizeof(myuser_t));
-	mynick_heap = sharedheap_get(sizeof(myuser_t));
-	myuser_name_heap = sharedheap_get(sizeof(myuser_name_t));
-	mychan_heap = sharedheap_get(sizeof(mychan_t));
-	chanacs_heap = sharedheap_get(sizeof(chanacs_t));
-	mycertfp_heap = sharedheap_get(sizeof(mycertfp_t));
+	myuser_heap = sharedheap_get(sizeof(struct myuser));
+	mynick_heap = sharedheap_get(sizeof(struct myuser));
+	myuser_name_heap = sharedheap_get(sizeof(struct myuser_name));
+	mychan_heap = sharedheap_get(sizeof(struct mychan));
+	chanacs_heap = sharedheap_get(sizeof(struct chanacs));
+	mycertfp_heap = sharedheap_get(sizeof(struct mycertfp));
 
 	if (myuser_heap == NULL || mynick_heap == NULL || mychan_heap == NULL
 			|| chanacs_heap == NULL || mycertfp_heap == NULL)
@@ -88,7 +79,7 @@ void init_accounts(void)
  *      - flags for the account
  *
  * Outputs:
- *      - on success, a new myuser_t object (account)
+ *      - on success, a new struct myuser object (account)
  *      - on failure, NULL.
  *
  * Side Effects:
@@ -100,7 +91,8 @@ void init_accounts(void)
  *        responsible for adding a nick with the same name
  */
 
-myuser_t *myuser_add(const char *name, const char *pass, const char *email, unsigned int flags)
+struct myuser *
+myuser_add(const char *name, const char *pass, const char *email, unsigned int flags)
 {
 	return myuser_add_id(NULL, name, pass, email, flags);
 }
@@ -111,10 +103,11 @@ myuser_t *myuser_add(const char *name, const char *pass, const char *email, unsi
  *
  * Like myuser_add, but lets you specify the new entity's UID.
  */
-myuser_t *myuser_add_id(const char *id, const char *name, const char *pass, const char *email, unsigned int flags)
+struct myuser *
+myuser_add_id(const char *id, const char *name, const char *pass, const char *email, unsigned int flags)
 {
-	myuser_t *mu;
-	soper_t *soper;
+	struct myuser *mu;
+	struct soper *soper;
 
 	return_val_if_fail((mu = myuser_find(name)) == NULL, mu);
 
@@ -122,7 +115,7 @@ myuser_t *myuser_add_id(const char *id, const char *name, const char *pass, cons
 		slog(LG_DEBUG, "myuser_add(): %s -> %s", name, email);
 
 	mu = mowgli_heap_alloc(myuser_heap);
-	object_init(object(mu), name, (destructor_t) myuser_delete);
+	atheme_object_init(atheme_object(mu), name, (atheme_object_destructor_fn) myuser_delete);
 
 	entity(mu)->type = ENT_USER;
 	entity(mu)->name = strshare_get(name);
@@ -154,13 +147,14 @@ myuser_t *myuser_add_id(const char *id, const char *name, const char *pass, cons
 	 * immediately converted the first time we start up with crypto.
 	 */
 	if (flags & MU_CRYPTPASS)
-		mowgli_strlcpy(mu->pass, pass, PASSLEN);
+		mowgli_strlcpy(mu->pass, pass, sizeof mu->pass);
 	else
 		set_password(mu, pass);
 
 	myentity_put(entity(mu));
 
-	if ((soper = soper_find_named(entity(mu)->name)) != NULL)
+	if ((soper = soper_find_named(entity(mu)->name)) != NULL
+		|| (soper = soper_find_eid(entity(mu)->id)) != NULL)
 	{
 		slog(LG_DEBUG, "myuser_add(): user `%s' has been declared as soper, activating privileges.", entity(mu)->name);
 		soper->myuser = mu;
@@ -175,7 +169,7 @@ myuser_t *myuser_add_id(const char *id, const char *name, const char *pass, cons
 }
 
 /*
- * myuser_delete(myuser_t *mu)
+ * myuser_delete(struct myuser *mu)
  *
  * Destroys and removes an account from the accounts DTree.
  *
@@ -188,15 +182,16 @@ myuser_t *myuser_add_id(const char *id, const char *name, const char *pass, cons
  * Side Effects:
  *      - an account is destroyed and removed from the accounts DTree.
  */
-void myuser_delete(myuser_t *mu)
+void
+myuser_delete(struct myuser *mu)
 {
-	myuser_t *successor;
-	mychan_t *mc;
-	mynick_t *mn;
-	user_t *u;
+	struct myuser *successor;
+	struct mychan *mc;
+	struct mynick *mn;
+	struct user *u;
 	mowgli_node_t *n, *tn;
-	mymemo_t *memo;
-	chanacs_t *ca;
+	struct mymemo *memo;
+	struct chanacs *ca;
 	char nicks[200];
 
 	return_if_fail(mu != NULL);
@@ -211,8 +206,8 @@ void myuser_delete(myuser_t *mu)
 	/* log them out */
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, mu->logins.head)
 	{
-		u = (user_t *)n->data;
-		if (!authservice_loaded || !ircd_on_logout(u, entity(mu)->name))
+		u = (struct user *)n->data;
+		if (!authservice_loaded || !ircd_logout_or_kill(u, entity(mu)->name))
 		{
 			u->myuser = NULL;
 			mowgli_node_delete(n, &mu->logins);
@@ -229,7 +224,7 @@ void myuser_delete(myuser_t *mu)
 		/* attempt succession */
 		if (ca->level & CA_FOUNDER && mychan_num_founders(mc) == 1 && (successor = mychan_pick_successor(mc)) != NULL)
 		{
-			slog(LG_INFO, _("SUCCESSION: \2%s\2 to \2%s\2 from \2%s\2"), mc->name, entity(successor)->name, entity(mu)->name);
+			slog(LG_INFO, "SUCCESSION: \2%s\2 to \2%s\2 from \2%s\2", mc->name, entity(successor)->name, entity(mu)->name);
 			slog(LG_VERBOSE, "myuser_delete(): giving channel %s to %s (unused %lds, founder %s, chanacs %zu)",
 					mc->name, entity(successor)->name,
 					(long)(CURRTIME - mc->used),
@@ -240,20 +235,16 @@ void myuser_delete(myuser_t *mu)
 
 			/* CA_FOUNDER | CA_FLAGS is the minimum required for full control; let chanserv take care of assigning the rest via founder_flags */
 			chanacs_change_simple(mc, entity(successor), NULL, CA_FOUNDER | CA_FLAGS, 0, NULL);
-			hook_call_channel_succession((
-					&(hook_channel_succession_req_t){
-						.mc = mc,
-						.mu = successor
-					}));
+			hook_call_channel_succession((&(struct hook_channel_succession_req){ .mc = mc, .mu = successor }));
 
 			if (chansvs.me != NULL)
 				myuser_notice(chansvs.nick, successor, "You are now founder on \2%s\2 (as \2%s\2).", mc->name, entity(successor)->name);
-			object_unref(ca);
+			atheme_object_unref(ca);
 		}
 		/* no successor found */
 		else if (ca->level & CA_FOUNDER && mychan_num_founders(mc) == 1)
 		{
-			slog(LG_REGISTER, _("DELETE: \2%s\2 from \2%s\2"), mc->name, entity(mu)->name);
+			slog(LG_REGISTER, "DELETE: \2%s\2 from \2%s\2", mc->name, entity(mu)->name);
 			slog(LG_VERBOSE, "myuser_delete(): deleting channel %s (unused %lds, founder %s, chanacs %zu)",
 					mc->name, (long)(CURRTIME - mc->used),
 					entity(mu)->name,
@@ -262,10 +253,10 @@ void myuser_delete(myuser_t *mu)
 			hook_call_channel_drop(mc);
 			if (mc->chan != NULL && !(mc->chan->flags & CHAN_LOG))
 				part(mc->name, chansvs.nick);
-			object_unref(mc);
+			atheme_object_unref(mc);
 		}
 		else /* not founder */
-			object_unref(ca);
+			atheme_object_unref(ca);
 	}
 
 	/* remove them from the soper list */
@@ -280,11 +271,11 @@ void myuser_delete(myuser_t *mu)
 	/* delete memos */
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, mu->memos.head)
 	{
-		memo = (mymemo_t *)n->data;
+		memo = (struct mymemo *)n->data;
 
 		mowgli_node_delete(n, &mu->memos);
 		mowgli_node_free(n);
-		free(memo);
+		sfree(memo);
 	}
 
 	/* delete access entries */
@@ -293,7 +284,7 @@ void myuser_delete(myuser_t *mu)
 
 	/* delete certfp entries */
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, mu->cert_fingerprints.head)
-		mycertfp_delete((mycertfp_t *) n->data);
+		mycertfp_delete((struct mycertfp *) n->data);
 
 	/* delete their nicks and report them */
 	nicks[0] = '\0';
@@ -308,7 +299,7 @@ void myuser_delete(myuser_t *mu)
 					entity(mu)->name);
 			if (strlen(nicks) + strlen(mn->nick) + 3 >= sizeof nicks)
 			{
-				slog(LG_REGISTER, _("DELETE: \2%s\2 from \2%s\2"), nicks, entity(mu)->name);
+				slog(LG_REGISTER, "DELETE: \2%s\2 from \2%s\2", nicks, entity(mu)->name);
 				nicks[0] = '\0';
 			}
 			if (nicks[0] != '\0')
@@ -317,10 +308,10 @@ void myuser_delete(myuser_t *mu)
 			mowgli_strlcat(nicks, mn->nick, sizeof nicks);
 			mowgli_strlcat(nicks, "\2", sizeof nicks);
 		}
-		object_unref(mn);
+		atheme_object_unref(mn);
 	}
 	if (nicks[0] != '\0')
-		slog(LG_REGISTER, _("DELETE: \2%s\2 from \2%s\2"), nicks, entity(mu)->name);
+		slog(LG_REGISTER, "DELETE: \2%s\2 from \2%s\2", nicks, entity(mu)->name);
 
 	/* entity(mu)->name is the index for this dtree */
 	myentity_del(entity(mu));
@@ -335,7 +326,7 @@ void myuser_delete(myuser_t *mu)
 }
 
 /*
- * myuser_rename(myuser_t *mu, const char *name)
+ * myuser_rename(struct myuser *mu, const char *name)
  *
  * Renames an account in the accounts DTree.
  *
@@ -351,19 +342,20 @@ void myuser_delete(myuser_t *mu)
  *      - an account is renamed.
  *      - online users are logged out and in again
  */
-void myuser_rename(myuser_t *mu, const char *name)
+void
+myuser_rename(struct myuser *mu, const char *name)
 {
 	mowgli_node_t *n, *tn;
-	user_t *u;
-	hook_user_rename_t data;
+	struct user *u;
+	struct hook_user_rename data;
 	stringref newname;
-	char nb[NICKLEN];
+	char nb[NICKLEN + 1];
 
 	return_if_fail(mu != NULL);
 	return_if_fail(name != NULL);
-	return_if_fail(strlen(name) < NICKLEN);
+	return_if_fail(strlen(name) < sizeof nb);
 
-	mowgli_strlcpy(nb, entity(mu)->name, NICKLEN);
+	mowgli_strlcpy(nb, entity(mu)->name, sizeof nb);
 	newname = strshare_get(name);
 
 	if (authservice_loaded)
@@ -380,7 +372,7 @@ void myuser_rename(myuser_t *mu, const char *name)
 	entity(mu)->name = newname;
 
 	myentity_put(entity(mu));
-	if (authservice_loaded)
+	if (authservice_loaded && !(mu->flags & MU_WAITAUTH))
 	{
 		MOWGLI_ITER_FOREACH(n, mu->logins.head)
 		{
@@ -395,7 +387,7 @@ void myuser_rename(myuser_t *mu, const char *name)
 }
 
 /*
- * myuser_set_email(myuser_t *mu, const char *name)
+ * myuser_set_email(struct myuser *mu, const char *name)
  *
  * Changes the email address of an account.
  *
@@ -409,7 +401,8 @@ void myuser_rename(myuser_t *mu, const char *name)
  * Side Effects:
  *      - email address is changed
  */
-void myuser_set_email(myuser_t *mu, const char *newemail)
+void
+myuser_set_email(struct myuser *mu, const char *newemail)
 {
 	return_if_fail(mu != NULL);
 	return_if_fail(newemail != NULL);
@@ -436,10 +429,11 @@ void myuser_set_email(myuser_t *mu, const char *newemail)
  * Side Effects:
  *      - none
  */
-myuser_t *myuser_find_ext(const char *name)
+struct myuser *
+myuser_find_ext(const char *name)
 {
-	user_t *u;
-	mynick_t *mn;
+	struct user *u;
+	struct mynick *mn;
 
 	return_val_if_fail(name != NULL, NULL);
 
@@ -462,7 +456,7 @@ myuser_t *myuser_find_ext(const char *name)
 }
 
 /*
- * myuser_notice(const char *from, myuser_t *target, const char *fmt, ...)
+ * myuser_notice(const char *from, struct myuser *target, const char *fmt, ...)
  *
  * Sends a notice to all users logged into an account.
  *
@@ -478,12 +472,13 @@ myuser_t *myuser_find_ext(const char *name)
  * Side Effects:
  *      - a notice is sent to all users logged into the account.
  */
-void myuser_notice(const char *from, myuser_t *target, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(3, 4)
+myuser_notice(const char *from, struct myuser *target, const char *fmt, ...)
 {
 	va_list ap;
 	char buf[BUFSIZE];
 	mowgli_node_t *n;
-	user_t *u;
+	struct user *u;
 
 	return_if_fail(from != NULL);
 	return_if_fail(target != NULL);
@@ -498,7 +493,7 @@ void myuser_notice(const char *from, myuser_t *target, const char *fmt, ...)
 
 	MOWGLI_ITER_FOREACH(n, target->logins.head)
 	{
-		u = (user_t *)n->data;
+		u = (struct user *)n->data;
 		notice(from, u->nick, "%s", buf);
 	}
 }
@@ -517,13 +512,13 @@ void myuser_notice(const char *from, myuser_t *target, const char *fmt, ...)
  *     - none
  */
 bool
-myuser_access_verify(user_t *u, myuser_t *mu)
+myuser_access_verify(struct user *u, struct myuser *mu)
 {
 	mowgli_node_t *n;
-	char buf[USERLEN+HOSTLEN];
-	char buf2[USERLEN+HOSTLEN];
-	char buf3[USERLEN+HOSTLEN];
-	char buf4[USERLEN+HOSTLEN];
+	char buf[USERLEN + 1 + HOSTLEN + 1];
+	char buf2[USERLEN + 1 + HOSTLEN + 1];
+	char buf3[USERLEN + 1 + HOSTLEN + 1];
+	char buf4[USERLEN + 1 + HOSTLEN + 1];
 
 	return_val_if_fail(u != NULL, false);
 	return_val_if_fail(mu != NULL, false);
@@ -564,7 +559,7 @@ myuser_access_verify(user_t *u, myuser_t *mu)
  *     - an access mask is added to an account.
  */
 bool
-myuser_access_add(myuser_t *mu, const char *mask)
+myuser_access_add(struct myuser *mu, const char *mask)
 {
 	mowgli_node_t *n;
 	char *msk;
@@ -600,7 +595,7 @@ myuser_access_add(myuser_t *mu, const char *mask)
  *     - none
  */
 char *
-myuser_access_find(myuser_t *mu, const char *mask)
+myuser_access_find(struct myuser *mu, const char *mask)
 {
 	mowgli_node_t *n;
 
@@ -630,7 +625,7 @@ myuser_access_find(myuser_t *mu, const char *mask)
  *     - an access mask is added to an account.
  */
 void
-myuser_access_delete(myuser_t *mu, const char *mask)
+myuser_access_delete(struct myuser *mu, const char *mask)
 {
 	mowgli_node_t *n, *tn;
 
@@ -645,7 +640,7 @@ myuser_access_delete(myuser_t *mu, const char *mask)
 		{
 			mowgli_node_delete(n, &mu->access_list);
 			mowgli_node_free(n);
-			free(entry);
+			sfree(entry);
 
 			cnt.myuser_access--;
 
@@ -659,7 +654,7 @@ myuser_access_delete(myuser_t *mu, const char *mask)
  ***************/
 
 /*
- * mynick_add(myuser_t *mu, const char *name)
+ * mynick_add(struct myuser *mu, const char *name)
  *
  * Creates a nick registration for the given account and adds it to the
  * nicks DTree.
@@ -669,16 +664,17 @@ myuser_access_delete(myuser_t *mu, const char *mask)
  *      - a nickname
  *
  * Outputs:
- *      - on success, a new mynick_t object
+ *      - on success, a new struct mynick object
  *      - on failure, NULL.
  *
  * Side Effects:
  *      - the created nick is added to the nick DTree and to the
  *        account's list.
  */
-mynick_t *mynick_add(myuser_t *mu, const char *name)
+struct mynick *
+mynick_add(struct myuser *mu, const char *name)
 {
-	mynick_t *mn;
+	struct mynick *mn;
 
 	return_val_if_fail((mn = mynick_find(name)) == NULL, mn);
 
@@ -686,9 +682,9 @@ mynick_t *mynick_add(myuser_t *mu, const char *name)
 		slog(LG_DEBUG, "mynick_add(): %s -> %s", name, entity(mu)->name);
 
 	mn = mowgli_heap_alloc(mynick_heap);
-	object_init(object(mn), name, (destructor_t) mynick_delete);
+	atheme_object_init(atheme_object(mn), name, (atheme_object_destructor_fn) mynick_delete);
 
-	mowgli_strlcpy(mn->nick, name, NICKLEN);
+	mowgli_strlcpy(mn->nick, name, sizeof mn->nick);
 	mn->owner = mu;
 	mn->registered = CURRTIME;
 
@@ -703,7 +699,7 @@ mynick_t *mynick_add(myuser_t *mu, const char *name)
 }
 
 /*
- * mynick_delete(mynick_t *mn)
+ * mynick_delete(struct mynick *mn)
  *
  * Destroys and removes a nick from the nicks DTree and the account.
  *
@@ -716,7 +712,8 @@ mynick_t *mynick_add(myuser_t *mu, const char *name)
  * Side Effects:
  *      - a nick is destroyed and removed from the nicks DTree and the account.
  */
-void mynick_delete(mynick_t *mn)
+void
+mynick_delete(struct mynick *mn)
 {
 	return_if_fail(mn != NULL);
 
@@ -737,7 +734,7 @@ void mynick_delete(mynick_t *mn)
  * M Y U S E R _ N A M E *
  *************************/
 
-static void myuser_name_delete(myuser_name_t *mun);
+static void myuser_name_delete(struct myuser_name *mun);
 
 /*
  * myuser_name_add(const char *name)
@@ -748,15 +745,16 @@ static void myuser_name_delete(myuser_name_t *mun);
  *      - a nick or account name
  *
  * Outputs:
- *      - on success, a new myuser_name_t object
+ *      - on success, a new struct myuser_name object
  *      - on failure, NULL.
  *
  * Side Effects:
  *      - the created record is added to the oldnames DTree.
  */
-myuser_name_t *myuser_name_add(const char *name)
+struct myuser_name *
+myuser_name_add(const char *name)
 {
-	myuser_name_t *mun;
+	struct myuser_name *mun;
 
 	return_val_if_fail((mun = myuser_name_find(name)) == NULL, mun);
 
@@ -764,9 +762,9 @@ myuser_name_t *myuser_name_add(const char *name)
 		slog(LG_DEBUG, "myuser_name_add(): %s", name);
 
 	mun = mowgli_heap_alloc(myuser_name_heap);
-	object_init(object(mun), name, (destructor_t) myuser_name_delete);
+	atheme_object_init(atheme_object(mun), name, (atheme_object_destructor_fn) myuser_name_delete);
 
-	mowgli_strlcpy(mun->name, name, NICKLEN);
+	mowgli_strlcpy(mun->name, name, sizeof mun->name);
 
 	mowgli_patricia_add(oldnameslist, mun->name, mun);
 
@@ -776,7 +774,7 @@ myuser_name_t *myuser_name_add(const char *name)
 }
 
 /*
- * myuser_name_delete(myuser_name_t *mun)
+ * myuser_name_delete(struct myuser_name *mun)
  *
  * Destroys and removes a name from the oldnames DTree.
  *
@@ -789,7 +787,8 @@ myuser_name_t *myuser_name_add(const char *name)
  * Side Effects:
  *      - a record is destroyed and removed from the oldnames DTree.
  */
-static void myuser_name_delete(myuser_name_t *mun)
+static void
+myuser_name_delete(struct myuser_name *mun)
 {
 	return_if_fail(mun != NULL);
 
@@ -806,7 +805,7 @@ static void myuser_name_delete(myuser_name_t *mun)
 }
 
 /*
- * myuser_name_remember(const char *name, myuser_t *mu)
+ * myuser_name_remember(const char *name, struct myuser *mu)
  *
  * If the given account has any information worth saving, creates a record
  * for the given name and adds it to the oldnames DTree.
@@ -821,10 +820,11 @@ static void myuser_name_delete(myuser_name_t *mun)
  * Side Effects:
  *      - a record may be added to the oldnames DTree.
  */
-void myuser_name_remember(const char *name, myuser_t *mu)
+void
+myuser_name_remember(const char *name, struct myuser *mu)
 {
-	myuser_name_t *mun;
-	metadata_t *md;
+	struct myuser_name *mun;
+	struct metadata *md;
 
 	if (myuser_name_find(name))
 		return;
@@ -847,7 +847,7 @@ void myuser_name_remember(const char *name, myuser_t *mu)
 }
 
 /*
- * myuser_name_restore(const char *name, myuser_t *mu)
+ * myuser_name_restore(const char *name, struct myuser *mu)
  *
  * If the given name is in the oldnames DTree, restores information from it
  * into the given account.
@@ -862,10 +862,11 @@ void myuser_name_remember(const char *name, myuser_t *mu)
  * Side Effects:
  *      - if present, the record will be removed from the oldnames DTree.
  */
-void myuser_name_restore(const char *name, myuser_t *mu)
+void
+myuser_name_restore(const char *name, struct myuser *mu)
 {
-	myuser_name_t *mun;
-	metadata_t *md, *md2;
+	struct myuser_name *mun;
+	struct metadata *md, *md2;
 	mowgli_patricia_iteration_state_t state;
 	char *copy;
 
@@ -877,21 +878,21 @@ void myuser_name_restore(const char *name, myuser_t *mu)
 	md2 = metadata_find(mun, "private:mark:reason");
 	if (md != NULL && md2 != NULL && strcmp(md->value, md2->value))
 	{
-		wallops(_("Not restoring mark \2\"%s\"\2 for account \2%s\2 (name \2%s\2) which is already marked"), md2->value, entity(mu)->name, name);
-		slog(LG_INFO, _("MARK:FORGET: \2\"%s\"\2 for \2%s (%s)\2 (already marked)"), md2->value, name, entity(mu)->name);
+		wallops("Not restoring mark \2\"%s\"\2 for account \2%s\2 (name \2%s\2) which is already marked", md2->value, entity(mu)->name, name);
+		slog(LG_INFO, "MARK:FORGET: \2\"%s\"\2 for \2%s (%s)\2 (already marked)", md2->value, name, entity(mu)->name);
 		slog(LG_VERBOSE, "myuser_name_restore(): not restoring mark \"%s\" for account %s (name %s) which is already marked",
 				md2->value, entity(mu)->name, name);
 	}
 	else if (md == NULL && md2 != NULL)
 	{
-		slog(LG_INFO, _("MARK:RESTORE: \2\"%s\"\2 for \2%s (%s)\2"), md2->value, name, entity(mu)->name);
+		slog(LG_INFO, "MARK:RESTORE: \2\"%s\"\2 for \2%s (%s)\2", md2->value, name, entity(mu)->name);
 		slog(LG_VERBOSE, "myuser_name_restore(): restoring mark \"%s\" for account %s (name %s)",
 				md2->value, entity(mu)->name, name);
 	}
 
-	if (object(mun)->metadata)
+	if (atheme_object(mun)->metadata)
 	{
-		MOWGLI_PATRICIA_FOREACH(md, &state, object(mun)->metadata)
+		MOWGLI_PATRICIA_FOREACH(md, &state, atheme_object(mun)->metadata)
 		{
 			/* prefer current metadata to saved */
 			if (!metadata_find(mu, md->name))
@@ -905,13 +906,13 @@ void myuser_name_restore(const char *name, myuser_t *mu)
 					memcpy(copy, "(restored) ", 11);
 					strcpy(copy + 11, md->value);
 					metadata_add(mu, md->name, copy);
-					free(copy);
+					sfree(copy);
 				}
 			}
 		}
 	}
 
-	object_unref(mun);
+	atheme_object_unref(mun);
 
 	return;
 }
@@ -920,24 +921,28 @@ void myuser_name_restore(const char *name, myuser_t *mu)
  * M Y C E R T F P *
  *******************/
 
-mycertfp_t *mycertfp_add(myuser_t *mu, const char *certfp)
+struct mycertfp *
+mycertfp_add(struct myuser *mu, const char *certfp, const bool force)
 {
-	mycertfp_t *mcfp;
-
 	return_val_if_fail(mu != NULL, NULL);
 	return_val_if_fail(certfp != NULL, NULL);
 
-	mcfp = mowgli_heap_alloc(mycertfp_heap);
+	if (me.maxcertfp && MOWGLI_LIST_LENGTH(&mu->cert_fingerprints) >= me.maxcertfp && ! force)
+		return NULL;
+
+	struct mycertfp *const mcfp = mowgli_heap_alloc(mycertfp_heap);
+
 	mcfp->mu = mu;
 	mcfp->certfp = sstrdup(certfp);
 
-	mowgli_node_add(mcfp, &mcfp->node, &mu->cert_fingerprints);
-	mowgli_patricia_add(certfplist, mcfp->certfp, mcfp);
+	(void) mowgli_node_add(mcfp, &mcfp->node, &mu->cert_fingerprints);
+	(void) mowgli_patricia_add(certfplist, mcfp->certfp, mcfp);
 
 	return mcfp;
 }
 
-void mycertfp_delete(mycertfp_t *mcfp)
+void
+mycertfp_delete(struct mycertfp *mcfp)
 {
 	return_if_fail(mcfp != NULL);
 	return_if_fail(mcfp->mu != NULL);
@@ -946,11 +951,12 @@ void mycertfp_delete(mycertfp_t *mcfp)
 	mowgli_node_delete(&mcfp->node, &mcfp->mu->cert_fingerprints);
 	mowgli_patricia_delete(certfplist, mcfp->certfp);
 
-	free(mcfp->certfp);
+	sfree(mcfp->certfp);
 	mowgli_heap_free(mycertfp_heap, mcfp);
 }
 
-mycertfp_t *mycertfp_find(const char *certfp)
+struct mycertfp *
+mycertfp_find(const char *certfp)
 {
 	return_val_if_fail(certfp != NULL, NULL);
 
@@ -966,8 +972,9 @@ mowgli_patricia_t *mycertfp_storage()
  * M Y C H A N *
  ***************/
 
-/* private destructor for mychan_t. */
-static void mychan_delete(mychan_t *mc)
+/* private destructor for struct mychan. */
+static void
+mychan_delete(struct mychan *mc)
 {
 	mowgli_node_t *n, *tn;
 
@@ -981,7 +988,7 @@ static void mychan_delete(mychan_t *mc)
 
 	/* remove the chanacs shiz */
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, mc->chanacs.head)
-		object_unref(n->data);
+		atheme_object_unref(n->data);
 
 	metadata_delete_all(mc);
 
@@ -994,9 +1001,10 @@ static void mychan_delete(mychan_t *mc)
 	cnt.mychan--;
 }
 
-mychan_t *mychan_add(char *name)
+struct mychan *
+mychan_add(char *name)
 {
-	mychan_t *mc;
+	struct mychan *mc;
 
 	return_val_if_fail(name != NULL, NULL);
 	return_val_if_fail((mc = mychan_find(name)) == NULL, mc);
@@ -1006,7 +1014,7 @@ mychan_t *mychan_add(char *name)
 
 	mc = mowgli_heap_alloc(mychan_heap);
 
-	object_init(object(mc), name, (destructor_t) mychan_delete);
+	atheme_object_init(atheme_object(mc), name, (atheme_object_destructor_fn) mychan_delete);
 	mc->name = strshare_get(name);
 	mc->registered = CURRTIME;
 	mc->chan = channel_find(name);
@@ -1025,11 +1033,12 @@ mychan_t *mychan_add(char *name)
 /* Check if there is anyone on the channel fulfilling the conditions.
  * Fairly expensive, but this is sometimes necessary to avoid
  * inappropriate drops. -- jilles */
-bool mychan_isused(mychan_t *mc)
+bool
+mychan_isused(struct mychan *mc)
 {
 	mowgli_node_t *n;
-	channel_t *c;
-	chanuser_t *cu;
+	struct channel *c;
+	struct chanuser *cu;
 
 	return_val_if_fail(mc != NULL, false);
 
@@ -1045,10 +1054,11 @@ bool mychan_isused(mychan_t *mc)
 	return false;
 }
 
-unsigned int mychan_num_founders(mychan_t *mc)
+unsigned int
+mychan_num_founders(struct mychan *mc)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 	unsigned int count = 0;
 
 	return_val_if_fail(mc != NULL, 0);
@@ -1062,10 +1072,11 @@ unsigned int mychan_num_founders(mychan_t *mc)
 	return count;
 }
 
-const char *mychan_founder_names(mychan_t *mc)
+const char *
+mychan_founder_names(struct mychan *mc)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 	static char names[512];
 
 	return_val_if_fail(mc != NULL, NULL);
@@ -1084,7 +1095,8 @@ const char *mychan_founder_names(mychan_t *mc)
 	return names;
 }
 
-static unsigned int add_auto_flags(unsigned int flags)
+static unsigned int
+add_auto_flags(unsigned int flags)
 {
 	if (flags & CA_OP)
 		flags |= CA_AUTOOP;
@@ -1096,14 +1108,15 @@ static unsigned int add_auto_flags(unsigned int flags)
 }
 
 /* When to consider a user recently seen */
-#define RECENTLY_SEEN (7 * 86400)
+#define RECENTLY_SEEN SECONDS_PER_WEEK
 
 /* Find a user fulfilling the conditions who can take another channel */
-myuser_t *mychan_pick_candidate(mychan_t *mc, unsigned int minlevel)
+struct myuser *
+mychan_pick_candidate(struct mychan *mc, unsigned int minlevel)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
-	myentity_t *mt, *hi_mt;
+	struct chanacs *ca;
+	struct myentity *mt, *hi_mt;
 	unsigned int level, hi_level;
 	bool recent_ok = false;
 	bool hi_recent_ok = false;
@@ -1157,10 +1170,11 @@ myuser_t *mychan_pick_candidate(mychan_t *mc, unsigned int minlevel)
  * the channel or on IRC; this would give an unfair advantage to
  * 24*7 clients and bots.
  * -- jilles */
-myuser_t *mychan_pick_successor(mychan_t *mc)
+struct myuser *
+mychan_pick_successor(struct mychan *mc)
 {
-	myuser_t *mu;
-	hook_channel_succession_req_t req;
+	struct myuser *mu;
+	struct hook_channel_succession_req req;
 
 	return_val_if_fail(mc != NULL, NULL);
 
@@ -1196,11 +1210,12 @@ myuser_t *mychan_pick_successor(mychan_t *mc)
 	return mychan_pick_candidate(mc, 0);
 }
 
-const char *mychan_get_mlock(mychan_t *mc)
+const char *
+mychan_get_mlock(struct mychan *mc)
 {
 	static char buf[BUFSIZE];
 	char params[BUFSIZE];
-	metadata_t *md;
+	struct metadata *md;
 	char *p, *q, *qq;
 	int dir;
 
@@ -1218,14 +1233,20 @@ const char *mychan_get_mlock(mychan_t *mc)
 	if (mc->mlock_on)
 	{
 		if (dir != MTYPE_ADD)
-			dir = MTYPE_ADD, mowgli_strlcat(buf, "+", sizeof buf);
+		{
+			dir = MTYPE_ADD;
+			mowgli_strlcat(buf, "+", sizeof buf);
+		}
 		mowgli_strlcat(buf, flags_to_string(mc->mlock_on), sizeof buf);
 	}
 
 	if (mc->mlock_limit)
 	{
 		if (dir != MTYPE_ADD)
-			dir = MTYPE_ADD, mowgli_strlcat(buf, "+", sizeof buf);
+		{
+			dir = MTYPE_ADD;
+			mowgli_strlcat(buf, "+", sizeof buf);
+		}
 		mowgli_strlcat(buf, "l", sizeof buf);
 		mowgli_strlcat(params, " ", sizeof params);
 		mowgli_strlcat(params, number_to_string(mc->mlock_limit), sizeof params);
@@ -1234,7 +1255,10 @@ const char *mychan_get_mlock(mychan_t *mc)
 	if (mc->mlock_key)
 	{
 		if (dir != MTYPE_ADD)
-			dir = MTYPE_ADD, mowgli_strlcat(buf, "+", sizeof buf);
+		{
+			dir = MTYPE_ADD;
+			mowgli_strlcat(buf, "+", sizeof buf);
+		}
 		mowgli_strlcat(buf, "k", sizeof buf);
 		mowgli_strlcat(params, " *", sizeof params);
 	}
@@ -1248,7 +1272,10 @@ const char *mychan_get_mlock(mychan_t *mc)
 			if (p[1] != ' ' && p[1] != '\0')
 			{
 				if (dir != MTYPE_ADD)
-					dir = MTYPE_ADD, *q++ = '+';
+				{
+					dir = MTYPE_ADD;
+					*q++ = '+';
+				}
 				*q++ = *p++;
 				mowgli_strlcat(params, " ", sizeof params);
 				qq = params + strlen(params);
@@ -1271,7 +1298,10 @@ const char *mychan_get_mlock(mychan_t *mc)
 	if (mc->mlock_off)
 	{
 		if (dir != MTYPE_DEL)
-			dir = MTYPE_DEL, mowgli_strlcat(buf, "-", sizeof buf);
+		{
+			dir = MTYPE_DEL;
+			mowgli_strlcat(buf, "-", sizeof buf);
+		}
 		mowgli_strlcat(buf, flags_to_string(mc->mlock_off), sizeof buf);
 		if (mc->mlock_off & CMODE_LIMIT)
 			mowgli_strlcat(buf, "l", sizeof buf);
@@ -1288,7 +1318,10 @@ const char *mychan_get_mlock(mychan_t *mc)
 			if (p[1] == ' ' || p[1] == '\0')
 			{
 				if (dir != MTYPE_DEL)
-					dir = MTYPE_DEL, *q++ = '-';
+				{
+					dir = MTYPE_DEL;
+					*q++ = '-';
+				}
 				*q++ = *p;
 			}
 			p++;
@@ -1308,10 +1341,11 @@ const char *mychan_get_mlock(mychan_t *mc)
 	return buf;
 }
 
-const char *mychan_get_sts_mlock(mychan_t *mc)
+const char *
+mychan_get_sts_mlock(struct mychan *mc)
 {
 	static char mlock[BUFSIZE];
-	metadata_t *md;
+	struct metadata *md;
 
 	return_val_if_fail(mc != NULL, NULL);
 
@@ -1347,8 +1381,9 @@ const char *mychan_get_sts_mlock(mychan_t *mc)
  * C H A N A C S *
  *****************/
 
-/* private destructor for chanacs_t */
-static void chanacs_delete(chanacs_t *ca)
+/* private destructor for struct chanacs */
+static void
+chanacs_delete(struct chanacs *ca)
 {
 	return_if_fail(ca != NULL);
 	return_if_fail(ca->mychan != NULL);
@@ -1364,16 +1399,12 @@ static void chanacs_delete(chanacs_t *ca)
 		mowgli_node_delete(&ca->unode, &ca->entity->chanacs);
 
 		if (isdynamic(ca->entity))
-			object_unref(ca->entity);
+			atheme_object_unref(ca->entity);
 	}
-
-	if (ca->setter != NULL)
-		strshare_unref(ca->setter);
 
 	metadata_delete_all(ca);
 
-	if (ca->host != NULL)
-		free(ca->host);
+	sfree(ca->host);
 
 	mowgli_heap_free(chanacs_heap, ca);
 
@@ -1381,7 +1412,7 @@ static void chanacs_delete(chanacs_t *ca)
 }
 
 /*
- * chanacs_add(mychan_t *mychan, myuser_t *myuser, unsigned int level, time_t ts, myentity_t *setter)
+ * chanacs_add(struct mychan *mychan, struct myuser *myuser, unsigned int level, time_t ts, struct myentity *setter)
  *
  * Creates an access entry mapping between a user and channel.
  *
@@ -1392,14 +1423,15 @@ static void chanacs_delete(chanacs_t *ca)
  *       - a timestamp for this access entry
  *
  * Outputs:
- *       - a chanacs_t object which describes the mapping
+ *       - a struct chanacs object which describes the mapping
  *
  * Side Effects:
  *       - the channel access list is updated for mychan.
  */
-chanacs_t *chanacs_add(mychan_t *mychan, myentity_t *mt, unsigned int level, time_t ts, myentity_t *setter)
+struct chanacs *
+chanacs_add(struct mychan *mychan, struct myentity *mt, unsigned int level, time_t ts, struct myentity *setter)
 {
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && mt != NULL, NULL);
 
@@ -1414,13 +1446,17 @@ chanacs_t *chanacs_add(mychan_t *mychan, myentity_t *mt, unsigned int level, tim
 
 	ca = mowgli_heap_alloc(chanacs_heap);
 
-	object_init(object(ca), mt->name, (destructor_t) chanacs_delete);
+	atheme_object_init(atheme_object(ca), mt->name, (atheme_object_destructor_fn) chanacs_delete);
 	ca->mychan = mychan;
-	ca->entity = isdynamic(mt) ? object_ref(mt) : mt;
+	ca->entity = isdynamic(mt) ? atheme_object_ref(mt) : mt;
 	ca->host = NULL;
 	ca->level = level & ca_all;
 	ca->tmodified = ts;
-	ca->setter = setter != NULL ? strshare_ref(setter->name) : NULL;
+
+	if (setter != NULL)
+		mowgli_strlcpy(ca->setter_uid, setter->id, sizeof ca->setter_uid);
+	else
+		ca->setter_uid[0] = '\0';
 
 	mowgli_node_add(ca, &ca->cnode, &mychan->chanacs);
 	mowgli_node_add(ca, &ca->unode, &mt->chanacs);
@@ -1431,7 +1467,7 @@ chanacs_t *chanacs_add(mychan_t *mychan, myentity_t *mt, unsigned int level, tim
 }
 
 /*
- * chanacs_add_host(mychan_t *mychan, char *host, unsigned int level, time_t ts)
+ * chanacs_add_host(struct mychan *mychan, char *host, unsigned int level, time_t ts)
  *
  * Creates an access entry mapping between a hostmask and channel.
  *
@@ -1442,14 +1478,15 @@ chanacs_t *chanacs_add(mychan_t *mychan, myentity_t *mt, unsigned int level, tim
  *       - a timestamp for this access entry
  *
  * Outputs:
- *       - a chanacs_t object which describes the mapping
+ *       - a struct chanacs object which describes the mapping
  *
  * Side Effects:
  *       - the channel access list is updated for mychan.
  */
-chanacs_t *chanacs_add_host(mychan_t *mychan, const char *host, unsigned int level, time_t ts, myentity_t *setter)
+struct chanacs *
+chanacs_add_host(struct mychan *mychan, const char *host, unsigned int level, time_t ts, struct myentity *setter)
 {
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && host != NULL, NULL);
 
@@ -1464,13 +1501,17 @@ chanacs_t *chanacs_add_host(mychan_t *mychan, const char *host, unsigned int lev
 
 	ca = mowgli_heap_alloc(chanacs_heap);
 
-	object_init(object(ca), host, (destructor_t) chanacs_delete);
+	atheme_object_init(atheme_object(ca), host, (atheme_object_destructor_fn) chanacs_delete);
 	ca->mychan = mychan;
 	ca->entity = NULL;
 	ca->host = sstrdup(host);
 	ca->level = level & ca_all;
 	ca->tmodified = ts;
-	ca->setter = setter != NULL ? strshare_ref(setter->name) : NULL;
+
+	if (setter != NULL)
+		mowgli_strlcpy(ca->setter_uid, setter->id, sizeof ca->setter_uid);
+	else
+		ca->setter_uid[0] = '\0';
 
 	mowgli_node_add(ca, &ca->cnode, &mychan->chanacs);
 
@@ -1479,10 +1520,11 @@ chanacs_t *chanacs_add_host(mychan_t *mychan, const char *host, unsigned int lev
 	return ca;
 }
 
-chanacs_t *chanacs_find(mychan_t *mychan, myentity_t *mt, unsigned int level)
+struct chanacs *
+chanacs_find(struct mychan *mychan, struct myentity *mt, unsigned int level)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && mt != NULL, NULL);
 
@@ -1491,39 +1533,40 @@ chanacs_t *chanacs_find(mychan_t *mychan, myentity_t *mt, unsigned int level)
 
 	MOWGLI_ITER_FOREACH(n, mychan->chanacs.head)
 	{
-		entity_chanacs_validation_vtable_t *vt;
+		const struct entity_vtable *vt;
 
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (ca->entity == NULL)
 			continue;
 
-		vt = myentity_get_chanacs_validator(ca->entity);
+		vt = myentity_get_vtable(ca->entity);
 		if (level != 0x0)
 		{
-			if ((vt->match_entity(ca, mt) != NULL) && ((ca->level & level) == level))
+			if (vt->match_entity(ca->entity, mt) && (ca->level & level) == level)
 				return ca;
 		}
-		else if (vt->match_entity(ca, mt) != NULL)
+		else if (vt->match_entity(ca->entity, mt))
 			return ca;
 	}
 
 	return NULL;
 }
 
-unsigned int chanacs_entity_flags(mychan_t *mychan, myentity_t *mt)
+unsigned int
+chanacs_entity_flags(struct mychan *mychan, struct myentity *mt)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 	unsigned int result = 0;
 
 	return_val_if_fail(mychan != NULL && mt != NULL, 0);
 
 	MOWGLI_ITER_FOREACH(n, mychan->chanacs.head)
 	{
-		entity_chanacs_validation_vtable_t *vt;
+		const struct entity_vtable *vt;
 
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (ca->entity == NULL)
 			continue;
@@ -1531,8 +1574,8 @@ unsigned int chanacs_entity_flags(mychan_t *mychan, myentity_t *mt)
 			result |= ca->level;
 		else
 		{
-			vt = myentity_get_chanacs_validator(ca->entity);
-			if (vt->match_entity(ca, mt) != NULL)
+			vt = myentity_get_vtable(ca->entity);
+			if (vt->match_entity(ca->entity, mt))
 				result |= ca->level;
 		}
 	}
@@ -1542,16 +1585,17 @@ unsigned int chanacs_entity_flags(mychan_t *mychan, myentity_t *mt)
 	return result;
 }
 
-chanacs_t *chanacs_find_literal(mychan_t *mychan, myentity_t *mt, unsigned int level)
+struct chanacs *
+chanacs_find_literal(struct mychan *mychan, struct myentity *mt, unsigned int level)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && mt != NULL, NULL);
 
 	MOWGLI_ITER_FOREACH(n, mychan->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (level != 0x0)
 		{
@@ -1565,16 +1609,17 @@ chanacs_t *chanacs_find_literal(mychan_t *mychan, myentity_t *mt, unsigned int l
 	return NULL;
 }
 
-chanacs_t *chanacs_find_host(mychan_t *mychan, const char *host, unsigned int level)
+struct chanacs *
+chanacs_find_host(struct mychan *mychan, const char *host, unsigned int level)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && host != NULL, NULL);
 
 	MOWGLI_ITER_FOREACH(n, mychan->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (level != 0x0)
 		{
@@ -1588,17 +1633,18 @@ chanacs_t *chanacs_find_host(mychan_t *mychan, const char *host, unsigned int le
 	return NULL;
 }
 
-unsigned int chanacs_host_flags(mychan_t *mychan, const char *host)
+unsigned int
+chanacs_host_flags(struct mychan *mychan, const char *host)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 	unsigned int result = 0;
 
 	return_val_if_fail(mychan != NULL && host != NULL, 0);
 
 	MOWGLI_ITER_FOREACH(n, mychan->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (ca->entity == NULL && !match(ca->host, host))
 			result |= ca->level;
@@ -1607,17 +1653,18 @@ unsigned int chanacs_host_flags(mychan_t *mychan, const char *host)
 	return result;
 }
 
-chanacs_t *chanacs_find_host_literal(mychan_t *mychan, const char *host, unsigned int level)
+struct chanacs *
+chanacs_find_host_literal(struct mychan *mychan, const char *host, unsigned int level)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	if ((!mychan) || (!host))
 		return NULL;
 
 	MOWGLI_ITER_FOREACH(n, mychan->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (level != 0x0)
 		{
@@ -1631,10 +1678,11 @@ chanacs_t *chanacs_find_host_literal(mychan_t *mychan, const char *host, unsigne
 	return NULL;
 }
 
-chanacs_t *chanacs_find_host_by_user(mychan_t *mychan, user_t *u, unsigned int level)
+struct chanacs *
+chanacs_find_host_by_user(struct mychan *mychan, struct user *u, unsigned int level)
 {
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && u != NULL, 0);
 
@@ -1648,11 +1696,12 @@ chanacs_t *chanacs_find_host_by_user(mychan_t *mychan, user_t *u, unsigned int l
 	return NULL;
 }
 
-static unsigned int chanacs_host_flags_by_user(mychan_t *mychan, user_t *u)
+static unsigned int
+chanacs_host_flags_by_user(struct mychan *mychan, struct user *u)
 {
 	mowgli_node_t *n;
 	unsigned int result = 0;
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && u != NULL, 0);
 
@@ -1667,10 +1716,11 @@ static unsigned int chanacs_host_flags_by_user(mychan_t *mychan, user_t *u)
 	return result;
 }
 
-chanacs_t *chanacs_find_by_mask(mychan_t *mychan, const char *mask, unsigned int level)
+struct chanacs *
+chanacs_find_by_mask(struct mychan *mychan, const char *mask, unsigned int level)
 {
-	myentity_t *mt;
-	chanacs_t *ca;
+	struct myentity *mt;
+	struct chanacs *ca;
 
 	return_val_if_fail(mychan != NULL && mask != NULL, NULL);
 
@@ -1686,9 +1736,10 @@ chanacs_t *chanacs_find_by_mask(mychan_t *mychan, const char *mask, unsigned int
 	return chanacs_find_host_literal(mychan, mask, level);
 }
 
-bool chanacs_user_has_flag(mychan_t *mychan, user_t *u, unsigned int level)
+bool
+chanacs_user_has_flag(struct mychan *mychan, struct user *u, unsigned int level)
 {
-	myentity_t *mt;
+	struct myentity *mt;
 
 	return_val_if_fail(mychan != NULL && u != NULL, false);
 
@@ -1705,7 +1756,8 @@ bool chanacs_user_has_flag(mychan_t *mychan, user_t *u, unsigned int level)
 	return false;
 }
 
-static unsigned int chanacs_entity_flags_by_user(mychan_t *mychan, user_t *u)
+static unsigned int
+chanacs_entity_flags_by_user(struct mychan *mychan, struct user *u)
 {
 	mowgli_node_t *n;
 	unsigned int result = 0;
@@ -1715,17 +1767,17 @@ static unsigned int chanacs_entity_flags_by_user(mychan_t *mychan, user_t *u)
 
 	MOWGLI_ITER_FOREACH(n, mychan->chanacs.head)
 	{
-		chanacs_t *ca = n->data;
-		myentity_t *mt;
-		entity_chanacs_validation_vtable_t *vt;
+		struct chanacs *ca = n->data;
+		struct myentity *mt;
+		const struct entity_vtable *vt;
 
 		if (ca->entity == NULL)
 			continue;
 
 		mt = ca->entity;
-		vt = myentity_get_chanacs_validator(mt);
+		vt = myentity_get_vtable(mt);
 
-		if (vt->match_user && vt->match_user(ca, u) != NULL)
+		if (vt->match_user && vt->match_user(mt, u))
 			result |= ca->level;
 	}
 
@@ -1734,9 +1786,10 @@ static unsigned int chanacs_entity_flags_by_user(mychan_t *mychan, user_t *u)
 	return result;
 }
 
-unsigned int chanacs_user_flags(mychan_t *mychan, user_t *u)
+unsigned int
+chanacs_user_flags(struct mychan *mychan, struct user *u)
 {
-	myentity_t *mt;
+	struct myentity *mt;
 	unsigned int result = 0;
 
 	return_val_if_fail(mychan != NULL && u != NULL, 0);
@@ -1760,7 +1813,8 @@ unsigned int chanacs_user_flags(mychan_t *mychan, user_t *u)
 	return result;
 }
 
-unsigned int chanacs_source_flags(mychan_t *mychan, sourceinfo_t *si)
+unsigned int
+chanacs_source_flags(struct mychan *mychan, struct sourceinfo *si)
 {
 	if (si->su != NULL)
 	{
@@ -1779,9 +1833,10 @@ unsigned int chanacs_source_flags(mychan_t *mychan, sourceinfo_t *si)
  * host must be non-NULL). If not found, and create is true, create a new
  * chanacs with no flags.
  */
-chanacs_t *chanacs_open(mychan_t *mychan, myentity_t *mt, const char *hostmask, bool create, myentity_t *setter)
+struct chanacs *
+chanacs_open(struct mychan *mychan, struct myentity *mt, const char *hostmask, bool create, struct myentity *setter)
 {
-	chanacs_t *ca;
+	struct chanacs *ca;
 
 	/* wrt the second assert: only one of mu or hostmask can be not-NULL --nenolod */
 	return_val_if_fail(mychan != NULL, false);
@@ -1813,7 +1868,8 @@ chanacs_t *chanacs_open(mychan_t *mychan, myentity_t *mt, const char *hostmask, 
  * these to reflect the actual change. Only allow changes to restrictflags.
  * Returns true if successful, false if an unallowed change was attempted.
  * -- jilles */
-bool chanacs_modify(chanacs_t *ca, unsigned int *addflags, unsigned int *removeflags, unsigned int restrictflags)
+bool
+chanacs_modify(struct chanacs *ca, unsigned int *addflags, unsigned int *removeflags, unsigned int restrictflags, struct myuser *setter)
 {
 	return_val_if_fail(ca != NULL, false);
 	return_val_if_fail(addflags != NULL && removeflags != NULL, false);
@@ -1834,18 +1890,23 @@ bool chanacs_modify(chanacs_t *ca, unsigned int *addflags, unsigned int *removef
 		return false;
 	ca->level = (ca->level | *addflags) & ~*removeflags;
 	ca->tmodified = CURRTIME;
+	if (setter != NULL)
+		mowgli_strlcpy(ca->setter_uid, entity(setter)->id, sizeof ca->setter_uid);
+	else
+		ca->setter_uid[0] = '\0';
 
 	return true;
 }
 
 /* version that doesn't return the changes made */
-bool chanacs_modify_simple(chanacs_t *ca, unsigned int addflags, unsigned int removeflags)
+bool
+chanacs_modify_simple(struct chanacs *ca, unsigned int addflags, unsigned int removeflags, struct myuser *setter)
 {
 	unsigned int a, r;
 
 	a = addflags & ca_all;
 	r = removeflags & ca_all;
-	return chanacs_modify(ca, &a, &r, ca_all);
+	return chanacs_modify(ca, &a, &r, ca_all, setter);
 }
 
 /* Change channel access
@@ -1855,10 +1916,11 @@ bool chanacs_modify_simple(chanacs_t *ca, unsigned int addflags, unsigned int re
  * these to reflect the actual change. Only allow changes to restrictflags.
  * Returns true if successful, false if an unallowed change was attempted.
  * -- jilles */
-bool chanacs_change(mychan_t *mychan, myentity_t *mt, const char *hostmask, unsigned int *addflags, unsigned int *removeflags, unsigned int restrictflags, myentity_t *setter)
+bool
+chanacs_change(struct mychan *mychan, struct myentity *mt, const char *hostmask, unsigned int *addflags, unsigned int *removeflags, unsigned int restrictflags, struct myentity *setter)
 {
-	chanacs_t *ca;
-	hook_channel_acl_req_t req;
+	struct chanacs *ca;
+	struct hook_channel_acl_req req;
 
 	/* wrt the second assert: only one of mu or hostmask can be not-NULL --nenolod */
 	return_val_if_fail(mychan != NULL, false);
@@ -1897,8 +1959,13 @@ bool chanacs_change(mychan_t *mychan, myentity_t *mt, const char *hostmask, unsi
 				return false;
 			ca->level = (ca->level | *addflags) & ~*removeflags;
 			ca->tmodified = CURRTIME;
+			if (setter != NULL)
+				mowgli_strlcpy(ca->setter_uid, setter->id, sizeof ca->setter_uid);
+			else
+				ca->setter_uid[0] = '\0';
+
 			if (ca->level == 0)
-				object_unref(ca);
+				atheme_object_unref(ca);
 		}
 	}
 	else /* hostmask != NULL */
@@ -1933,15 +2000,21 @@ bool chanacs_change(mychan_t *mychan, myentity_t *mt, const char *hostmask, unsi
 				return false;
 			ca->level = (ca->level | *addflags) & ~*removeflags;
 			ca->tmodified = CURRTIME;
+			if (setter != NULL)
+				mowgli_strlcpy(ca->setter_uid, setter->id, sizeof ca->setter_uid);
+			else
+				ca->setter_uid[0] = '\0';
+
 			if (ca->level == 0)
-				object_unref(ca);
+				atheme_object_unref(ca);
 		}
 	}
 	return true;
 }
 
 /* version that doesn't return the changes made */
-bool chanacs_change_simple(mychan_t *mychan, myentity_t *mt, const char *hostmask, unsigned int addflags, unsigned int removeflags, myentity_t *setter)
+bool
+chanacs_change_simple(struct mychan *mychan, struct myentity *mt, const char *hostmask, unsigned int addflags, unsigned int removeflags, struct myentity *setter)
 {
 	unsigned int a, r;
 
@@ -1950,68 +2023,79 @@ bool chanacs_change_simple(mychan_t *mychan, myentity_t *mt, const char *hostmas
 	return chanacs_change(mychan, mt, hostmask, &a, &r, ca_all, setter);
 }
 
-static int expire_myuser_cb(myentity_t *mt, void *unused)
+static int
+expire_myuser_cb(struct myentity *const restrict mt, void ATHEME_VATTR_UNUSED *const restrict unused)
 {
-	hook_expiry_req_t req;
-	myuser_t *mu = user(mt);
-
 	return_val_if_fail(isuser(mt), 0);
 
-	/* If they're logged in, update lastlogin time.
-	 * To decrease db traffic, may want to only do
-	 * this if the account would otherwise be
-	 * deleted. -- jilles
+	struct myuser *const mu = user(mt);
+
+	if (mu->flags & MU_HOLD)
+		return 0;
+
+	/* Don't expire accounts with privs on them in atheme.conf,
+	 * otherwise someone can reregister them and take the privs.
+	 *   -- jilles
 	 */
-	if (MOWGLI_LIST_LENGTH(&mu->logins) > 0)
-	{
+	if (is_conf_soper(mu))
+		return 0;
+
+	// If they're logged in, update lastlogin time.  -- jilles
+	if (MOWGLI_LIST_LENGTH(&mu->logins))
 		mu->lastlogin = CURRTIME;
-		return 0;
-	}
 
-	if (MU_HOLD & mu->flags)
-		return 0;
+	/* If they're unverified, expire them after a day. Otherwise, expire them
+	 * if expiration is enabled, and they have not logged in for that long.
+	 *   -- amdj
+	 */
+	const bool uexpired = ((mu->flags & MU_WAITAUTH) && ((CURRTIME - mu->registered) >= SECONDS_PER_DAY));
+	const bool vexpired = ((nicksvs.expiry > 0) && ((unsigned int)(CURRTIME - mu->lastlogin) >= nicksvs.expiry));
+	const bool expired = uexpired || vexpired;
 
-	req.data.mu = mu;
-	req.do_expire = 1;
-	hook_call_user_check_expire(&req);
+	struct hook_expiry_req req = {
+		.data.mu    = mu,
+		.do_expire  = expired,
+	};
 
-	if (!req.do_expire)
-		return 0;
+	(void) hook_call_user_check_expire(&req);
 
-	if ((nicksvs.expiry > 0 && mu->lastlogin < CURRTIME && (unsigned int)(CURRTIME - mu->lastlogin) >= nicksvs.expiry) ||
-			(mu->flags & MU_WAITAUTH && CURRTIME - mu->registered >= 86400))
+	// Don't let a hook prevent expiry of unverified accounts
+	if (uexpired || req.do_expire)
 	{
-		/* Don't expire accounts with privs on them in atheme.conf,
-		 * otherwise someone can reregister
-		 * them and take the privs -- jilles */
-		if (is_conf_soper(mu))
-			return 0;
+		(void) slog(LG_REGISTER, "EXPIRE:%s: \2%s\2 from \2%s\2",
+		                         expired ? "CORE" : "HOOK", entity(mu)->name, mu->email);
 
-		slog(LG_REGISTER, _("EXPIRE: \2%s\2 from \2%s\2 "), entity(mu)->name, mu->email);
-		slog(LG_VERBOSE, "expire_check(): expiring account %s (unused %ds, email %s, nicks %zu, chanacs %zu)",
-				entity(mu)->name, (int)(CURRTIME - mu->lastlogin),
-				mu->email, MOWGLI_LIST_LENGTH(&mu->nicks),
-				MOWGLI_LIST_LENGTH(&entity(mu)->chanacs));
-		object_dispose(mu);
+		(void) slog(LG_VERBOSE, "expire_check(): %s expiring account %s (unused %us, email %s, logins %zu, "
+		                        "nicks %zu, chanacs %zu)", expired ? "core" : "hook", entity(mu)->name,
+		                        (unsigned int)(CURRTIME - mu->lastlogin), mu->email,
+		                        MOWGLI_LIST_LENGTH(&mu->logins), MOWGLI_LIST_LENGTH(&mu->nicks),
+		                        MOWGLI_LIST_LENGTH(&entity(mu)->chanacs));
+
+		/* If they are logged in during expiration, the destructor
+		 * for this object will take care of logging them out.
+		 *   -- amdj
+		 */
+		(void) atheme_object_dispose(mu);
 	}
 
 	return 0;
 }
 
-void expire_check(void *arg)
+void
+expire_check(void *arg)
 {
-	mynick_t *mn;
-	mychan_t *mc;
-	user_t *u;
+	struct mynick *mn;
+	struct mychan *mc;
+	struct user *u;
 	mowgli_patricia_iteration_state_t state;
-	hook_expiry_req_t req;
+	struct hook_expiry_req req;
 
 	/* Let them know about this and the likely subsequent db_save()
 	 * right away -- jilles */
 	if (curr_uplink != NULL && curr_uplink->conn != NULL)
 		sendq_flush(curr_uplink->conn);
 
-	myentity_foreach_t(ENT_USER, expire_myuser_cb, NULL);
+	myentity_foreach_t(ENT_USER, &expire_myuser_cb, NULL);
 
 	MOWGLI_PATRICIA_FOREACH(mn, &state, nicklist)
 	{
@@ -2042,11 +2126,11 @@ void expire_check(void *arg)
 				continue;
 			}
 
-			slog(LG_REGISTER, _("EXPIRE: \2%s\2 from \2%s\2"), mn->nick, entity(mn->owner)->name);
+			slog(LG_REGISTER, "EXPIRE: \2%s\2 from \2%s\2", mn->nick, entity(mn->owner)->name);
 			slog(LG_VERBOSE, "expire_check(): expiring nick %s (unused %lds, account %s)",
 					mn->nick, (long)(CURRTIME - mn->lastseen),
 					entity(mn->owner)->name);
-			object_unref(mn);
+			atheme_object_unref(mn);
 		}
 	}
 
@@ -2060,7 +2144,7 @@ void expire_check(void *arg)
 		if (!req.do_expire)
 			continue;
 
-		if ((CURRTIME - mc->used) >= 86400 - 3660)
+		if ((unsigned int) (CURRTIME - mc->used) >= (SECONDS_PER_DAY - SECONDS_PER_HOUR - SECONDS_PER_MINUTE))
 		{
 			/* keep last used time accurate to
 			 * within a day, making sure an active
@@ -2080,7 +2164,7 @@ void expire_check(void *arg)
 			if (MC_HOLD & mc->flags)
 				continue;
 
-			slog(LG_REGISTER, _("EXPIRE: \2%s\2 from \2%s\2"), mc->name, mychan_founder_names(mc));
+			slog(LG_REGISTER, "EXPIRE: \2%s\2 from \2%s\2", mc->name, mychan_founder_names(mc));
 			slog(LG_VERBOSE, "expire_check(): expiring channel %s (unused %lds, founder %s, chanacs %zu)",
 					mc->name, (long)(CURRTIME - mc->used),
 					mychan_founder_names(mc),
@@ -2090,16 +2174,17 @@ void expire_check(void *arg)
 			if (mc->chan != NULL && !(mc->chan->flags & CHAN_LOG))
 				part(mc->name, chansvs.nick);
 
-			object_unref(mc);
+			atheme_object_unref(mc);
 		}
 	}
 }
 
-static int check_myuser_cb(myentity_t *mt, void *unused)
+static int
+check_myuser_cb(struct myentity *mt, void *unused)
 {
-	myuser_t *mu = user(mt);
+	struct myuser *mu = user(mt);
 	mowgli_node_t *n;
-	mynick_t *mn, *mn1;
+	struct mynick *mn, *mn1;
 
 	return_val_if_fail(isuser(mt), 0);
 
@@ -2127,7 +2212,7 @@ static int check_myuser_cb(myentity_t *mt, void *unused)
 		else if (mn->owner != mu)
 		{
 			slog(LG_REGISTER, "db_check(): replacing nick %s owned by %s with %s", mn->nick, entity(mn->owner)->name, entity(mu)->name);
-			object_unref(mn);
+			atheme_object_unref(mn);
 			mn = mynick_add(mu, entity(mu)->name);
 			mn->registered = mu->registered;
 			mn->lastseen = mu->lastlogin;
@@ -2137,7 +2222,21 @@ static int check_myuser_cb(myentity_t *mt, void *unused)
 	return 0;
 }
 
-void db_check(void)
+bool
+user_loginmaxed(struct myuser *mu)
+{
+	if (mu->flags & MU_LOGINNOLIMIT)
+		return false;
+	else if (has_priv_myuser(mu, PRIV_LOGIN_NOLIMIT))
+		return false;
+	else if (MOWGLI_LIST_LENGTH(&mu->logins) < me.maxlogins)
+		return false;
+	else
+		return true;
+}
+
+void
+db_check(void)
 {
 	myentity_foreach_t(ENT_USER, check_myuser_cb, NULL);
 }

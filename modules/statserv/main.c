@@ -1,65 +1,61 @@
 /*
- * Copyright (c) 2011 Alexandria Wolcott
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 Alexandria Wolcott <alyx@sporksmoo.net>
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * This file contains the body of StatServ.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-("statserv/main", false, _modinit, _moddeinit,
- PACKAGE_STRING, "Alexandria Wolcott <alyx@sporksmoo.net>");
+static struct service *statsvs = NULL;
 
-service_t *statsvs;
+static void
+ss_cmd_help(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc, char **const restrict parv)
+{
+	if (parv[0])
+	{
+		(void) help_display(si, si->service, parv[0], si->service->commands);
+		return;
+	}
 
-static void ss_cmd_help(sourceinfo_t * si, int parc, char *parv[]);
+	(void) help_display_prefix(si, si->service);
+	(void) command_success_nodata(si, _("\2%s\2 records various network statistics."), si->service->nick);
+	(void) help_display_newline(si);
+	(void) command_help(si, si->service->commands);
+	(void) help_display_moreinfo(si, si->service, NULL);
+	(void) help_display_suffix(si);
+}
 
-command_t ss_help =
-{ "HELP", N_("Displays contextual help information."), AC_NONE, 2, ss_cmd_help, {.path = "help"}
+static struct command ss_help = {
+	.name           = "HELP",
+	.desc           = STR_HELP_DESCRIPTION,
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ss_cmd_help,
+	.help           = { .path = "help" },
 };
 
-void _modinit(module_t * m)
+static void
+mod_init(struct module *const restrict m)
 {
-    statsvs = service_add("statserv", NULL);
-    service_named_bind_command("statserv", &ss_help);
+	if (! (statsvs = service_add("statserv", NULL)))
+	{
+		(void) slog(LG_ERROR, "%s: service_add() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) service_bind_command(statsvs, &ss_help);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-    service_named_unbind_command("statserv", &ss_help);
-    if (statsvs != NULL)
-        service_delete(statsvs);
+	(void) service_delete(statsvs);
 }
 
-void ss_cmd_help(sourceinfo_t * si, int parc, char *parv[])
-{
-    char *command = parv[0];
-
-    if (!command)
-    {
-        command_success_nodata(si, _("***** \2%s Help\2 *****"), si->service->nick);
-        command_success_nodata(si, _("\2%s\2 records various network statistics."),
-                si->service->nick);
-        command_success_nodata(si, " ");
-        command_success_nodata(si, _("For more information on a command, type:"));
-        command_success_nodata(si, "\2/%s%s help <command>\2",
-                (ircd->uses_rcommand == false) ? "msg " : "",
-                si->service->disp);
-        command_success_nodata(si, " ");
-
-        command_help(si, si->service->commands);
-
-        command_success_nodata(si, _("***** \2End of Help\2 *****"));
-        return;
-    }
-
-    help_display(si, si->service, command, si->service->commands);
-}
-
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("statserv/main", MODULE_UNLOAD_CAPABILITY_OK)

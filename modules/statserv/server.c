@@ -1,133 +1,163 @@
 /*
- * Copyright (c) 2011 Alexandria Wolcott
- * Released under the same terms as Atheme itself.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 Alexandria Wolcott <alyx@sporksmoo.net>
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Gather information about networked servers.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1("statserv/server", false, _modinit, _moddeinit,
-        PACKAGE_STRING, "Alexandria Wolcott <alyx@sporksmoo.net>");
+static mowgli_patricia_t *ss_server_cmds = NULL;
 
-static void ss_cmd_server(sourceinfo_t * si, int parc, char *parv[]);
-static void ss_cmd_server_info(sourceinfo_t * si, int parc, char *parv[]);
-static void ss_cmd_server_list(sourceinfo_t * si, int parc, char *parv[]);
-static void ss_cmd_server_count(sourceinfo_t * si, int parc, char *parv[]);
-
-command_t ss_server =
-{ "SERVER", N_("Obtain information about servers on the network."), AC_NONE, 3, ss_cmd_server, {.path = "statserv/server"} };
-
-command_t ss_server_list =
-{ "LIST", N_("Obtain a list of servers."), AC_NONE, 1, ss_cmd_server_list, {.path = ""} };
-
-command_t ss_server_count =
-{ "COUNT", N_("Count the amount of servers connected to the network."), AC_NONE, 1, ss_cmd_server_count, {.path = ""} };
-
-command_t ss_server_info =
-{ "INFO", N_("Obtain information about a specified server."), AC_NONE, 2, ss_cmd_server_info, {.path = ""} };
-
-mowgli_patricia_t *ss_server_cmds;
-
-void _modinit(module_t * m)
+static void
+ss_cmd_server(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
 {
-    service_named_bind_command("statserv", &ss_server);
-    ss_server_cmds = mowgli_patricia_create(strcasecanon);
-    command_add(&ss_server_list, ss_server_cmds);
-    command_add(&ss_server_count, ss_server_cmds);
-    command_add(&ss_server_info, ss_server_cmds);
+	if (parc < 1)
+	{
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SERVER");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: SERVER [INFO|LIST|COUNT] [parameters]"));
+		return;
+	}
+
+	(void) subcommand_dispatch_simple(si->service, si, parc, parv, ss_server_cmds, "SERVER");
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+ss_cmd_server_list(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc,
+                   char ATHEME_VATTR_UNUSED **const restrict parv)
 {
-    service_named_unbind_command("statserv", &ss_server);
-    command_delete(&ss_server_list, ss_server_cmds);
-    command_delete(&ss_server_count, ss_server_cmds);
-    command_delete(&ss_server_info, ss_server_cmds);
-    mowgli_patricia_destroy(ss_server_cmds, NULL, NULL);
+	mowgli_patricia_iteration_state_t state;
+	struct server *s;
+
+	unsigned int i = 0;
+
+	MOWGLI_PATRICIA_FOREACH(s, &state, servlist)
+	{
+		if ((! (s->flags & SF_HIDE)) || has_priv(si, PRIV_SERVER_AUSPEX))
+		{
+			i++;
+
+			(void) command_success_nodata(si, "%u: %s [%s]", i, s->name, s->desc);
+		}
+	}
+
+	(void) command_success_nodata(si, _("End of server list."));
 }
 
-static void ss_cmd_server(sourceinfo_t * si, int parc, char *parv[])
+static void
+ss_cmd_server_info(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
 {
-    command_t *c;
-    char *cmd = parv[0];
+	if (parc < 1)
+	{
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SERVER INFO");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: SERVER INFO <server>"));
+		return;
+	}
 
-    if (!cmd)
-    {
-        command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SERVER");
-        command_fail(si, fault_needmoreparams,
-                _("Syntax: SERVER [INFO|LIST|COUNT] [parameters]"));
-        return;
-    }
+	const struct server *const s = mowgli_patricia_retrieve(servlist, parv[0]);
 
-    c = command_find(ss_server_cmds, cmd);
-    if (c == NULL)
-    {
-        command_fail(si, fault_badparams,
-                _("Invalid command. Use \2/%s%s help\2 for a command listing."),
-                (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-        return;
-    }
+	if (! s)
+	{
+		(void) command_fail(si, fault_nosuch_target, _("Server \2%s\2 does not exist."), parv[0]);
+		return;
+	}
 
-    command_exec(si->service, si, c, parc - 1, parv + 1);
+	if ((s->flags & SF_HIDE) && ! has_priv(si, PRIV_SERVER_AUSPEX))
+	{
+		(void) command_fail(si, fault_nosuch_target, _("Server \2%s\2 does not exist."), parv[0]);
+		return;
+	}
+
+	(void) command_success_nodata(si, _("Information for server %s:"), s->name);
+	(void) command_success_nodata(si, _("Server description: %s"), s->desc);
+	(void) command_success_nodata(si, _("Current users: %u (%u invisible)"), s->users, s->invis);
+	(void) command_success_nodata(si, _("Online operators: %u"), s->opers);
+
+	if (has_priv(si, PRIV_SERVER_AUSPEX))
+	{
+		if (s->uplink && s->uplink->name)
+			(void) command_success_nodata(si, _("Server uplink: %s"), s->uplink->name);
+
+		(void) command_success_nodata(si, _("Servers linked from %s: %u"), s->name,
+		                              (unsigned int) s->children.count);
+	}
+
+	(void) command_success_nodata(si, _("End of server info."));
 }
 
-static void ss_cmd_server_list(sourceinfo_t * si, int parc, char *parv[])
+static void
+ss_cmd_server_count(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc,
+                    char ATHEME_VATTR_UNUSED **const restrict parv)
 {
-    server_t *s;
-    int i = 0;
-    mowgli_patricia_iteration_state_t state;
-    MOWGLI_PATRICIA_FOREACH(s, &state, servlist)
-    {
-        if ((!(s->flags & SF_HIDE)) || (has_priv(si, PRIV_SERVER_AUSPEX)))
-        {
-            i++;
-            command_success_nodata(si, _("%d: %s [%s]"), i, s->name, s->desc);
-        }
-    }
-    command_success_nodata(si, _("End of server list."));
+	// TRANSLATORS: cannot ever be singular; is always plural
+	(void) command_success_nodata(si, _("Network size: %u servers"), mowgli_patricia_size(servlist));
 }
 
-static void ss_cmd_server_info(sourceinfo_t * si, int parc, char *parv[])
+static struct command ss_server = {
+	.name           = "SERVER",
+	.desc           = N_("Obtain information about servers on the network."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &ss_cmd_server,
+	.help           = { .path = "statserv/server" },
+};
+
+static struct command ss_server_list = {
+	.name           = "LIST",
+	.desc           = N_("Obtain a list of servers."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ss_cmd_server_list,
+	.help           = { .path = "" },
+};
+
+static struct command ss_server_count = {
+	.name           = "COUNT",
+	.desc           = N_("Count the amount of servers connected to the network."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ss_cmd_server_count,
+	.help           = { .path = "" },
+};
+
+static struct command ss_server_info = {
+	.name           = "INFO",
+	.desc           = N_("Obtain information about a specified server."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ss_cmd_server_info,
+	.help           = { .path = "" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
-    server_t *s;
-    char *name = parv[0];
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "statserv/main")
 
-    if (!name)
-    {
-        command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SERVER INFO");
-        command_fail(si, fault_needmoreparams, _("Syntax: SERVER INFO <server>"));
-        return;
-    }
+	if (! (ss_server_cmds = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
 
-    if (!(s = mowgli_patricia_retrieve(servlist, name)))
-    {
-        command_fail(si, fault_nosuch_target, _("Server \2%s\2 does not exist."), name);
-        return;
-    }
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
 
-    if ((s->flags & SF_HIDE) && (!(has_priv(si, PRIV_SERVER_AUSPEX))))
-    {
-        command_fail(si, fault_nosuch_target, _("Server \2%s\2 does not exist."), name);
-        return;
-    }
+	(void) command_add(&ss_server_list, ss_server_cmds);
+	(void) command_add(&ss_server_count, ss_server_cmds);
+	(void) command_add(&ss_server_info, ss_server_cmds);
 
-    command_success_nodata(si, _("Information for server %s:"), s->name);
-    command_success_nodata(si, _("Server description: %s"), s->desc);
-    command_success_nodata(si, _("Current users: %u (%u invisible)"), s->users, s->invis);
-    command_success_nodata(si, _("Online operators: %u"), s->opers);
-    if (has_priv(si, PRIV_SERVER_AUSPEX))
-    {
-        if (s->uplink != NULL && s->uplink->name != NULL)
-            command_success_nodata(si, _("Server uplink: %s"), s->uplink->name);
-        command_success_nodata(si, _("Servers linked from %s: %u"), name, (unsigned int)s->children.count);
-    }
-    command_success_nodata(si, _("End of server info."));
+	(void) service_named_bind_command("statserv", &ss_server);
 }
 
-
-static void ss_cmd_server_count(sourceinfo_t * si, int parc, char *parv[])
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-    command_success_nodata(si, _("Network size: %u servers"), mowgli_patricia_size(servlist));
+	(void) service_named_unbind_command("statserv", &ss_server);
+
+	(void) mowgli_patricia_destroy(ss_server_cmds, &command_delete_trie_cb, ss_server_cmds);
 }
+
+SIMPLE_DECLARE_MODULE_V1("statserv/server", MODULE_UNLOAD_CAPABILITY_OK)

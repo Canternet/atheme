@@ -1,225 +1,26 @@
 /*
- * Copyright (c) 2005-2007 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 Atheme Project (http://atheme.org/)
  *
  * This file contains code for the CService XOP functions.
- *
  */
 
-#include "atheme.h"
-#include "template.h"
+#include <atheme.h>
 #include "chanserv.h"
 
-DECLARE_MODULE_V1
-(
-	"chanserv/xop", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-/* the individual command stuff, now that we've reworked, hardcode ;) --w00t */
-static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *target, unsigned int level, const char *leveldesc, unsigned int restrictflags);
-static void cs_xop_do_del(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *target, unsigned int level, const char *leveldesc);
-static void cs_xop_do_list(sourceinfo_t *si, mychan_t *mc, unsigned int level, const char *leveldesc, bool operoverride);
-
-static void cs_cmd_sop(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_aop(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_hop(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_vop(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_forcexop(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_sop = { "SOP", N_("Manipulates a channel SOP list."),
-                        AC_NONE, 3, cs_cmd_sop, { .path = "cservice/xop" } };
-command_t cs_aop = { "AOP", N_("Manipulates a channel AOP list."),
-                        AC_NONE, 3, cs_cmd_aop, { .path = "cservice/xop" } };
-command_t cs_hop = { "HOP", N_("Manipulates a channel HOP list."),
-			AC_NONE, 3, cs_cmd_hop, { .path = "cservice/xop" } };
-command_t cs_vop = { "VOP", N_("Manipulates a channel VOP list."),
-                        AC_NONE, 3, cs_cmd_vop, { .path = "cservice/xop" } };
-command_t cs_forcexop = { "FORCEXOP", N_("Forces access levels to xOP levels."),
-                         AC_NONE, 1, cs_cmd_forcexop, { .path = "cservice/forcexop" } };
-
-void _modinit(module_t *m)
+static void
+cs_xop_do_add(struct sourceinfo *si, struct mychan *mc, struct myentity *mt, char *target, unsigned int level, const char *leveldesc, unsigned int restrictflags)
 {
-	service_named_bind_command("chanserv", &cs_aop);
-	service_named_bind_command("chanserv", &cs_sop);
-	if (ircd != NULL && ircd->uses_halfops)
-		service_named_bind_command("chanserv", &cs_hop);
-	service_named_bind_command("chanserv", &cs_vop);
-	service_named_bind_command("chanserv", &cs_forcexop);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_aop);
-	service_named_unbind_command("chanserv", &cs_sop);
-	service_named_unbind_command("chanserv", &cs_hop);
-	service_named_unbind_command("chanserv", &cs_vop);
-	service_named_unbind_command("chanserv", &cs_forcexop);
-}
-
-static void cs_xop(sourceinfo_t *si, int parc, char *parv[], const char *leveldesc)
-{
-	myentity_t *mt;
-	mychan_t *mc;
-	bool operoverride = false;
-	unsigned int restrictflags;
-	const char *chan = parv[0];
-	const char *cmd = parv[1];
-	char *uname = parv[2];
-	unsigned int level;
-
-	if (!cmd || !chan)
-	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "xOP");
-		command_fail(si, fault_needmoreparams, _("Syntax: SOP|AOP|HOP|VOP <#channel> ADD|DEL|LIST <nickname>"));
-		return;
-	}
-
-	if ((strcasecmp("LIST", cmd)) && (!uname))
-	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "xOP");
-		command_fail(si, fault_needmoreparams, _("Syntax: SOP|AOP|HOP|VOP <#channel> ADD|DEL|LIST <nickname>"));
-		return;
-	}
-
-	/* make sure they're registered, logged in
-	 * and the founder of the channel before
-	 * we go any further.
-	 */
-	if (!si->smu)
-	{
-		/* if they're opers and just want to LIST, they don't have to log in */
-		if (!(has_priv(si, PRIV_CHAN_AUSPEX) && !strcasecmp("LIST", cmd)))
-		{
-			command_fail(si, fault_noprivs, _("You are not logged in."));
-			return;
-		}
-	}
-
-	mc = mychan_find(chan);
-	if (!mc)
-	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
-		return;
-	}
-
-	if (metadata_find(mc, "private:close:closer") && (!has_priv(si, PRIV_CHAN_AUSPEX) || strcasecmp("LIST", cmd)))
-	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
-		return;
-	}
-
-	level = get_template_flags(mc, leveldesc);
-	if (level & CA_FOUNDER)
-	{
-		command_fail(si, fault_noprivs, _("\2%s\2 %s template has founder flag, not allowing xOP command."), chan, leveldesc);
-		return;
-	}
-
-	/* ADD */
-	if (!strcasecmp("ADD", cmd))
-	{
-		mt = myentity_find_ext(uname);
-
-		/* As in /cs flags, allow founder to do anything */
-		restrictflags = chanacs_source_flags(mc, si);
-		if (restrictflags & CA_FOUNDER)
-			restrictflags = ca_all;
-		/* The following is a bit complicated, to allow for
-		 * possible future denial of granting +f */
-		if (!(restrictflags & CA_FLAGS))
-		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
-			return;
-		}
-		restrictflags = allow_flags(mc, restrictflags);
-		if ((restrictflags & level) != level)
-		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
-			return;
-		}
-		cs_xop_do_add(si, mc, mt, uname, level, leveldesc, restrictflags);
-	}
-
-	else if (!strcasecmp("DEL", cmd))
-	{
-		mt = myentity_find_ext(uname);
-
-		/* As in /cs flags, allow founder to do anything -- fix for #64: allow self removal. */
-		restrictflags = chanacs_source_flags(mc, si);
-		if (restrictflags & CA_FOUNDER || entity(si->smu) == mt)
-			restrictflags = ca_all;
-		/* The following is a bit complicated, to allow for
-		 * possible future denial of granting +f */
-		if (!(restrictflags & CA_FLAGS))
-		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
-			return;
-		}
-		restrictflags = allow_flags(mc, restrictflags);
-		if ((restrictflags & level) != level)
-		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
-			return;
-		}
-		cs_xop_do_del(si, mc, mt, uname, level, leveldesc);
-	}
-
-	else if (!strcasecmp("LIST", cmd))
-	{
-		if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))
-		{
-			if (has_priv(si, PRIV_CHAN_AUSPEX))
-				operoverride = true;
-			else
-			{
-				command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
-				return;
-			}
-		}
-		cs_xop_do_list(si, mc, level, leveldesc, operoverride);
-	}
-}
-
-static void cs_cmd_sop(sourceinfo_t *si, int parc, char *parv[])
-{
-	cs_xop(si, parc, parv, "SOP");
-}
-
-static void cs_cmd_aop(sourceinfo_t *si, int parc, char *parv[])
-{
-	cs_xop(si, parc, parv, "AOP");
-}
-
-static void cs_cmd_vop(sourceinfo_t *si, int parc, char *parv[])
-{
-	cs_xop(si, parc, parv, "VOP");
-}
-
-static void cs_cmd_hop(sourceinfo_t *si, int parc, char *parv[])
-{
-	/* Don't reject the command. This helps the rare case where
-	 * a network switches to a non-halfop ircd: users can still
-	 * remove pre-transition HOP entries.
-	 */
-	if (!ircd->uses_halfops && si->su != NULL)
-		notice(chansvs.nick, si->su->nick, "Warning: Your IRC server does not support halfops.");
-
-	cs_xop(si, parc, parv, "HOP");
-}
-
-
-static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *target, unsigned int level, const char *leveldesc, unsigned int restrictflags)
-{
-	chanacs_t *ca;
+	struct chanacs *ca;
 	unsigned int addflags = level, removeflags = ~level;
 	bool isnew;
-	hook_channel_acl_req_t req;
+	struct hook_channel_acl_req req;
 
 	if (!mt)
 	{
-		/* we might be adding a hostmask */
+		// we might be adding a hostmask
 		if (!validhostmask(target))
 		{
 			command_fail(si, fault_badparams, _("\2%s\2 is neither a registered account nor a hostmask."), target);
@@ -230,14 +31,14 @@ static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 		ca = chanacs_open(mc, NULL, target, true, entity(si->smu));
 		if (ca->level == level)
 		{
-			command_fail(si, fault_nochange, _("\2%s\2 is already on the %s list for \2%s\2"), target, leveldesc, mc->name);
+			command_fail(si, fault_nochange, _("\2%s\2 is already on the %s list for \2%s\2."), target, leveldesc, mc->name);
 			return;
 		}
 		isnew = ca->level == 0;
 
 		if (isnew && chanacs_is_table_full(ca))
 		{
-			command_fail(si, fault_toomany, _("Channel %s access list is full."), mc->name);
+			command_fail(si, fault_toomany, _("Channel \2%s\2 access list is full."), mc->name);
 			chanacs_close(ca);
 			return;
 		}
@@ -245,9 +46,9 @@ static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 		req.ca = ca;
 		req.oldlevel = ca->level;
 
-		if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))
+		if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags, si->smu))
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to modify the access entry for \2%s\2 on \2%s\2."), target, mc->name);
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			chanacs_close(ca);
 			return;
 		}
@@ -260,7 +61,7 @@ static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 
 		if (!isnew)
 		{
-			/* they have access? change it! */
+			// they have access? change it!
 			logcommand(si, CMDLOG_SET, "ADD: \2%s\2 \2%s\2 on \2%s\2 (changed access)", mc->name, leveldesc, target);
 			command_success_nodata(si, _("\2%s\2's access on \2%s\2 has been changed to \2%s\2."), target, mc->name, leveldesc);
 			verbose(mc, "\2%s\2 changed \2%s\2's access to \2%s\2.", get_source_name(si), target, leveldesc);
@@ -304,12 +105,13 @@ static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 	 * the same, with the exception that if they had access before, now it doesn't tell what it got
 	 * changed from (I considered the effort to put an extra lookup in not worth it. --w00t
 	 */
-	/* just assume there's just one entry for that user -- jilles */
+
+	// just assume there's just one entry for that user -- jilles
 
 	isnew = ca->level == 0;
 	if (isnew && chanacs_is_table_full(ca))
 	{
-		command_fail(si, fault_toomany, _("Channel %s access list is full."), mc->name);
+		command_fail(si, fault_toomany, _("Channel \2%s\2 access list is full."), mc->name);
 		chanacs_close(ca);
 		return;
 	}
@@ -317,9 +119,9 @@ static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 	req.ca = ca;
 	req.oldlevel = ca->level;
 
-	if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))
+	if (!chanacs_modify(ca, &addflags, &removeflags, restrictflags, si->smu))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to modify the access entry for \2%s\2 on \2%s\2."), mt->name, mc->name);
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		chanacs_close(ca);
 		return;
 	}
@@ -331,29 +133,30 @@ static void cs_xop_do_add(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 
 	if (!isnew)
 	{
-		/* they have access? change it! */
+		// they have access? change it!
 		logcommand(si, CMDLOG_SET, "ADD: \2%s\2 \2%s\2 on \2%s\2 (changed access)", mc->name, leveldesc, mt->name);
 		command_success_nodata(si, _("\2%s\2's access on \2%s\2 has been changed to \2%s\2."), mt->name, mc->name, leveldesc);
 		verbose(mc, "\2%s\2 changed \2%s\2's access to \2%s\2.", get_source_name(si), mt->name, leveldesc);
 	}
 	else
 	{
-		/* they have no access, add */
+		// they have no access, add
 		logcommand(si, CMDLOG_SET, "ADD: \2%s\2 \2%s\2 on \2%s\2", mc->name, leveldesc, mt->name);
 		command_success_nodata(si, _("\2%s\2 has been added to the %s list for \2%s\2."), mt->name, leveldesc, mc->name);
 		verbose(mc, "\2%s\2 added \2%s\2 to the %s list.", get_source_name(si), mt->name, leveldesc);
 	}
 }
 
-static void cs_xop_do_del(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *target, unsigned int level, const char *leveldesc)
+static void
+cs_xop_do_del(struct sourceinfo *si, struct mychan *mc, struct myentity *mt, char *target, unsigned int level, const char *leveldesc)
 {
-	chanacs_t *ca;
-	hook_channel_acl_req_t req;
+	struct chanacs *ca;
+	struct hook_channel_acl_req req;
 
-	/* let's finally make this sane.. --w00t */
+	// let's finally make this sane.. --w00t
 	if (!mt)
 	{
-		/* we might be deleting a hostmask */
+		// we might be deleting a hostmask
 		if (!validhostmask(target))
 		{
 			command_fail(si, fault_badparams, _("\2%s\2 is neither a nickname nor a hostmask."), target);
@@ -375,7 +178,7 @@ static void cs_xop_do_del(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 		req.newlevel = ca->level;
 
 		hook_call_channel_acl_change(&req);
-		object_unref(ca);
+		atheme_object_unref(ca);
 
 		verbose(mc, "\2%s\2 removed \2%s\2 from the %s list.", get_source_name(si), target, leveldesc);
 		logcommand(si, CMDLOG_SET, "DEL: \2%s\2 \2%s\2 from \2%s\2", mc->name, leveldesc, target);
@@ -397,36 +200,38 @@ static void cs_xop_do_del(sourceinfo_t *si, mychan_t *mc, myentity_t *mt, char *
 	req.newlevel = ca->level;
 
 	hook_call_channel_acl_change(&req);
-	object_unref(ca);
+	atheme_object_unref(ca);
 
 	command_success_nodata(si, _("\2%s\2 has been removed from the %s list for \2%s\2."), mt->name, leveldesc, mc->name);
 	logcommand(si, CMDLOG_SET, "DEL: \2%s\2 \2%s\2 from \2%s\2", mc->name, leveldesc, mt->name);
 	verbose(mc, "\2%s\2 removed \2%s\2 from the %s list.", get_source_name(si), mt->name, leveldesc);
 }
 
-
-static void cs_xop_do_list(sourceinfo_t *si, mychan_t *mc, unsigned int level, const char *leveldesc, bool operoverride)
+static void
+cs_xop_do_list(struct sourceinfo *si, struct mychan *mc, unsigned int level, const char *leveldesc, bool operoverride)
 {
-	chanacs_t *ca;
-	int i = 0;
+	struct chanacs *ca;
+	unsigned int i = 0;
 	mowgli_node_t *n;
 
 	command_success_nodata(si, _("%s list for \2%s\2:"), leveldesc ,mc->name);
 	MOWGLI_ITER_FOREACH(n, mc->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 		if (ca->level == level)
 		{
 			if (ca->entity == NULL)
-				command_success_nodata(si, "%d: \2%s\2", ++i, ca->host);
+				command_success_nodata(si, "%u: \2%s\2", ++i, ca->host);
 			else if (isuser(ca->entity) && MOWGLI_LIST_LENGTH(&user(ca->entity)->logins))
-				command_success_nodata(si, _("%d: \2%s\2 (logged in)"), ++i, ca->entity->name);
+				command_success_nodata(si, _("%u: \2%s\2 (logged in)"), ++i, ca->entity->name);
 			else
-				command_success_nodata(si, _("%d: \2%s\2 (not logged in)"), ++i, ca->entity->name);
+				command_success_nodata(si, _("%u: \2%s\2 (not logged in)"), ++i, ca->entity->name);
 		}
 	}
-	/* XXX */
-	command_success_nodata(si, _("Total of \2%d\2 %s in %s list of \2%s\2."), i, (i == 1) ? "entry" : "entries", leveldesc, mc->name);
+
+	command_success_nodata(si, ngettext(N_("Total of \2%u\2 entry in %s list of \2%s\2."),
+	                                    N_("Total of \2%u\2 entries in %s list of \2%s\2."),
+	                                    i), i, leveldesc, mc->name);
 
 	if (operoverride)
 		logcommand(si, CMDLOG_ADMIN, "LIST: \2%s\2 \2%s\2 (oper override)", mc->name, leveldesc);
@@ -434,13 +239,172 @@ static void cs_xop_do_list(sourceinfo_t *si, mychan_t *mc, unsigned int level, c
 		logcommand(si, CMDLOG_GET, "LIST: \2%s\2 \2%s\2", mc->name, leveldesc);
 }
 
-static void cs_cmd_forcexop(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_xop(struct sourceinfo *si, int parc, char *parv[], const char *leveldesc)
+{
+	struct myentity *mt;
+	struct mychan *mc;
+	bool operoverride = false;
+	unsigned int restrictflags;
+	const char *chan = parv[0];
+	const char *cmd = parv[1];
+	char *uname = parv[2];
+	unsigned int level;
+
+	if (!cmd || !chan)
+	{
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "XOP");
+		command_fail(si, fault_needmoreparams, _("Syntax: SOP|AOP|HOP|VOP <#channel> ADD|DEL|LIST <nickname>"));
+		return;
+	}
+
+	if ((strcasecmp("LIST", cmd)) && (!uname))
+	{
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "XOP");
+		command_fail(si, fault_needmoreparams, _("Syntax: SOP|AOP|HOP|VOP <#channel> ADD|DEL|LIST <nickname>"));
+		return;
+	}
+
+	/* make sure they're registered, logged in
+	 * and the founder of the channel before
+	 * we go any further.
+	 */
+	if (!si->smu)
+	{
+		// if they're opers and just want to LIST, they don't have to log in
+		if (!(has_priv(si, PRIV_CHAN_AUSPEX) && !strcasecmp("LIST", cmd)))
+		{
+			command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
+			return;
+		}
+	}
+
+	mc = mychan_find(chan);
+	if (!mc)
+	{
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
+		return;
+	}
+
+	if (metadata_find(mc, "private:close:closer") && (!has_priv(si, PRIV_CHAN_AUSPEX) || strcasecmp("LIST", cmd)))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
+		return;
+	}
+
+	level = get_template_flags(mc, leveldesc);
+	if (level & CA_FOUNDER)
+	{
+		command_fail(si, fault_noprivs, _("\2%s\2 %s template has founder flag, not allowing XOP command."), chan, leveldesc);
+		return;
+	}
+
+	// ADD
+	if (!strcasecmp("ADD", cmd))
+	{
+		mt = myentity_find_ext(uname);
+
+		// As in /cs flags, allow founder to do anything
+		restrictflags = chanacs_source_flags(mc, si);
+		if (restrictflags & CA_FOUNDER)
+			restrictflags = ca_all;
+
+		/* The following is a bit complicated, to allow for
+		 * possible future denial of granting +f */
+		if (!(restrictflags & CA_FLAGS))
+		{
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+			return;
+		}
+		restrictflags = allow_flags(mc, restrictflags);
+		if ((restrictflags & level) != level)
+		{
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+			return;
+		}
+		cs_xop_do_add(si, mc, mt, uname, level, leveldesc, restrictflags);
+	}
+
+	else if (!strcasecmp("DEL", cmd))
+	{
+		mt = myentity_find_ext(uname);
+
+		// As in /cs flags, allow founder to do anything -- fix for #64: allow self removal.
+		restrictflags = chanacs_source_flags(mc, si);
+		if (restrictflags & CA_FOUNDER || entity(si->smu) == mt)
+			restrictflags = ca_all;
+
+		/* The following is a bit complicated, to allow for
+		 * possible future denial of granting +f */
+		if (!(restrictflags & CA_FLAGS))
+		{
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+			return;
+		}
+		restrictflags = allow_flags(mc, restrictflags);
+		if ((restrictflags & level) != level)
+		{
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+			return;
+		}
+		cs_xop_do_del(si, mc, mt, uname, level, leveldesc);
+	}
+
+	else if (!strcasecmp("LIST", cmd))
+	{
+		if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))
+		{
+			if (has_priv(si, PRIV_CHAN_AUSPEX))
+				operoverride = true;
+			else
+			{
+				command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+				return;
+			}
+		}
+		cs_xop_do_list(si, mc, level, leveldesc, operoverride);
+	}
+}
+
+static void
+cs_cmd_sop(struct sourceinfo *si, int parc, char *parv[])
+{
+	cs_xop(si, parc, parv, "SOP");
+}
+
+static void
+cs_cmd_aop(struct sourceinfo *si, int parc, char *parv[])
+{
+	cs_xop(si, parc, parv, "AOP");
+}
+
+static void
+cs_cmd_vop(struct sourceinfo *si, int parc, char *parv[])
+{
+	cs_xop(si, parc, parv, "VOP");
+}
+
+static void
+cs_cmd_hop(struct sourceinfo *si, int parc, char *parv[])
+{
+	/* Don't reject the command. This helps the rare case where
+	 * a network switches to a non-halfop ircd: users can still
+	 * remove pre-transition HOP entries.
+	 */
+	if (!ircd->uses_halfops && si->su != NULL)
+		notice(chansvs.nick, si->su->nick, "Warning: Your IRC server does not support halfops.");
+
+	cs_xop(si, parc, parv, "HOP");
+}
+
+static void
+cs_cmd_forcexop(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
-	chanacs_t *ca;
-	mychan_t *mc = mychan_find(chan);
+	struct chanacs *ca;
+	struct mychan *mc = mychan_find(chan);
 	mowgli_node_t *n;
-	int changes;
+	unsigned int changes;
 	unsigned int newlevel;
 	const char *desc;
 	unsigned int ca_sop, ca_aop, ca_hop, ca_vop;
@@ -454,19 +418,19 @@ static void cs_cmd_forcexop(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
-		return;
-	}
-
-	if (metadata_find(mc, "private:close:closer"))
-	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!is_founder(mc, entity(si->smu)))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+		return;
+	}
+
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
@@ -478,51 +442,150 @@ static void cs_cmd_forcexop(sourceinfo_t *si, int parc, char *parv[])
 	changes = 0;
 	MOWGLI_ITER_FOREACH(n, mc->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (ca->level & CA_AKICK)
 			continue;
+
 		if (ca->level & CA_FOUNDER)
-			newlevel = custom_founder_check(), desc = "Founder";
+		{
+			newlevel = custom_founder_check();
+			desc = "Founder";
+		}
 		else if (!(~ca->level & ca_sop))
-			newlevel = ca_sop, desc = "SOP";
+		{
+			newlevel = ca_sop;
+			desc = "SOP";
+		}
 		else if (ca->level == ca_aop)
-			newlevel = ca_aop, desc = "AOP";
+		{
+			newlevel = ca_aop;
+			desc = "AOP";
+		}
 		else if (ca->level == ca_hop)
-			newlevel = ca_hop, desc = "HOP";
+		{
+			newlevel = ca_hop;
+			desc = "HOP";
+		}
 		else if (ca->level == ca_vop)
-			newlevel = ca_vop, desc = "VOP";
+		{
+			newlevel = ca_vop;
+			desc = "VOP";
+		}
 		else if (ca->level & (CA_SET | CA_RECOVER | CA_FLAGS))
-			newlevel = ca_sop, desc = "SOP";
+		{
+			newlevel = ca_sop;
+			desc = "SOP";
+		}
 		else if (ca->level & (CA_OP | CA_AUTOOP | CA_REMOVE))
-			newlevel = ca_aop, desc = "AOP";
+		{
+			newlevel = ca_aop;
+			desc = "AOP";
+		}
 		else if (ca->level & (CA_HALFOP | CA_AUTOHALFOP | CA_TOPIC))
 		{
 			if (ca_hop == ca_vop)
-				newlevel = ca_aop, desc = "AOP";
+			{
+				newlevel = ca_aop;
+				desc = "AOP";
+			}
 			else
-				newlevel = ca_hop, desc = "HOP";
+			{
+				newlevel = ca_hop;
+				desc = "HOP";
+			}
 		}
-		else /*if (ca->level & CA_AUTOVOICE)*/
-			newlevel = ca_vop, desc = "VOP";
+		else
+		{
+			newlevel = ca_vop;
+			desc = "VOP";
+		}
 #if 0
 		else
 			newlevel = 0;
 #endif
+
 		if (newlevel == ca->level)
 			continue;
+
 		changes++;
 		command_success_nodata(si, "%s: %s -> %s", ca->entity != NULL ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), desc);
-		chanacs_modify_simple(ca, newlevel, ~newlevel);
+		chanacs_modify_simple(ca, newlevel, ~newlevel, si->smu);
 	}
-	command_success_nodata(si, _("FORCEXOP \2%s\2 done (\2%d\2 changes)"), mc->name, changes);
+	command_success_nodata(si, ngettext(N_("FORCEXOP \2%s\2 done (\2%u\2 change)"),
+	                                    N_("FORCEXOP \2%s\2 done (\2%u\2 changes)"),
+	                                    changes), mc->name, changes);
 	if (changes > 0)
-		verbose(mc, "\2%s\2 reset access levels to xOP (\2%d\2 changes)", get_source_name(si), changes);
-	logcommand(si, CMDLOG_SET, "FORCEXOP: \2%s\2 (\2%d\2 changes)", mc->name, changes);
+		verbose(mc, "\2%s\2 reset access levels to XOP (\2%u\2 changes)", get_source_name(si), changes);
+	logcommand(si, CMDLOG_SET, "FORCEXOP: \2%s\2 (\2%u\2 changes)", mc->name, changes);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_sop = {
+	.name           = "SOP",
+	.desc           = N_("Manipulates a channel SOP list."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_sop,
+	.help           = { .path = "cservice/xop" },
+};
+
+static struct command cs_aop = {
+	.name           = "AOP",
+	.desc           = N_("Manipulates a channel AOP list."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_aop,
+	.help           = { .path = "cservice/xop" },
+};
+
+static struct command cs_hop = {
+	.name           = "HOP",
+	.desc           = N_("Manipulates a channel HOP list."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_hop,
+	.help           = { .path = "cservice/xop" },
+};
+
+static struct command cs_vop = {
+	.name           = "VOP",
+	.desc           = N_("Manipulates a channel VOP list."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_vop,
+	.help           = { .path = "cservice/xop" },
+};
+
+static struct command cs_forcexop = {
+	.name           = "FORCEXOP",
+	.desc           = N_("Forces access levels to XOP levels."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_forcexop,
+	.help           = { .path = "cservice/forcexop" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	service_named_bind_command("chanserv", &cs_aop);
+	service_named_bind_command("chanserv", &cs_sop);
+	if (ircd != NULL && ircd->uses_halfops)
+		service_named_bind_command("chanserv", &cs_hop);
+	service_named_bind_command("chanserv", &cs_vop);
+	service_named_bind_command("chanserv", &cs_forcexop);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_aop);
+	service_named_unbind_command("chanserv", &cs_sop);
+	service_named_unbind_command("chanserv", &cs_hop);
+	service_named_unbind_command("chanserv", &cs_vop);
+	service_named_unbind_command("chanserv", &cs_forcexop);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/xop", MODULE_UNLOAD_CAPABILITY_OK)

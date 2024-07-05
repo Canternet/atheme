@@ -1,17 +1,20 @@
-# Copyright (c) 2010 Atheme Development Group
-# Rights to this code are documented in doc/LICENSE.
-
-PLUGIN = main$(PLUGIN_SUFFIX)
-
-SRCS = main.c gather.c fix.c
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
+#
+# Copyright (C) 2010 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../extra.mk
+
+plugindir = ${MODDIR}/modules/chanfix
+PLUGIN    = main${PLUGIN_SUFFIX}
+SRCS      =                 \
+    fix.c                   \
+    gather.c                \
+    main.c
+
 include ../../buildsys.mk
 
-plugindir = $(MODDIR)/modules/chanfix
-
 CPPFLAGS += -I../../include
-CFLAGS += $(PLUGIN_CFLAGS)
-LDFLAGS += $(PLUGIN_LDFLAGS)
-LIBS +=	-L../../libathemecore -lathemecore ${LDFLAGS_RPATH}
-
+LDFLAGS  += -L../../libathemecore
+LIBS     += -lathemecore

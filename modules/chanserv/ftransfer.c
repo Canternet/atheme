@@ -1,41 +1,21 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService FTRANSFER function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/ftransfer", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_ftransfer(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_ftransfer = { "FTRANSFER", N_("Forces foundership transfer of a channel."),
-                           PRIV_CHAN_ADMIN, 2, cs_cmd_ftransfer, { .path = "cservice/ftransfer" } };
-
-void _modinit(module_t *m)
+static void
+cs_cmd_ftransfer(struct sourceinfo *si, int parc, char *parv[])
 {
-        service_named_bind_command("chanserv", &cs_ftransfer);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_ftransfer);
-}
-
-static void cs_cmd_ftransfer(sourceinfo_t *si, int parc, char *parv[])
-{
-	myentity_t *mt;
-	mychan_t *mc;
+	struct myentity *mt;
+	struct mychan *mc;
 	mowgli_node_t *n;
-	chanacs_t *ca;
+	struct chanacs *ca;
 	char *name = parv[0];
 	char *newfndr = parv[1];
 	const char *oldfndr;
@@ -49,13 +29,19 @@ static void cs_cmd_ftransfer(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!(mt = myentity_find_ext(newfndr)))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), newfndr);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, newfndr);
+		return;
+	}
+
+	if (!myentity_allow_foundership(mt))
+	{
+		command_fail(si, fault_toomany, _("\2%s\2 cannot take foundership of a channel."), mt->name);
 		return;
 	}
 
 	if (!(mc = mychan_find(name)))
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), name);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, name);
 		return;
 	}
 
@@ -66,8 +52,8 @@ static void cs_cmd_ftransfer(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* no maxchans check (intentional -- this is an oper command) */
-	wallops("%s transferred foundership of %s from %s to %s", get_oper_name(si), name, oldfndr, mt->name);
+	// no maxchans check (intentional -- this is an oper command)
+	wallops("\2%s\2 transferred foundership of %s from %s to %s", get_oper_name(si), name, oldfndr, mt->name);
 	logcommand(si, CMDLOG_ADMIN | LG_REGISTER, "FTRANSFER: \2%s\2 transferred from \2%s\2 to \2%s\2", mc->name, oldfndr, mt->name);
 	verbose(mc, "Foundership transfer from \2%s\2 to \2%s\2 forced by %s administration.", oldfndr, mt->name, me.netname);
 	command_success_nodata(si, _("Foundership of \2%s\2 has been transferred from \2%s\2 to \2%s\2."),
@@ -80,18 +66,37 @@ static void cs_cmd_ftransfer(sourceinfo_t *si, int parc, char *parv[])
 		 * ensures we don't crash if not -- jilles
 		 */
 		if (ca->entity != NULL && ca->level & CA_FOUNDER)
-			chanacs_modify_simple(ca, CA_FLAGS, CA_FOUNDER);
+			chanacs_modify_simple(ca, CA_FLAGS, CA_FOUNDER, si->smu);
 	}
 	mc->used = CURRTIME;
 	chanacs_change_simple(mc, mt, NULL, CA_FOUNDER_0, 0, entity(si->smu));
 
-	/* delete transfer metadata -- prevents a user from stealing it back */
+	// delete transfer metadata -- prevents a user from stealing it back
 	metadata_delete(mc, "private:verify:founderchg:newfounder");
 	metadata_delete(mc, "private:verify:founderchg:timestamp");
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_ftransfer = {
+	.name           = "FTRANSFER",
+	.desc           = N_("Forces foundership transfer of a channel."),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_ftransfer,
+	.help           = { .path = "cservice/ftransfer" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_ftransfer);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_ftransfer);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/ftransfer", MODULE_UNLOAD_CAPABILITY_OK)

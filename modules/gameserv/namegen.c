@@ -1,56 +1,29 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock <nenolod@nenolod.net> et al
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 William Pitcock <nenolod@nenolod.net>, et al.
  *
  * Name generator.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "gameserv_common.h"
 #include "namegen_tab.h"
 
-DECLARE_MODULE_V1
-(
-	"gameserv/namegen", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void command_namegen(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cmd_namegen = { "NAMEGEN", N_("Generates some names to ponder."), AC_NONE, 2, command_namegen, { .path = "gameserv/namegen" } };
-
-void _modinit(module_t * m)
-{
-	service_named_bind_command("gameserv", &cmd_namegen);
-
-	service_named_bind_command("chanserv", &cmd_namegen);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("gameserv", &cmd_namegen);
-
-	service_named_unbind_command("chanserv", &cmd_namegen);
-}
-
-static void command_namegen(sourceinfo_t *si, int parc, char *parv[])
+static void
+command_namegen(struct sourceinfo *si, int parc, char *parv[])
 {
 	unsigned int iter;
 	unsigned int amt = 20;
 	char buf[BUFSIZE];
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (!gs_do_parameters(si, &parc, &parv, &mc))
 		return;
 
-	if (parv[0])
-		amt = atoi(parv[0]);
-
-
-	/* limit to 20 */
-	if (amt > 20)
+	// limit to 20
+	if ((parv[0] && ! string_to_uint(parv[0], &amt)) || amt > 20)
 		amt = 20;
 
 	*buf = '\0';
@@ -60,7 +33,7 @@ static void command_namegen(sourceinfo_t *si, int parc, char *parv[])
 		char namebuf[BUFSIZE];
 		unsigned int medial_iter;
 
-		/* Here we generate the name. */
+		// Here we generate the name.
 		mowgli_strlcpy(namebuf, begin_sym[rand() % BEGIN_SYM_SZ], BUFSIZE);
 
 		for (medial_iter = rand() % 3; medial_iter > 0; medial_iter--)
@@ -76,11 +49,32 @@ static void command_namegen(sourceinfo_t *si, int parc, char *parv[])
 		mowgli_strlcat(buf, iter + 1 < amt ? ", " : ".", BUFSIZE);
 	}
 
-	gs_command_report(si, "Some names to ponder: %s", buf);
+	gs_command_report(si, _("Some names to ponder: %s"), buf);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cmd_namegen = {
+	.name           = "NAMEGEN",
+	.desc           = N_("Generates some names to ponder."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &command_namegen,
+	.help           = { .path = "gameserv/namegen" },
+};
+
+static void
+mod_init(struct module ATHEME_VATTR_UNUSED *const restrict m)
+{
+	service_named_bind_command("gameserv", &cmd_namegen);
+
+	service_named_bind_command("chanserv", &cmd_namegen);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("gameserv", &cmd_namegen);
+
+	service_named_unbind_command("chanserv", &cmd_namegen);
+}
+
+SIMPLE_DECLARE_MODULE_V1("gameserv/namegen", MODULE_UNLOAD_CAPABILITY_OK)

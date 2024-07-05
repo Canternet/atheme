@@ -1,36 +1,29 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * servers.c: Server and network state tracking.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2013 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * servers.c: Server and network state tracking.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
-mowgli_patricia_t *sidlist;
+static void server_delete_serv(struct server *s);
+
+static mowgli_patricia_t *sidlist = NULL;
+static mowgli_heap_t *serv_heap = NULL;
+static mowgli_heap_t *tld_heap = NULL;
+
 mowgli_patricia_t *servlist;
 mowgli_list_t tldlist;
-
-mowgli_heap_t *serv_heap;
-mowgli_heap_t *tld_heap;
-
-static void server_delete_serv(server_t *s);
 
 /*
  * init_servers()
@@ -47,10 +40,11 @@ static void server_delete_serv(server_t *s);
  *     - if the heap or dtrees fail to initialize, the program
  *       will abort.
  */
-void init_servers(void)
+void
+init_servers(void)
 {
-	serv_heap = sharedheap_get(sizeof(server_t));
-	tld_heap = sharedheap_get(sizeof(tld_t));
+	serv_heap = sharedheap_get(sizeof(struct server));
+	tld_heap = sharedheap_get(sizeof(struct tld));
 
 	if (serv_heap == NULL || tld_heap == NULL)
 	{
@@ -81,9 +75,10 @@ void init_servers(void)
  * Side Effects:
  *     - the new server object is added to the server and sid DTree.
  */
-server_t *server_add(const char *name, unsigned int hops, server_t *uplink, const char *id, const char *desc)
+struct server *
+server_add(const char *name, unsigned int hops, struct server *uplink, const char *id, const char *desc)
 {
-	server_t *s;
+	struct server *s;
 	const char *tld;
 
 	/* Masked servers must have a SID */
@@ -166,23 +161,25 @@ server_t *server_add(const char *name, unsigned int hops, server_t *uplink, cons
  * Side Effects:
  *     - all users and servers attached to the target are recursively deleted
  */
-void server_delete(const char *name)
+void
+server_delete(const char *name)
 {
-	server_t *s = server_find(name);
+	struct server *s = server_find(name);
 
 	if (!s)
 	{
-		slog(LG_DEBUG, "server_delete(): called for nonexistant server: %s", name);
+		slog(LG_DEBUG, "server_delete(): called for nonexistent server: %s", name);
 
 		return;
 	}
 	server_delete_serv(s);
 }
 
-static void server_delete_serv(server_t *s)
+static void
+server_delete_serv(struct server *s)
 {
-	server_t *child;
-	user_t *u;
+	struct server *child;
+	struct user *u;
 	mowgli_node_t *n, *tn;
 
 	if (s == me.me)
@@ -196,21 +193,21 @@ static void server_delete_serv(server_t *s)
 	}
 
 	if (s->sid)
-		slog(me.connected ? LG_NETWORK : LG_DEBUG, "server_delete(): %s (%s), uplink %s (%d users)",
+		slog(me.connected ? LG_NETWORK : LG_DEBUG, "server_delete(): %s (%s), uplink %s (%u users)",
 				s->name, s->sid,
 				s->uplink != NULL ? s->uplink->name : "<none>",
 				s->users);
 	else
-		slog(me.connected ? LG_NETWORK : LG_DEBUG, "server_delete(): %s, uplink %s (%d users)",
+		slog(me.connected ? LG_NETWORK : LG_DEBUG, "server_delete(): %s, uplink %s (%u users)",
 				s->name, s->uplink != NULL ? s->uplink->name : "<none>",
 				s->users);
 
-	hook_call_server_delete((&(hook_server_delete_t){ .s = s }));
+	hook_call_server_delete((&(struct hook_server_delete){ .s = s }));
 
 	/* first go through it's users and kill all of them */
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, s->userlist.head)
 	{
-		u = (user_t *)n->data;
+		u = (struct user *)n->data;
 		/* This user split, allow bursted logins for the account.
 		 * XXX should we do this here?
 		 * -- jilles */
@@ -245,10 +242,9 @@ static void server_delete_serv(server_t *s)
 	if (s->flags & SF_JUPE_PENDING)
 		jupe(s->name, "Juped");
 
-	free(s->name);
-	free(s->desc);
-	if (s->sid)
-		free(s->sid);
+	sfree(s->name);
+	sfree(s->desc);
+	sfree(s->sid);
 
 	mowgli_heap_free(serv_heap, s);
 
@@ -270,9 +266,10 @@ static void server_delete_serv(server_t *s)
  * Side Effects:
  *     - none
  */
-server_t *server_find(const char *name)
+struct server *
+server_find(const char *name)
 {
-	server_t *s;
+	struct server *s;
 
 	s = mowgli_patricia_retrieve(sidlist, name);
 	if (s != NULL)
@@ -296,9 +293,10 @@ server_t *server_find(const char *name)
  * Side Effects:
  *     - the TLD object is registered with the TLD list.
  */
-tld_t *tld_add(const char *name)
+struct tld *
+tld_add(const char *name)
 {
-        tld_t *tld;
+        struct tld *tld;
         mowgli_node_t *n = mowgli_node_create();
 
         slog(LG_DEBUG, "tld_add(): %s", name);
@@ -328,14 +326,15 @@ tld_t *tld_add(const char *name)
  * Side Effects:
  *     - the TLD object is removed and deregistered from the TLD list.
  */
-void tld_delete(const char *name)
+void
+tld_delete(const char *name)
 {
-        tld_t *tld = tld_find(name);
+        struct tld *tld = tld_find(name);
         mowgli_node_t *n;
 
         if (!tld)
         {
-                slog(LG_DEBUG, "tld_delete(): called for nonexistant tld: %s", name);
+                slog(LG_DEBUG, "tld_delete(): called for nonexistent tld: %s", name);
 
                 return;
         }
@@ -346,7 +345,7 @@ void tld_delete(const char *name)
         mowgli_node_delete(n, &tldlist);
         mowgli_node_free(n);
 
-        free(tld->name);
+        sfree(tld->name);
         mowgli_heap_free(tld_heap, tld);
 
         cnt.tld--;
@@ -367,9 +366,10 @@ void tld_delete(const char *name)
  * Side Effects:
  *     - none
  */
-tld_t *tld_find(const char *name)
+struct tld *
+tld_find(const char *name)
 {
-        tld_t *tld;
+        struct tld *tld;
         mowgli_node_t *n;
 
 	if (name == NULL)
@@ -377,7 +377,7 @@ tld_t *tld_find(const char *name)
 
         MOWGLI_ITER_FOREACH(n, tldlist.head)
         {
-                tld = (tld_t *)n->data;
+                tld = (struct tld *)n->data;
 
                 if (!strcasecmp(name, tld->name))
                         return tld;

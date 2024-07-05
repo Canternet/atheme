@@ -1,23 +1,18 @@
-/* main.c - rpgserv main() routine.
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+ *
+ * main.c - rpgserv main() routine.
  * based on elly's rpgserv for atheme-6.x --nenolod
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "prettyprint.h"
 
-DECLARE_MODULE_V1
-(
-	"rpgserv/set", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void rs_cmd_set(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t rs_set = { "SET", N_("Sets RPG properties of your channel."),
-                     AC_NONE, 3, rs_cmd_set, { .path = "rpgserv/set" } };
-
-static void setting_clear(sourceinfo_t *si, mychan_t *mc, char *setting)
+static void
+setting_clear(struct sourceinfo *si, struct mychan *mc, char *setting)
 {
 	char nbuf[64];
 	snprintf(nbuf, sizeof(nbuf), "private:rpgserv:%s", setting);
@@ -29,7 +24,8 @@ static void setting_clear(sourceinfo_t *si, mychan_t *mc, char *setting)
 	command_success_nodata(si, _("Setting \2%s\2 cleared for \2%s\2."), setting, mc->name);
 }
 
-static int inlist(const char *needle, const char **haystack)
+static int
+inlist(const char *needle, const char **haystack)
 {
 	int i;
 	for (i = 0; haystack[i]; i++)
@@ -38,7 +34,8 @@ static int inlist(const char *needle, const char **haystack)
 	return -1;
 }
 
-static void set_genre(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_genre(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	char copy[512];
 	char *sp = NULL, *t = NULL;
@@ -58,7 +55,8 @@ static void set_genre(sourceinfo_t *si, mychan_t *mc, char *value)
 	command_success_nodata(si, _("Genre for \2%s\2 set to \2%s\2."), mc->name, value);
 }
 
-static void set_period(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_period(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	char copy[512];
 	char *sp = NULL, *t = NULL;
@@ -78,7 +76,8 @@ static void set_period(sourceinfo_t *si, mychan_t *mc, char *value)
 	command_success_nodata(si, _("Period for \2%s\2 set to \2%s\2."), mc->name, value);
 }
 
-static void set_ruleset(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_ruleset(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	if (inlist(value, ruleset_keys) < 0) {
 		command_fail(si, fault_badparams, _("\2%s\2 is not a valid ruleset."), value);
@@ -89,7 +88,8 @@ static void set_ruleset(sourceinfo_t *si, mychan_t *mc, char *value)
 	command_success_nodata(si, _("Ruleset for \2%s\2 set to \2%s\2."), mc->name, value);
 }
 
-static void set_rating(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_rating(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	if (inlist(value, rating_keys) < 0) {
 		command_fail(si, fault_badparams, _("\2%s\2 is not a valid rating."), value);
@@ -100,7 +100,8 @@ static void set_rating(sourceinfo_t *si, mychan_t *mc, char *value)
 	command_success_nodata(si, _("Rating for \2%s\2 set to \2%s\2."), mc->name, value);
 }
 
-static void set_system(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_system(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	char copy[512];
 	char *sp = NULL, *t = NULL;
@@ -119,45 +120,49 @@ static void set_system(sourceinfo_t *si, mychan_t *mc, char *value)
 	command_success_nodata(si, _("System for \2%s\2 set to \2%s\2."), mc->name, value);
 }
 
-static void set_setting(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_setting(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	metadata_add(mc, "private:rpgserv:setting", value);
 	command_success_nodata(si, _("Setting for \2%s\2 set."), mc->name);
 }
 
-static void set_storyline(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_storyline(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	metadata_add(mc, "private:rpgserv:storyline", value);
 	command_success_nodata(si, _("Storyline for \2%s\2 set."), mc->name);
 }
 
-static void set_summary(sourceinfo_t *si, mychan_t *mc, char *value)
+static void
+set_summary(struct sourceinfo *si, struct mychan *mc, char *value)
 {
 	metadata_add(mc, "private:rpgserv:summary", value);
 	command_success_nodata(si, _("Summary for \2%s\2 set."), mc->name);
 }
 
-static struct {
-	char *name;
-	void (*func)(sourceinfo_t *si, mychan_t *mc, char *value);
-} settings[] = {
-	{ "genre", set_genre },
-	{ "period", set_period },
-	{ "ruleset", set_ruleset },
-	{ "rating", set_rating },
-	{ "system", set_system },
-	{ "setting", set_setting },
-	{ "storyline", set_storyline },
-	{ "summary", set_summary },
-	{ NULL, NULL },
-};
-
-static void rs_cmd_set(sourceinfo_t *si, int parc, char *parv[])
+static void
+rs_cmd_set(struct sourceinfo *si, int parc, char *parv[])
 {
+	static const struct {
+		const char *name;
+		void (*func)(struct sourceinfo *, struct mychan *, char *);
+	} settings[] = {
+		{ "genre", set_genre },
+		{ "period", set_period },
+		{ "ruleset", set_ruleset },
+		{ "rating", set_rating },
+		{ "system", set_system },
+		{ "setting", set_setting },
+		{ "storyline", set_storyline },
+		{ "summary", set_summary },
+		{ NULL, NULL },
+	};
+
 	char *chan;
 	char *setting;
 	char *value = NULL;
-	mychan_t *mc;
+	struct mychan *mc;
 	int i;
 
 	if (parc < 2)
@@ -175,13 +180,13 @@ static void rs_cmd_set(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_SET))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -210,12 +215,27 @@ static void rs_cmd_set(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-void _modinit(module_t *m)
+static struct command rs_set = {
+	.name           = "SET",
+	.desc           = N_("Sets RPG properties of your channel."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &rs_cmd_set,
+	.help           = { .path = "rpgserv/set" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "rpgserv/main")
+
 	service_named_bind_command("rpgserv", &rs_set);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("rpgserv", &rs_set);
 }
+
+SIMPLE_DECLARE_MODULE_V1("rpgserv/set", MODULE_UNLOAD_CAPABILITY_OK)

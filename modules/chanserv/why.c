@@ -1,46 +1,26 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 William Pitcock, et al.
  *
  * This file contains code for the ChanServ WHY function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/why", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_why(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_why = { "WHY", N_("Explains channel access logic."),
-		     AC_NONE, 2, cs_cmd_why, { .path = "cservice/why" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("chanserv", &cs_why);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_why);
-}
-
-static void cs_cmd_why(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_why(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *chan = parv[0];
 	const char *targ = parv[1];
-	mychan_t *mc;
-	user_t *u;
-	myuser_t *mu;
+	struct mychan *mc;
+	struct user *u;
+	struct myuser *mu;
 	mowgli_node_t *n;
-	chanacs_t *ca;
-	entity_chanacs_validation_vtable_t *vt;
-	metadata_t *md;
+	struct chanacs *ca;
+	const struct entity_vtable *vt;
+	struct metadata *md;
 	bool operoverride = false;
 	int fl = 0;
 
@@ -68,7 +48,7 @@ static void cs_cmd_why(sourceinfo_t *si, int parc, char *parv[])
 
 	if (mc == NULL)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."),
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED,
 			chan);
 		return;
 	}
@@ -79,14 +59,14 @@ static void cs_cmd_why(sourceinfo_t *si, int parc, char *parv[])
 			operoverride = true;
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
@@ -95,37 +75,39 @@ static void cs_cmd_why(sourceinfo_t *si, int parc, char *parv[])
 	else
 		logcommand(si, CMDLOG_GET, "WHY: \2%s!%s@%s\2 on \2%s\2", u->nick, u->user, u->vhost, mc->name);
 
+	bool show_akicks = ( chanacs_source_has_flag(mc, si, CA_ACLVIEW) || has_priv(si, PRIV_CHAN_AUSPEX) );
+
 	MOWGLI_ITER_FOREACH(n, mc->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (ca->entity == NULL)
 			continue;
-		vt = myentity_get_chanacs_validator(ca->entity);
+		vt = myentity_get_vtable(ca->entity);
 		if (ca->entity == entity(u->myuser) ||
 				(vt->match_user != NULL ?
-				 vt->match_user(ca, u) != NULL :
+				 vt->match_user(ca->entity, u) :
 				 u->myuser != NULL &&
-				 vt->match_entity(ca, entity(u->myuser)) != NULL))
+				 vt->match_entity(ca->entity, entity(u->myuser)) ))
 		{
 			fl |= ca->level;
 			if (ca->entity == entity(u->myuser))
 				command_success_nodata(si,
-					"\2%s\2 has flags \2%s\2 in \2%s\2 because they are logged in as \2%s\2.",
+					_("\2%s\2 has flags \2%s\2 in \2%s\2 because they are logged in as \2%s\2."),
 					u->nick, bitmask_to_flags2(ca->level, 0), mc->name, ca->entity->name);
 			else if (isgroup(ca->entity))
 				command_success_nodata(si,
-					"\2%s\2 has flags \2%s\2 in \2%s\2 because they are a member of \2%s\2.",
+					_("\2%s\2 has flags \2%s\2 in \2%s\2 because they are a member of \2%s\2."),
 					u->nick, bitmask_to_flags2(ca->level, 0), mc->name, ca->entity->name);
 			else
 				command_success_nodata(si,
-					"\2%s\2 has flags \2%s\2 in \2%s\2 because they match \2%s\2.",
+					_("\2%s\2 has flags \2%s\2 in \2%s\2 because they match \2%s\2."),
 					u->nick, bitmask_to_flags2(ca->level, 0), mc->name, ca->entity->name);
-			if (ca->level & CA_AKICK)
+			if (ca->level & CA_AKICK && show_akicks)
 			{
 				md = metadata_find(ca, "reason");
 				if (md != NULL)
-					command_success_nodata(si, "Ban reason: %s", md->value);
+					command_success_nodata(si, _("Ban reason: %s"), md->value);
 			}
 		}
 	}
@@ -134,13 +116,13 @@ static void cs_cmd_why(sourceinfo_t *si, int parc, char *parv[])
 		ca = n->data;
 		fl |= ca->level;
 		command_success_nodata(si,
-				"\2%s\2 has flags \2%s\2 in \2%s\2 because they match the mask \2%s\2.",
+				_("\2%s\2 has flags \2%s\2 in \2%s\2 because they match the mask \2%s\2."),
 				u->nick, bitmask_to_flags2(ca->level, 0), mc->name, ca->host);
-		if (ca->level & CA_AKICK)
+		if (ca->level & CA_AKICK && show_akicks)
 		{
 			md = metadata_find(ca, "reason");
 			if (md != NULL)
-				command_success_nodata(si, "Ban reason: %s", md->value);
+				command_success_nodata(si, _("Ban reason: %s"), md->value);
 		}
 	}
 
@@ -156,14 +138,33 @@ static void cs_cmd_why(sourceinfo_t *si, int parc, char *parv[])
 					entity(mu)->name);
 	}
 	if ((fl & (CA_AKICK | CA_EXEMPT)) == (CA_AKICK | CA_EXEMPT))
-		command_success_nodata(si, _("+e exempts from +b."));
+		command_success_nodata(si, _("\2+e\2 exempts from \2+b\2."));
 	else if (fl == 0)
 		command_success_nodata(si, _("\2%s\2 has no special access to \2%s\2."),
 				u->nick, mc->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_why = {
+	.name           = "WHY",
+	.desc           = N_("Explains channel access logic."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_why,
+	.help           = { .path = "cservice/why" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	service_named_bind_command("chanserv", &cs_why);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_why);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/why", MODULE_UNLOAD_CAPABILITY_OK)

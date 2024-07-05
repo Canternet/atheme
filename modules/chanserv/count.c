@@ -1,44 +1,23 @@
 /*
- * Copyright (c) 2005-2006 Patrick Fish, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 Patrick Fish, et al.
  *
  * This file contains code for the CService COUNT functions.
- *
  */
 
-#include "atheme.h"
-#include "template.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/count", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_count(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_count = { "COUNT", N_("Shows number of entries in access lists."),
-                         AC_NONE, 1, cs_cmd_count, { .path = "cservice/count" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_count);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_count);
-}
-
-static void cs_cmd_count(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_count(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
-	chanacs_t *ca;
-	mychan_t *mc = mychan_find(chan);
+	struct chanacs *ca;
+	struct mychan *mc = mychan_find(chan);
 	unsigned int ca_sop, ca_aop, ca_hop, ca_vop;
-	int vopcnt = 0, aopcnt = 0, hopcnt = 0, sopcnt = 0, akickcnt = 0;
-	int othercnt = 0;
+	unsigned int vopcnt = 0, aopcnt = 0, hopcnt = 0, sopcnt = 0, akickcnt = 0;
+	unsigned int othercnt = 0;
 	unsigned int i;
 	mowgli_node_t *n;
 	char str[512];
@@ -53,7 +32,7 @@ static void cs_cmd_count(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
@@ -63,14 +42,14 @@ static void cs_cmd_count(sourceinfo_t *si, int parc, char *parv[])
 			operoverride = true;
 		else
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
@@ -79,9 +58,14 @@ static void cs_cmd_count(sourceinfo_t *si, int parc, char *parv[])
 	ca_hop = get_template_flags(mc, "HOP");
 	ca_vop = get_template_flags(mc, "VOP");
 
+	bool show_akicks = true;
+
+	if (chansvs.hide_pubacl_akicks)
+		show_akicks = ( chanacs_source_has_flag(mc, si, CA_ACLVIEW) || has_priv(si, PRIV_CHAN_AUSPEX) );
+
 	MOWGLI_ITER_FOREACH(n, mc->chanacs.head)
 	{
-		ca = (chanacs_t *)n->data;
+		ca = (struct chanacs *)n->data;
 
 		if (ca->level == ca_vop)
 			vopcnt++;
@@ -96,27 +80,41 @@ static void cs_cmd_count(sourceinfo_t *si, int parc, char *parv[])
 		else
 			othercnt++;
 	}
-	if (ca_hop == ca_vop)
-		command_success_nodata(si, _("%s: VOP: %d, AOP: %d, SOP: %d, AKick: %d, Other: %d"),
-				chan, vopcnt, aopcnt, sopcnt, akickcnt, othercnt);
+	if (show_akicks)
+	{
+		if (ca_hop == ca_vop)
+			command_success_nodata(si, _("%s: VOP: %u, AOP: %u, SOP: %u, AKICK: %u, Other: %u"),
+					chan, vopcnt, aopcnt, sopcnt, akickcnt, othercnt);
+		else
+			command_success_nodata(si, _("%s: VOP: %u, HOP: %u, AOP: %u, SOP: %u, AKICK: %u, Other: %u"),
+					chan, vopcnt, hopcnt, aopcnt, sopcnt, akickcnt, othercnt);
+	}
 	else
-		command_success_nodata(si, _("%s: VOP: %d, HOP: %d, AOP: %d, SOP: %d, AKick: %d, Other: %d"),
-				chan, vopcnt, hopcnt, aopcnt, sopcnt, akickcnt, othercnt);
+	{
+		if (ca_hop == ca_vop)
+			command_success_nodata(si, _("%s: VOP: %u, AOP: %u, SOP: %u, Other: %u"),
+					chan, vopcnt, aopcnt, sopcnt, othercnt);
+		else
+			command_success_nodata(si, _("%s: VOP: %u, HOP: %u, AOP: %u, SOP: %u, Other: %u"),
+					chan, vopcnt, hopcnt, aopcnt, sopcnt, othercnt);
+	}
 	snprintf(str, sizeof str, "%s: ", chan);
 	for (i = 0; i < ARRAY_SIZE(chanacs_flags); i++)
 	{
 		if (!(ca_all & chanacs_flags[i].value))
 			continue;
+		if (chanacs_flags[i].value == CA_AKICK && !show_akicks)
+			continue;
 		othercnt = 0;
 		MOWGLI_ITER_FOREACH(n, mc->chanacs.head)
 		{
-			ca = (chanacs_t *)n->data;
+			ca = (struct chanacs *)n->data;
 
 			if (ca->level & chanacs_flags[i].value)
 				othercnt++;
 		}
 		snprintf(str + strlen(str), sizeof str - strlen(str),
-				"%c:%d ", (char) i, othercnt);
+				"%c:%u ", (char) i, othercnt);
 	}
 	command_success_nodata(si, "%s", str);
 
@@ -126,8 +124,27 @@ static void cs_cmd_count(sourceinfo_t *si, int parc, char *parv[])
 		logcommand(si, CMDLOG_GET, "COUNT: \2%s\2", mc->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_count = {
+	.name           = "COUNT",
+	.desc           = N_("Shows number of entries in access lists."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_count,
+	.help           = { .path = "cservice/count" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_count);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_count);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/count", MODULE_UNLOAD_CAPABILITY_OK)

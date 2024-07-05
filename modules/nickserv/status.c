@@ -1,45 +1,22 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
  *
  * This file contains code for the CService STATUS function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/status", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ns_cmd_acc(sourceinfo_t *si, int parc, char *parv[]);
-static void ns_cmd_status(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_status = { "STATUS", N_("Displays session information."), AC_NONE, 0, ns_cmd_status, { .path = "nickserv/status" } };
-command_t ns_acc = { "ACC", N_("Displays parsable session information."), AC_NONE, 2, ns_cmd_acc, { .path = "nickserv/acc" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("nickserv", &ns_acc);
-	service_named_bind_command("nickserv", &ns_status);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("nickserv", &ns_acc);
-	service_named_unbind_command("nickserv", &ns_status);
-}
-
-static void ns_cmd_acc(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_acc(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *targuser = parv[0];
 	const char *targaccount = parv[1];
-	user_t *u;
-	myuser_t *mu;
-	mynick_t *mn;
+	struct user *u;
+	struct myuser *mu;
+	struct mynick *mn;
 	bool show_id = config_options.show_entity_id || has_priv(si, PRIV_USER_AUSPEX);
 
 	if (!targuser)
@@ -90,19 +67,20 @@ static void ns_cmd_acc(sourceinfo_t *si, int parc, char *parv[])
 			show_id ? entity(mu)->id : "");
 }
 
-static void ns_cmd_status(sourceinfo_t *si, int parc, char *parv[])
+static void
+ns_cmd_status(struct sourceinfo *si, int parc, char *parv[])
 {
 	logcommand(si, CMDLOG_GET, "STATUS");
 
 	if (!si->smu)
-		command_success_nodata(si, _("You are not logged in."));
+		command_success_nodata(si, STR_NOT_LOGGED_IN);
 	else
 	{
 		command_success_nodata(si, _("You are logged in as \2%s\2."), entity(si->smu)->name);
 
 		if (is_soper(si->smu))
 		{
-			soper_t *soper = si->smu->soper;
+			struct soper *soper = si->smu->soper;
 
 			command_success_nodata(si, _("You are a services operator of class %s."), soper->operclass ? soper->operclass->name : soper->classname);
 		}
@@ -110,7 +88,7 @@ static void ns_cmd_status(sourceinfo_t *si, int parc, char *parv[])
 
 	if (si->su != NULL)
 	{
-		mynick_t *mn;
+		struct mynick *mn;
 
 		mn = mynick_find(si->su->nick);
 		if (mn != NULL && mn->owner != si->smu &&
@@ -125,8 +103,38 @@ static void ns_cmd_status(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("You are an IRC operator."));
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_status = {
+	.name           = "STATUS",
+	.desc           = N_("Displays session information."),
+	.access         = AC_NONE,
+	.maxparc        = 0,
+	.cmd            = &ns_cmd_status,
+	.help           = { .path = "nickserv/status" },
+};
+
+static struct command ns_acc = {
+	.name           = "ACC",
+	.desc           = N_("Displays parsable session information."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_acc,
+	.help           = { .path = "nickserv/acc" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
+
+	service_named_bind_command("nickserv", &ns_acc);
+	service_named_bind_command("nickserv", &ns_status);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("nickserv", &ns_acc);
+	service_named_unbind_command("nickserv", &ns_status);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/status", MODULE_UNLOAD_CAPABILITY_OK)

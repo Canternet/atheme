@@ -1,48 +1,45 @@
 /*
- * Copyright (c) 2005-2007 Jilles Tjoelker et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 Jilles Tjoelker, et al.
  *
  * Generic HTTPd
- *
  */
 
-#include "atheme.h"
-#include "httpd.h"
-#include "datastream.h"
+#include <atheme.h>
 
-#define REQUEST_MAX 65536 /* maximum size of one call */
+#define REQUEST_MAX 65536 // maximum size of one call
 
-DECLARE_MODULE_V1
-(
-	"misc/httpd", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static struct connection *listener = NULL;
+static mowgli_eventloop_timer_t *httpd_checkidle_timer = NULL;
 
-connection_t *listener;
-mowgli_list_t httpd_path_handlers;
+// conf stuff
+static mowgli_list_t conf_httpd_table;
 
-/* conf stuff */
-mowgli_list_t conf_httpd_table;
-struct httpd_configuration
-{
+static struct {
 	char *host;
 	char *www_root;
 	unsigned int port;
 } httpd_config;
 
-static void clear_httpddata(struct httpddata *hd)
+// Imported by modules/transport/*rpc/*rpc.so */
+extern mowgli_list_t httpd_path_handlers;
+mowgli_list_t httpd_path_handlers;
+
+static void
+clear_httpddata(struct httpddata *hd)
 {
 	hd->method[0] = '\0';
 	hd->filename[0] = '\0';
 	if (hd->requestbuf != NULL)
 	{
-		free(hd->requestbuf);
+		sfree(hd->requestbuf);
 		hd->requestbuf = NULL;
 	}
 	if (hd->replybuf != NULL)
 	{
-		free(hd->replybuf);
+		sfree(hd->replybuf);
 		hd->replybuf = NULL;
 	}
 	hd->length = 0;
@@ -52,7 +49,8 @@ static void clear_httpddata(struct httpddata *hd)
 	hd->sent_reply = false;
 }
 
-static int open_file(const char *filename)
+static int
+open_file(const char *filename)
 {
 	char fname[256];
 
@@ -64,7 +62,8 @@ static int open_file(const char *filename)
 	return open(fname, O_RDONLY);
 }
 
-static void process_header(connection_t *cptr, char *line)
+static void
+process_header(struct connection *cptr, char *line)
 {
 	struct httpddata *hd;
 	char *p;
@@ -105,7 +104,8 @@ static void process_header(connection_t *cptr, char *line)
 	}
 }
 
-static void check_close(connection_t *cptr)
+static void
+check_close(struct connection *cptr)
 {
 	struct httpddata *hd;
 
@@ -114,24 +114,37 @@ static void check_close(connection_t *cptr)
 		sendq_add_eof(cptr);
 }
 
-static void send_error(connection_t *cptr, int errorcode, const char *text, bool sendentity)
+static void
+send_error(struct connection *cptr, unsigned int errorcode, const char *text, bool sendentity)
 {
 	char buf1[300];
 	char buf2[700];
 
 	if (errorcode < 100 || errorcode > 999)
 		errorcode = 500;
-	snprintf(buf2, sizeof buf2, "HTTP/1.1 %d %s\r\n", errorcode, text);
-	snprintf(buf1, sizeof buf1, "HTTP/1.1 %d %s\r\n"
-			"Server: Atheme/%s\r\n"
-			"Content-Type: text/plain\r\n"
-			"Content-Length: %lu\r\n\r\n%s",
-			errorcode, text, PACKAGE_VERSION, (unsigned long)strlen(buf2),
-			sendentity ? buf2 : "");
+
+	memset(buf2, 0x00, sizeof buf2);
+
+	if (sendentity)
+		snprintf(buf2, sizeof buf2, "HTTP/1.1 %u %s\r\n", errorcode, text);
+
+	snprintf(buf1, sizeof buf1,
+	         "HTTP/1.1 %u %s\r\n"
+	         "Server: %s/%s\r\n"
+	         "Content-Type: text/plain\r\n"
+	         "Content-Length: %zu\r\n"
+	         "\r\n"
+	         "%s",
+	         errorcode, text,
+	         PACKAGE_TARNAME, PACKAGE_VERSION,
+	         strlen(buf2),
+	         buf2);
+
 	sendq_add(cptr, buf1, strlen(buf1));
 }
 
-static const char *content_type(const char *filename)
+static const char *
+content_type(const char *filename)
 {
 	const char *p;
 
@@ -155,7 +168,8 @@ static const char *content_type(const char *filename)
 	return "application/octet-stream";
 }
 
-static void httpd_recvqhandler(connection_t *cptr)
+static void
+httpd_recvqhandler(struct connection *cptr)
 {
 	char buf[BUFSIZE * 2];
 	char outbuf[BUFSIZE * 2];
@@ -166,14 +180,14 @@ static void httpd_recvqhandler(connection_t *cptr)
 	struct stat sb;
 	off_t count1;
 	mowgli_node_t *n;
-	path_handler_t *ph = NULL;
+	struct path_handler *ph = NULL;
 	bool is_get, is_post, handling_done = false;
 
 	hd = cptr->userdata;
 
 	MOWGLI_ITER_FOREACH(n, httpd_path_handlers.head)
 	{
-		ph = (path_handler_t *)n->data;
+		ph = (struct path_handler *)n->data;
 		handling_done = !strcmp(hd->filename, ph->path);
 
 		if (handling_done)
@@ -202,9 +216,9 @@ static void httpd_recvqhandler(connection_t *cptr)
 	count = recvq_getline(cptr, buf, sizeof buf - 1);
 	if (count <= 0)
 		return;
-	if (cptr->flags & CF_NONEWLINE)
+	if (CF_IS_NONEWLINE(cptr))
 	{
-		slog(LG_INFO, "httpd_recvqhandler(): throwing out fd %d (%s) for excessive line length", cptr->fd, cptr->hbuf);
+		slog(LG_INFO, "httpd_recvqhandler(): throwing out fd %d (%s) for excessive line length", cptr->fd, cptr->name);
 		send_error(cptr, 400, "Bad request", true);
 		sendq_add_eof(cptr);
 		return;
@@ -263,11 +277,17 @@ static void httpd_recvqhandler(connection_t *cptr)
 				return;
 			}
 			slog(LG_INFO, "httpd_recvqhandler(): 200 for %s", hd->filename);
+
 			snprintf(outbuf, sizeof outbuf,
-					"HTTP/1.1 200 OK\r\nServer: Atheme/%s\r\nContent-Type: %s\r\nContent-Length: %lu\r\n\r\n",
-					PACKAGE_VERSION,
-					content_type(hd->filename),
-					(unsigned long)sb.st_size);
+			         "HTTP/1.1 200 OK\r\n"
+			         "Server: %s/%s\r\n"
+			         "Content-Type: %s\r\n"
+			         "Content-Length: %lu\r\n"
+			         "\r\n",
+			         PACKAGE_TARNAME, PACKAGE_VERSION,
+			         content_type(hd->filename),
+			         (unsigned long) sb.st_size);
+
 			sendq_add(cptr, outbuf, strlen(outbuf));
 			count1 = is_get ? sb.st_size : 0;
 			while (count1 > 0)
@@ -284,7 +304,7 @@ static void httpd_recvqhandler(connection_t *cptr)
 			close(in);
 			if (count1 > 0)
 			{
-				slog(LG_INFO, "httpd_recvqhandler(): disconnecting fd %d (%s), read failed on %s", cptr->fd, cptr->hbuf, hd->filename);
+				slog(LG_INFO, "httpd_recvqhandler(): disconnecting fd %d (%s), read failed on %s", cptr->fd, cptr->name, hd->filename);
 				cptr->flags |= CF_DEAD;
 			}
 			else
@@ -313,8 +333,11 @@ static void httpd_recvqhandler(connection_t *cptr)
 			if (hd->expect_100_continue)
 			{
 				snprintf(outbuf, sizeof outbuf,
-						"HTTP/1.1 100 Continue\r\nServer: Atheme/%s\r\n\r\n",
-						PACKAGE_VERSION);
+				         "HTTP/1.1 100 Continue\r\n"
+				         "Server: %s/%s\r\n"
+				         "\r\n",
+				         PACKAGE_TARNAME, PACKAGE_VERSION);
+
 				sendq_add(cptr, outbuf, strlen(outbuf));
 			}
 			hd->requestbuf = smalloc(hd->length + 1);
@@ -324,30 +347,30 @@ static void httpd_recvqhandler(connection_t *cptr)
 		process_header(cptr, buf);
 }
 
-static void httpd_closehandler(connection_t *cptr)
+static void
+httpd_closehandler(struct connection *cptr)
 {
 	struct httpddata *hd;
 
-	slog(LG_DEBUG, "httpd_closehandler(): fd %d (%s) closed", cptr->fd, cptr->hbuf);
+	slog(LG_DEBUG, "httpd_closehandler(): fd %d (%s) closed", cptr->fd, cptr->name);
 	hd = cptr->userdata;
 	if (hd != NULL)
 	{
-		free(hd->requestbuf);
-		free(hd);
+		sfree(hd->requestbuf);
+		sfree(hd);
 	}
 	cptr->userdata = NULL;
 }
 
-static void do_listen(connection_t *cptr)
+static void
+do_listen(struct connection *cptr)
 {
-	connection_t *newptr;
-	struct httpddata *hd;
+	struct connection *newptr;
 
 	newptr = connection_accept_tcp(cptr, recvq_put, NULL);
-	slog(LG_DEBUG, "do_listen(): accepted httpd from %s fd %d", newptr->hbuf, newptr->fd);
-	hd = smalloc(sizeof(*hd));
-	hd->requestbuf = NULL;
-	hd->replybuf = NULL;
+	slog(LG_DEBUG, "do_listen(): accepted fd %d (%s)", newptr->fd, newptr->name);
+
+	struct httpddata *const hd = smalloc(sizeof *hd);
 	hd->connection_close = false;
 	clear_httpddata(hd);
 	newptr->userdata = hd;
@@ -355,10 +378,11 @@ static void do_listen(connection_t *cptr)
 	newptr->close_handler = httpd_closehandler;
 }
 
-static void httpd_checkidle(void *arg)
+static void
+httpd_checkidle(void *arg)
 {
 	mowgli_node_t *n, *tn;
-	connection_t *cptr;
+	struct connection *cptr;
 
 	(void)arg;
 	if (listener == NULL)
@@ -380,31 +404,29 @@ static void httpd_checkidle(void *arg)
 	}
 }
 
-static void httpd_config_ready(void *vptr)
+static void
+httpd_config_ready(void *vptr)
 {
 	if (httpd_config.host != NULL && httpd_config.port != 0)
 	{
-		/* Some code depends on connection_t.listener == listener. */
+		// Some code depends on struct connection -> listener == listener.
 		if (listener != NULL)
 			return;
 		listener = connection_open_listener_tcp(httpd_config.host,
 			httpd_config.port, do_listen);
 		if (listener == NULL)
-			slog(LG_ERROR, "httpd_config_ready(): failed to open listener on host %s port %d", httpd_config.host, httpd_config.port);
+			slog(LG_ERROR, "httpd_config_ready(): failed to open listener on host %s port %u", httpd_config.host, httpd_config.port);
 	}
 	else
 		slog(LG_ERROR, "httpd_config_ready(): httpd {} block missing or invalid");
 }
 
-static mowgli_eventloop_timer_t *httpd_checkidle_timer = NULL;
-
-void _modinit(module_t *m)
+static void
+mod_init(struct module ATHEME_VATTR_UNUSED *const restrict m)
 {
-	httpd_checkidle_timer = mowgli_timer_add(base_eventloop, "httpd_checkidle", httpd_checkidle, NULL, 60);
+	httpd_checkidle_timer = mowgli_timer_add(base_eventloop, "httpd_checkidle", httpd_checkidle, NULL, SECONDS_PER_MINUTE);
 
-	/* This module needs a rehash to initialize fully if loaded
-	 * at run time */
-	hook_add_event("config_ready");
+	// This module needs a rehash to initialize fully if loaded at run time
 	hook_add_config_ready(httpd_config_ready);
 
 	add_subblock_top_conf("HTTPD", &conf_httpd_table);
@@ -413,17 +435,17 @@ void _modinit(module_t *m)
 	add_uint_conf_item("PORT", &conf_httpd_table, 0, &httpd_config.port, 1, 65535, 0);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	mowgli_timer_destroy(base_eventloop, httpd_checkidle_timer);
 
 	hook_del_config_ready(httpd_config_ready);
-	connection_close_soon_children(listener);
+	connection_close_children(listener);
 	del_conf_item("HOST", &conf_httpd_table);
 	del_conf_item("WWW_ROOT", &conf_httpd_table);
 	del_conf_item("PORT", &conf_httpd_table);
 	del_top_conf("HTTPD");
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs ts=8 sw=8 noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("misc/httpd", MODULE_UNLOAD_CAPABILITY_OK)

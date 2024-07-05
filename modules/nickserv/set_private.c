@@ -1,31 +1,35 @@
 /*
- * Copyright (c) 2006-2007 William Pitcock, et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006-2007 William Pitcock, et al.
  *
  * This file contains routines to handle the NickServ SET PRIVATE command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "list_common.h"
 #include "list.h"
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_private", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
+static bool
+has_private(const struct mynick *mn, const void *arg)
+{
+	struct myuser *mu = mn->owner;
 
-/* SET PRIVATE ON|OFF */
-static void ns_cmd_set_private(sourceinfo_t *si, int parc, char *parv[])
+	return ( mu->flags & MU_PRIVATE ) == MU_PRIVATE;
+}
+
+// SET PRIVATE ON|OFF
+static void
+ns_cmd_set_private(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *params = parv[0];
 
 	if (!params)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "PRIVATE");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET PRIVATE");
 		return;
 	}
 
@@ -64,47 +68,42 @@ static void ns_cmd_set_private(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "PRIVATE");
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET PRIVATE");
 		return;
 	}
 }
 
-command_t ns_set_private = { "PRIVATE", N_("Hides information about you from other users."), AC_NONE, 1, ns_cmd_set_private, { .path = "nickserv/set_private" } };
+static struct command ns_set_private = {
+	.name           = "PRIVATE",
+	.desc           = N_("Hides information about you from other users."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_private,
+	.help           = { .path = "nickserv/set_private" },
+};
 
-static bool has_private(const mynick_t *mn, const void *arg)
+static void
+mod_init(struct module *const restrict m)
 {
-	myuser_t *mu = mn->owner;
-
-	return ( mu->flags & MU_PRIVATE ) == MU_PRIVATE;
-}
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-	command_add(&ns_set_private, *ns_set_cmdtree);
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
 
 	use_nslist_main_symbols(m);
 
-	static list_param_t private;
+	command_add(&ns_set_private, *ns_set_cmdtree);
+
+	static struct list_param private;
 	private.opttype = OPT_BOOL;
 	private.is_match = has_private;
 
 	list_register("private", &private);
-
-	use_account_private++;
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	command_delete(&ns_set_private, *ns_set_cmdtree);
 
 	list_unregister("private");
-
-	use_account_private--;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_private", MODULE_UNLOAD_CAPABILITY_OK)

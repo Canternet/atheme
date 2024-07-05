@@ -1,15 +1,17 @@
-#ifndef INLINE_HOSTSERV_H
-#define INLINE_HOSTSERV_H
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2013 Atheme Project (http://atheme.org/)
+ */
 
-typedef struct {
-        const char *host;
-	sourceinfo_t *si;
-	int approved;
-	const char *target;
-} hook_host_request_t;
+#ifndef ATHEME_MOD_HOSTSERV_HOSTSERV_H
+#define ATHEME_MOD_HOSTSERV_HOSTSERV_H 1
+
+#include <atheme.h>
 
 /*
- * do_sethost(user_t *u, char *host)
+ * do_sethost(struct user *u, char *host)
  *
  * Sets a virtual host on a single nickname/user.
  *
@@ -23,9 +25,9 @@ typedef struct {
  * Side Effects:
  *      - The vHost is set on the user.
  */
-static inline void do_sethost(user_t *u, const char *host)
+static inline void do_sethost(struct user *u, const char *host)
 {
-	service_t *svs;
+	struct service *svs;
 
         if (!strcmp(u->vhost, host ? host : u->host))
                 return;
@@ -36,7 +38,7 @@ static inline void do_sethost(user_t *u, const char *host)
 }
 
 /*
- * do_sethost_all(myuser_t *mu, char *host)
+ * do_sethost_all(struct myuser *mu, char *host)
  *
  * Sets a virtual host on all nicknames in an account.
  *
@@ -51,10 +53,10 @@ static inline void do_sethost(user_t *u, const char *host)
  *      - The vHost is set on all users logged into
  *        the account.
  */
-static inline void do_sethost_all(myuser_t *mu, const char *host)
+static inline void do_sethost_all(struct myuser *mu, const char *host)
 {
 	mowgli_node_t *n;
-        user_t *u;
+        struct user *u;
 
         MOWGLI_ITER_FOREACH(n, mu->logins.head)
         {
@@ -64,10 +66,10 @@ static inline void do_sethost_all(myuser_t *mu, const char *host)
         }
 }
 
-static inline void hs_sethost_all(myuser_t *mu, const char *host, const char *assigner)
+static inline void hs_sethost_all(struct myuser *mu, const char *host, const char *assigner)
 {
 	mowgli_node_t *n;
-	mynick_t *mn;
+	struct mynick *mn;
 	char buf[BUFSIZE];
 	char timestring[16];
 
@@ -90,4 +92,5 @@ static inline void hs_sethost_all(myuser_t *mu, const char *host, const char *as
 	else
 		metadata_delete(mu, "private:usercloak-assigner");
 }
-#endif
+
+#endif /* !ATHEME_MOD_HOSTSERV_HOSTSERV_H */

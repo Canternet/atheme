@@ -1,64 +1,37 @@
 /*
- * Copyright (c) 2012 William Pitcock <nenolod@dereferenced.org>.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2012 William Pitcock <nenolod@dereferenced.org>
+ * Copyright (C) 2016-2021 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanserv.h"
 
-DECLARE_MODULE_V1
-(
-	"chanserv/moderate", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+#define CSREQ_LIST_PERSIST_MDNAME "atheme.chanserv.moderate.csreq_list"
 
-static void cs_cmd_activate(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_reject(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_waiting(sourceinfo_t *si, int parc, char *parv[]);
-static void can_register(hook_channel_register_check_t *req);
-
-static command_t cs_activate = { "ACTIVATE", N_("Activates a pending registration"), PRIV_CHAN_ADMIN,
-				 2, cs_cmd_activate, { .path = "chanserv/activate" } };
-static command_t cs_reject   = { "REJECT", N_("Rejects a pending registration"), PRIV_CHAN_ADMIN,
-				 2, cs_cmd_reject, { .path = "chanserv/reject" } };
-static command_t cs_waiting  = { "WAITING", N_("View pending registrations"), PRIV_CHAN_ADMIN,
-				 1, cs_cmd_waiting, { .path = "chanserv/waiting" } };
-
-typedef struct {
+struct reg_request
+{
 	char *name;
-	myentity_t *mt;
+	struct myentity *mt;
 	time_t ts;
-} csreq_t;
+};
 
 static mowgli_patricia_t *csreq_list = NULL;
 static char *groupmemo;
 
-/*****************************************************************************/
-
-static csreq_t *csreq_create(const char *name, myentity_t *mt)
+static struct reg_request * ATHEME_FATTR_MALLOC
+csreq_create(const char *name, struct myentity *mt)
 {
-	csreq_t *cs;
-
 	return_val_if_fail(name != NULL, NULL);
 	return_val_if_fail(mt != NULL, NULL);
 
-	cs = smalloc(sizeof(csreq_t));
+	struct reg_request *const cs = smalloc(sizeof *cs);
 	cs->name = sstrdup(name);
 	cs->mt = mt;
 	cs->ts = CURRTIME;
@@ -68,29 +41,32 @@ static csreq_t *csreq_create(const char *name, myentity_t *mt)
 	return cs;
 }
 
-static csreq_t *csreq_find(const char *name)
+static struct reg_request *
+csreq_find(const char *name)
 {
 	return_val_if_fail(name != NULL, NULL);
 
 	return mowgli_patricia_retrieve(csreq_list, name);
 }
 
-static void csreq_destroy(csreq_t *cs)
+static void
+csreq_destroy(struct reg_request *cs)
 {
 	return_if_fail(cs != NULL);
 
 	mowgli_patricia_delete(csreq_list, cs->name);
-	free(cs->name);
-	free(cs);
+	sfree(cs->name);
+	sfree(cs);
 }
 
-static void csreq_demarshal(database_handle_t *db, const char *type)
+static void
+csreq_demarshal(struct database_handle *db, const char *type)
 {
         const char *chan = db_sread_word(db);
         const char *nick = db_sread_word(db);
         time_t req_ts = db_sread_time(db);
-	myentity_t *mt;
-	csreq_t *cs;
+	struct myentity *mt;
+	struct reg_request *cs;
 
 	mt = myentity_find(nick);
 	if (mt == NULL)
@@ -103,10 +79,11 @@ static void csreq_demarshal(database_handle_t *db, const char *type)
 	cs->ts = req_ts;
 }
 
-static void csreq_marshal_set(database_handle_t *db)
+static void
+csreq_marshal_set(struct database_handle *db)
 {
 	mowgli_patricia_iteration_state_t state;
-	csreq_t *cs;
+	struct reg_request *cs;
 
 	MOWGLI_PATRICIA_FOREACH(cs, &state, csreq_list)
 	{
@@ -118,11 +95,10 @@ static void csreq_marshal_set(database_handle_t *db)
 	}
 }
 
-/*****************************************************************************/
-
-static void send_memo(sourceinfo_t *si, myuser_t *mu, const char *memo, ...)
+static void ATHEME_FATTR_PRINTF(3, 4)
+send_memo(struct sourceinfo *si, struct myuser *mu, const char *memo, ...)
 {
-	service_t *msvs;
+	struct service *msvs;
 	va_list va;
 	char buf[BUFSIZE];
 
@@ -148,9 +124,10 @@ static void send_memo(sourceinfo_t *si, myuser_t *mu, const char *memo, ...)
 	}
 }
 
-static void send_group_memo(sourceinfo_t *si, const char *memo, ...)
+static void ATHEME_FATTR_PRINTF(2, 3)
+send_group_memo(struct sourceinfo *si, const char *memo, ...)
 {
-	service_t *msvs;
+	struct service *msvs;
 	va_list va;
 	char buf[BUFSIZE];
 
@@ -175,12 +152,11 @@ static void send_group_memo(sourceinfo_t *si, const char *memo, ...)
 	}
 }
 
-/*****************************************************************************/
-
-/* deny chanserv registrations but turn them into a request */
-static void can_register(hook_channel_register_check_t *req)
+// deny chanserv registrations but turn them into a request
+static void
+can_register(struct hook_channel_register_check *req)
 {
-	csreq_t *cs;
+	struct reg_request *cs;
 
 	return_if_fail(req != NULL);
 
@@ -193,28 +169,28 @@ static void can_register(hook_channel_register_check_t *req)
 	req->approved++;
 
 	cs = csreq_create(req->name, entity(req->si->smu));
-	command_success_nodata(req->si, _("\2%s\2 has channel moderation enabled.  Your request to register \2%s\2 has been received and should be processed shortly."),
-			       me.netname, cs->name);
+	command_success_nodata(req->si, _("\2%s\2 reviews every Channel Registration request. Your request to "
+	                                  "register \2%s\2 has been received and should be reviewed shortly."),
+	                                  me.netname, cs->name);
 
 	if (groupmemo != NULL)
-		send_group_memo(req->si, "[auto memo] Please register \2%s\2 for me!", req->name);
+		send_group_memo(req->si, "[auto memo] Please review channel \2%s\2 for me.", req->name);
 
 	logcommand(req->si, CMDLOG_REGISTER, "REGISTER: \2%s\2 (pending)", req->name);
 }
 
-/*****************************************************************************/
-
-static void cs_cmd_activate(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_activate(struct sourceinfo *si, int parc, char *parv[])
 {
-	myuser_t *mu;
-	mychan_t *mc;
-	csreq_t *cs;
-	chanuser_t *cu;
-	user_t *u;
-	channel_t *c;
+	struct myuser *mu;
+	struct mychan *mc;
+	struct reg_request *cs;
+	struct chanuser *cu;
+	struct user *u;
+	struct channel *c;
 	char str[BUFSIZE];
-	hook_channel_req_t hdata;
-	sourceinfo_t baked_si;
+	struct hook_channel_req hdata;
+	struct sourceinfo baked_si;
 	unsigned int fl;
 
 	if (!parv[0])
@@ -245,7 +221,7 @@ static void cs_cmd_activate(sourceinfo_t *si, int parc, char *parv[])
 	if (c != NULL && c->key == NULL)
 		mc->mlock_off |= CMODE_KEY;
 	mc->flags |= config_options.defcflags;
-	slog(LG_DEBUG, "cs_cmd_activate(): defcflags = %d, mc->flags = %d, guard? %s", config_options.defcflags, mc->flags, (mc->flags & MC_GUARD) ? "YES" : "NO");
+	slog(LG_DEBUG, "cs_cmd_activate(): defcflags = %u, mc->flags = %u, guard? %s", config_options.defcflags, mc->flags, (mc->flags & MC_GUARD) ? _("Yes") : _("No"));
 
 	chanacs_add(mc, cs->mt, custom_founder_check(), CURRTIME, entity(si->smu));
 
@@ -274,7 +250,7 @@ static void cs_cmd_activate(sourceinfo_t *si, int parc, char *parv[])
 
 		if (mc->chan != NULL)
 		{
-		        /* Allow the hook to override this. */
+		        // Allow the hook to override this.
 		        fl = chanacs_source_flags(mc, &baked_si);
 		        cu = chanuser_find(mc->chan, u);
 		        if (cu == NULL)
@@ -283,27 +259,33 @@ static void cs_cmd_activate(sourceinfo_t *si, int parc, char *parv[])
 		                        !(cu->modes & CSTATUS_OWNER))
         		{
 		                modestack_mode_param(si->service->nick, mc->chan, MTYPE_ADD,
-        	        	                ircd->owner_mchar[1], CLIENT_NAME(si->su));
+        	        	                ircd->owner_mchar[1], CLIENT_NAME(u));
         		        cu->modes |= CSTATUS_OWNER;
 		        }
         		else if (ircd->uses_protect && fl & CA_USEPROTECT && fl & CA_AUTOOP &&
 	        	                !(cu->modes & CSTATUS_PROTECT))
 		        {
 		                modestack_mode_param(si->service->nick, mc->chan, MTYPE_ADD,
-                		                ircd->protect_mchar[1], CLIENT_NAME(si->su));
+                		                ircd->protect_mchar[1], CLIENT_NAME(u));
         	        	cu->modes |= CSTATUS_PROTECT;
 		        }
 		}
 	}
 
 	csreq_destroy(cs);
+	/* Check if GUARD is enabled by default and if so, ChanServ should join even
+	 * if the founder is no longer present or identified. --siniStar
+	 */
+	if (mc->flags & MC_GUARD)
+		join(mc->name, chansvs.nick);
 	logcommand(si, CMDLOG_ADMIN, "ACTIVATE: \2%s\2", parv[0]);
 }
 
-static void cs_cmd_reject(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_reject(struct sourceinfo *si, int parc, char *parv[])
 {
-	csreq_t *cs;
-	myuser_t *mu;
+	struct reg_request *cs;
+	struct myuser *mu;
 
 	if (!parv[0])
 	{
@@ -329,17 +311,18 @@ static void cs_cmd_reject(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_ADMIN, "REJECT: \2%s\2", parv[0]);
 }
 
-static void cs_cmd_waiting(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_waiting(struct sourceinfo *si, int parc, char *parv[])
 {
 	mowgli_patricia_iteration_state_t state;
-	csreq_t *cs;
-	struct tm tm;
+	struct reg_request *cs;
+	struct tm *tm;
 	char strfbuf[BUFSIZE];
 
 	MOWGLI_PATRICIA_FOREACH(cs, &state, csreq_list)
 	{
-		tm = *localtime(&cs->ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&cs->ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 		command_success_nodata(si, _("\2%s\2 (\2%s\2) [%s (%s ago)]"),
 				       cs->name, cs->mt->name, strfbuf, time_ago(cs->ts));
@@ -349,29 +332,61 @@ static void cs_cmd_waiting(sourceinfo_t *si, int parc, char *parv[])
 	logcommand(si, CMDLOG_GET, "WAITING");
 }
 
-/*****************************************************************************/
+static struct command cs_activate = {
+	.name           = "ACTIVATE",
+	.desc           = N_("Activates a pending registration"),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_activate,
+	.help           = { .path = "cservice/activate" },
+};
 
-void _modinit(module_t *m)
+static struct command cs_reject = {
+	.name           = "REJECT",
+	.desc           = N_("Rejects a pending registration"),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_reject,
+	.help           = { .path = "cservice/reject" },
+};
+
+static struct command cs_waiting = {
+	.name           = "WAITING",
+	.desc           = N_("View pending registrations"),
+	.access         = PRIV_CHAN_ADMIN,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_waiting,
+	.help           = { .path = "cservice/waiting" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
-	csreq_list = mowgli_patricia_create(strcasecanon);
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+	if (! (csreq_list = mowgli_global_storage_get(CSREQ_LIST_PERSIST_MDNAME)))
+		csreq_list = mowgli_patricia_create(strcasecanon);
+	else
+		mowgli_global_storage_free(CSREQ_LIST_PERSIST_MDNAME);
 
 	service_named_bind_command("chanserv", &cs_activate);
 	service_named_bind_command("chanserv", &cs_reject);
 	service_named_bind_command("chanserv", &cs_waiting);
 
-	hook_add_event("channel_can_register");
 	hook_add_channel_can_register(can_register);
-
 	hook_add_db_write(csreq_marshal_set);
 
 	add_dupstr_conf_item("REGGROUP", &chansvs.me->conf_table, 0, &groupmemo, NULL);
 
 	db_register_type_handler("CSREQ", csreq_demarshal);
+
+	m->mflags |= MODFLAG_DBHANDLER;
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-	mowgli_patricia_destroy(csreq_list, NULL, NULL);
+	mowgli_global_storage_put(CSREQ_LIST_PERSIST_MDNAME, csreq_list);
 
 	service_named_unbind_command("chanserv", &cs_activate);
 	service_named_unbind_command("chanserv", &cs_reject);
@@ -384,3 +399,5 @@ void _moddeinit(module_unload_intent_t intent)
 
 	db_unregister_type_handler("CSREQ");
 }
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/moderate", MODULE_UNLOAD_CAPABILITY_RELOAD_ONLY)

@@ -1,51 +1,32 @@
 /*
- * Copyright (c) 2005-2007 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2011 Atheme Project (http://atheme.org/)
  *
  * This file contains code for the MemoServ SENDALL function
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"memoserv/sendall", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void ms_cmd_sendall(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ms_sendall = { "SENDALL", N_("Sends a memo to all accounts."),
-                         PRIV_ADMIN, 1, ms_cmd_sendall, { .path = "memoserv/sendall" } };
 static unsigned int *maxmemos;
 
-void _modinit(module_t *m)
+static void
+ms_cmd_sendall(struct sourceinfo *si, int parc, char *parv[])
 {
-        service_named_bind_command("memoserv", &ms_sendall);
-        MODULE_TRY_REQUEST_SYMBOL(m, maxmemos, "memoserv/main", "maxmemos");
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("memoserv", &ms_sendall);
-}
-
-static void ms_cmd_sendall(sourceinfo_t *si, int parc, char *parv[])
-{
-	/* misc structs etc */
-	myentity_t *mt;
+	// misc structs etc
+	struct myentity *mt;
 	mowgli_node_t *n;
-	mymemo_t *memo;
-	int sent = 0, tried = 0;
+	struct mymemo *memo;
+	unsigned int sent = 0, tried = 0;
 	bool ignored;
-	service_t *memoserv;
-	myentity_iteration_state_t state;
+	struct service *memoserv;
+	struct myentity_iteration_state state;
 
-	/* Grab args */
+	// Grab args
 	char *m = parv[0];
 
-	/* Arg validation */
+	// Arg validation
 	if (!m)
 	{
 		command_fail(si, fault_needmoreparams,
@@ -59,11 +40,11 @@ static void ms_cmd_sendall(sourceinfo_t *si, int parc, char *parv[])
 
 	if (si->smu->flags & MU_WAITAUTH)
 	{
-		command_fail(si, fault_notverified, _("You need to verify your email address before you may send memos."));
+		command_fail(si, fault_notverified, STR_EMAIL_NOT_VERIFIED);
 		return;
 	}
 
-	/* rate limit it -- jilles */
+	// rate limit it -- jilles
 	if (CURRTIME - si->smu->memo_ratelimit_time > MEMO_MAX_TIME)
 		si->smu->memo_ratelimit_num = 0;
 	if (si->smu->memo_ratelimit_num > MEMO_MAX_NUM && !has_priv(si, PRIV_FLOOD))
@@ -72,12 +53,10 @@ static void ms_cmd_sendall(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* Check for memo text length -- includes/common.h */
-	if (strlen(m) >= MEMOLEN)
+	// Check for memo text length -- includes/common.h
+	if (strlen(m) > MEMOLEN)
 	{
-		command_fail(si, fault_badparams,
-			"Please make sure your memo is less than %d characters", MEMOLEN);
-
+		command_fail(si, fault_badparams, _("Please make sure your memo is not greater than %u characters"), MEMOLEN);
 		return;
 	}
 
@@ -95,30 +74,30 @@ static void ms_cmd_sendall(sourceinfo_t *si, int parc, char *parv[])
 
 	MYENTITY_FOREACH_T(mt, &state, ENT_USER)
 	{
-		myuser_t *tmu = user(mt);
+		struct myuser *tmu = user(mt);
 
 		if (tmu == si->smu)
 			continue;
 
 		tried++;
 
-		/* Does the user allow memos? --pfish */
+		// Does the user allow memos? --pfish
 		if (tmu->flags & MU_NOMEMO)
 			continue;
 
-		/* Check to make sure target inbox not full */
+		// Check to make sure target inbox not full
 		if (tmu->memos.count >= *maxmemos)
 			continue;
 
-		/* As in SEND to a single user, make ignore fail silently */
+		// As in SEND to a single user, make ignore fail silently
 		sent++;
 
-		/* Make sure we're not on ignore */
+		// Make sure we're not on ignore
 		ignored = false;
 		MOWGLI_ITER_FOREACH(n, tmu->memo_ignores.head)
 		{
-			mynick_t *mn;
-			myuser_t *mu;
+			struct mynick *mn;
+			struct myuser *mu;
 
 			if (nicksvs.no_nick_ownership)
 				mu = myuser_find((const char *)n->data);
@@ -133,19 +112,19 @@ static void ms_cmd_sendall(sourceinfo_t *si, int parc, char *parv[])
 		if (ignored)
 			continue;
 
-		/* Malloc and populate struct */
-		memo = smalloc(sizeof(mymemo_t));
+		// Malloc and populate struct
+		memo = smalloc(sizeof *memo);
 		memo->sent = CURRTIME;
 		memo->status = MEMO_CHANNEL;
-		mowgli_strlcpy(memo->sender,entity(si->smu)->name,NICKLEN);
-		mowgli_strlcpy(memo->text, m, MEMOLEN);
+		mowgli_strlcpy(memo->sender, entity(si->smu)->name, sizeof memo->sender);
+		mowgli_strlcpy(memo->text, m, sizeof memo->text);
 
-		/* Create a linked list node and add to memos */
+		// Create a linked list node and add to memos
 		n = mowgli_node_create();
 		mowgli_node_add(memo, n, &tmu->memos);
 		tmu->memoct_new++;
 
-		/* Should we email this? */
+		// Should we email this?
 		if (tmu->flags & MU_EMAILMEMOS)
 		{
 			sendemail(si->su, tmu, EMAIL_MEMO, tmu->email, memo->text);
@@ -155,27 +134,49 @@ static void ms_cmd_sendall(sourceinfo_t *si, int parc, char *parv[])
 		if (memoserv == NULL)
 			memoserv = si->service;
 
-		/* Is the user online? If so, tell them about the new memo. */
+		// Is the user online? If so, tell them about the new memo.
 		if (si->su == NULL || !irccasecmp(si->su->nick, entity(si->smu)->name))
 			myuser_notice(memoserv->nick, tmu, "You have a new memo from %s (%zu).", entity(si->smu)->name, MOWGLI_LIST_LENGTH(&tmu->memos));
 		else
 			myuser_notice(memoserv->nick, tmu, "You have a new memo from %s (nick: %s) (%zu).", entity(si->smu)->name, si->su->nick, MOWGLI_LIST_LENGTH(&tmu->memos));
-		myuser_notice(memoserv->nick, tmu, _("To read it, type /%s%s READ %zu"),
-					ircd->uses_rcommand ? "" : "msg ", memoserv->disp, MOWGLI_LIST_LENGTH(&tmu->memos));
+
+		myuser_notice(si->service->nick, tmu, "To read it, type \2/msg %s READ %zu\2",
+		              memoserv->disp, MOWGLI_LIST_LENGTH(&tmu->memos));
 	}
 
-	/* Tell user memo sent, return */
+	// Tell user memo sent, return
 	if (sent > 4)
 		command_add_flood(si, FLOOD_HEAVY);
 	else if (sent > 1)
 		command_add_flood(si, FLOOD_MODERATE);
-	logcommand(si, CMDLOG_ADMIN, "SENDALL: \2%s\2 (%d/%d sent)", m, sent, tried);
-	command_success_nodata(si, _("The memo has been successfully sent to %d accounts."), sent);
+	logcommand(si, CMDLOG_ADMIN, "SENDALL: \2%s\2 (%u/%u sent)", m, sent, tried);
+	command_success_nodata(si, ngettext(N_("The memo has been successfully sent to \2%u\2 account."),
+	                                    N_("The memo has been successfully sent to \2%u\2 accounts."),
+	                                    sent), sent);
 	return;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ms_sendall = {
+	.name           = "SENDALL",
+	.desc           = N_("Sends a memo to all accounts."),
+	.access         = PRIV_ADMIN,
+	.maxparc        = 1,
+	.cmd            = &ms_cmd_sendall,
+	.help           = { .path = "memoserv/sendall" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+        MODULE_TRY_REQUEST_SYMBOL(m, maxmemos, "memoserv/main", "maxmemos")
+
+        service_named_bind_command("memoserv", &ms_sendall);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("memoserv", &ms_sendall);
+}
+
+SIMPLE_DECLARE_MODULE_V1("memoserv/sendall", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,27 +1,21 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005-2011 Atheme Project (http://atheme.org/)
  *
  * This file contains protocol support for bahamut-based ircd.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
-#include "protocol/unreal.h"
+#include <atheme.h>
+#include <atheme/protocol/unreal.h>
 
-DECLARE_MODULE_V1("protocol/unreal", true, _modinit, NULL, PACKAGE_STRING, "Atheme Development Group <http://www.atheme.org>");
+#define VALID_FLOOD_CHAR(c)	((c == 'c') || (c == 'j') || (c == 'k') || (c == 'm') || (c == 'n') || (c == 't'))
+#define VALID_ACTION_CHAR(c)	((c == 'm') || (c == 'M') || (c == 'C') || (c == 'R') || (c == 'i') || (c == 'K') \
+				 || (c == 'N') || (c == 'b'))
 
-static bool has_protoctl = false;
-static bool use_esvid = false;
-static bool use_mlock = false;
-static char ts6sid[3 + 1] = "";
-
-/* *INDENT-OFF* */
-
-ircd_t Unreal = {
+static struct ircd Unreal = {
 	.ircdname = "UnrealIRCd 3.1 or later",
 	.tldprefix = "$",
 	.uses_uid = true,
@@ -47,7 +41,7 @@ ircd_t Unreal = {
 	.flags = IRCD_HOLDNICK | IRCD_SASL_USE_PUID,
 };
 
-struct cmode_ unreal_mode_list[] = {
+static const struct cmode unreal_mode_list[] = {
   { 'i', CMODE_INVITE	},
   { 'm', CMODE_MOD	},
   { 'n', CMODE_NOEXT	},
@@ -70,21 +64,11 @@ struct cmode_ unreal_mode_list[] = {
   { 'G', CMODE_CENSOR	},
   { 'r', CMODE_CHANREG	},
   { 'P', CMODE_PERM	},
+  { 'T', CMODE_NONOTICE	},
   { '\0', 0 }
 };
 
-static bool check_jointhrottle(const char *, channel_t *, mychan_t *, user_t *, myuser_t *);
-static bool check_flood(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu);
-static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu);
-
-struct extmode unreal_ignore_mode_list[] = {
-  { 'j', check_jointhrottle },
-  { 'f', check_flood },
-  { 'L', check_forward },
-  { '\0', 0 }
-};
-
-struct cmode_ unreal_status_mode_list[] = {
+static const struct cmode unreal_status_mode_list[] = {
   { 'q', CSTATUS_OWNER	 },
   { 'a', CSTATUS_PROTECT },
   { 'o', CSTATUS_OP	 },
@@ -93,7 +77,7 @@ struct cmode_ unreal_status_mode_list[] = {
   { '\0', 0 }
 };
 
-struct cmode_ unreal_prefix_mode_list[] = {
+static const struct cmode unreal_prefix_mode_list[] = {
   { '*', CSTATUS_OWNER	 },
   { '~', CSTATUS_PROTECT },
   { '@', CSTATUS_OP	 },
@@ -102,7 +86,7 @@ struct cmode_ unreal_prefix_mode_list[] = {
   { '\0', 0 }
 };
 
-struct cmode_ unreal_user_mode_list[] = {
+static const struct cmode unreal_user_mode_list[] = {
   { 'A', UF_ADMIN    },
   { 'i', UF_INVIS    },
   { 'o', UF_IRCOP    },
@@ -110,13 +94,19 @@ struct cmode_ unreal_user_mode_list[] = {
   { '\0', 0 }
 };
 
-/* *INDENT-ON* */
+static bool has_protoctl = false;
+static bool use_esvid = false;
+static bool use_mlock = false;
+static char ts6sid[3 + 1] = "";
 
-static bool check_jointhrottle(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu)
+static bool
+check_jointhrottle(const char *value, struct channel *c, struct mychan *mc, struct user *u, struct myuser *mu)
 {
 	const char *p, *arg2;
 
-	p = value, arg2 = NULL;
+	p = value;
+	arg2 = NULL;
+
 	while (*p != '\0')
 	{
 		if (*p == ':')
@@ -136,22 +126,23 @@ static bool check_jointhrottle(const char *value, channel_t *c, mychan_t *mc, us
 	return true;
 }
 
-/* +f 3:1 or +f *3:1 (which is like +f [3t]:1 or +f [3t#b]:1) */
-static inline bool check_flood_old(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu)
+// +f 3:1 or +f *3:1 (which is like +f [3t]:1 or +f [3t#b]:1)
+static inline bool
+check_flood_old(const char *value, struct channel *c, struct mychan *mc, struct user *u, struct myuser *mu)
 {
 	bool found_colon = false;
 
 	return_val_if_fail(value != NULL, false);
 
-	/* x:y is 3 bytes long, so that is the minimum length of a +f parameter. */
+	// x:y is 3 bytes long, so that is the minimum length of a +f parameter.
 	if (strlen(value) < 3)
 		return false;
 
-	/* skip past the * if present */
+	// skip past the * if present
 	if (*value == '*')
 		value++;
 
-	/* check to make sure all bytes are numbers, allowing for one colon */
+	// check to make sure all bytes are numbers, allowing for one colon
 	while (*value != '\0')
 	{
 		if (*value == ':' && !found_colon)
@@ -162,39 +153,35 @@ static inline bool check_flood_old(const char *value, channel_t *c, mychan_t *mc
 		value++;
 	}
 
-	/* we have to have a colon in order for it to be valid */
+	// we have to have a colon in order for it to be valid
 	if (!found_colon)
 		return false;
 
 	return true;
 }
 
-#define VALID_FLOOD_CHAR(c)	((c == 'c') || (c == 'j') || (c == 'k') || (c == 'm') || (c == 'n') || (c == 't'))
-#define VALID_ACTION_CHAR(c)	((c == 'm') || (c == 'M') || (c == 'C') || (c == 'R') || (c == 'i') || (c == 'K') \
-				 || (c == 'N') || (c == 'b'))
-
-/*
- * +f *X:Y	 (handled by check_flood_old)
+/* +f *X:Y	 (handled by check_flood_old)
  * +f X:Y	 (handled by check_flood_old)
  *
  * +f [<number><letter>(#<letter>)(,...)]
  */
-static bool check_flood(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu)
+static bool
+check_flood(const char *value, struct channel *c, struct mychan *mc, struct user *u, struct myuser *mu)
 {
 	char evalbuf[BUFSIZE], *ep, *p;
 
 	if (*value != '[')
 		return check_flood_old(value, c, mc, u, mu);
 
-	/* copy this to a local buffer for evaluation */
+	// copy this to a local buffer for evaluation
 	mowgli_strlcpy(evalbuf, value, sizeof evalbuf);
 	ep = evalbuf + 1;
 
-	/* check that the parameter ends with a ] */
+	// check that the parameter ends with a ]
 	if ((p = strchr(ep, ']')) == NULL)
 		return false;
 
-	/* we have a ], blast it away and check for a colon. */
+	// we have a ], blast it away and check for a colon.
 	*p = '\0';
 	if (*(p + 1) != ':')
 		return false;
@@ -222,7 +209,7 @@ static bool check_flood(const char *value, channel_t *c, mychan_t *mc, user_t *u
 				continue;
 			}
 
-			/* not valid, needs to be # or nothing */
+			// not valid, needs to be # or nothing
 			return false;
 		}
 	}
@@ -230,10 +217,11 @@ static bool check_flood(const char *value, channel_t *c, mychan_t *mc, user_t *u
 	return true;
 }
 
-static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu)
+static bool
+check_forward(const char *value, struct channel *c, struct mychan *mc, struct user *u, struct myuser *mu)
 {
-	channel_t *target_c;
-	mychan_t *target_mc;
+	struct channel *target_c;
+	struct mychan *target_mc;
 
 	if (!VALID_GLOBAL_CHANNEL_PFX(value) || strlen(value) > 50)
 		return false;
@@ -246,22 +234,33 @@ static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t 
 	return true;
 }
 
-static mowgli_node_t *unreal_next_matching_ban(channel_t *c, user_t *u, int type, mowgli_node_t *first)
+static struct extmode unreal_ignore_mode_list[] = {
+  { 'j', check_jointhrottle },
+  { 'f', check_flood },
+  { 'L', check_forward },
+  { '\0', 0 }
+};
+
+static mowgli_node_t *
+unreal_next_matching_ban(struct channel *c, struct user *u, int type, mowgli_node_t *first)
 {
-	chanban_t *cb;
+	struct chanban *cb;
 	mowgli_node_t *n;
-	char hostbuf[NICKLEN+USERLEN+HOSTLEN];
-	char realbuf[NICKLEN+USERLEN+HOSTLEN];
-	char ipbuf[NICKLEN+USERLEN+HOSTLEN];
+	char hostbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1];
+	char realbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1];
+	char ipbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1];
 	char *p;
 	bool matched;
 	int exttype;
-	channel_t *target_c;
+	struct channel *target_c;
 
 	snprintf(hostbuf, sizeof hostbuf, "%s!%s@%s", u->nick, u->user, u->vhost);
 	snprintf(realbuf, sizeof realbuf, "%s!%s@%s", u->nick, u->user, u->host);
-	/* will be nick!user@ if ip unknown, doesn't matter */
+
+	// will be nick!user@ if ip unknown, doesn't matter
 	snprintf(ipbuf, sizeof ipbuf, "%s!%s@%s", u->nick, u->user, u->ip);
+
+	bool check_realhost = (config_options.masks_through_vhost || u->host == u->vhost);
 
 	MOWGLI_ITER_FOREACH(n, first)
 	{
@@ -270,17 +269,23 @@ static mowgli_node_t *unreal_next_matching_ban(channel_t *c, user_t *u, int type
 		if (cb->type != type)
 			continue;
 
-		if ((!match(cb->mask, hostbuf) || !match(cb->mask, realbuf) || !match(cb->mask, ipbuf)))
+		if (!match(cb->mask, hostbuf))
 			return n;
+		if (check_realhost && (!match(cb->mask, realbuf) || !match(cb->mask, ipbuf)))
+			return n;
+
 		if (cb->mask[0] == '~')
 		{
 			p = cb->mask + 1;
 			exttype = *p++;
+
 			if (exttype == '\0')
 				continue;
-			/* check parameter */
+
+			// check parameter
 			if (*p++ != ':')
 				p = NULL;
+
 			switch (exttype)
 			{
 				case 'a':
@@ -315,8 +320,8 @@ static mowgli_node_t *unreal_next_matching_ban(channel_t *c, user_t *u, int type
 	return NULL;
 }
 
-/* login to our uplink */
-static unsigned int unreal_server_login(void)
+static unsigned int
+unreal_server_login(void)
 {
 	int ret;
 
@@ -336,8 +341,8 @@ static unsigned int unreal_server_login(void)
 	return 0;
 }
 
-/* introduce a client */
-static void unreal_introduce_nick(user_t *u)
+static void
+unreal_introduce_nick(struct user *u)
 {
 	const char *umode = user_get_umodestr(u);
 
@@ -347,25 +352,26 @@ static void unreal_introduce_nick(user_t *u)
 		sts(":%s UID %s 1 %lu %s %s %s * %sS * * * :%s", ME, u->nick, (unsigned long)u->ts, u->user, u->host, u->uid, umode, u->gecos);
 }
 
-/* invite a user to a channel */
-static void unreal_invite_sts(user_t *sender, user_t *target, channel_t *channel)
+static void
+unreal_invite_sts(struct user *sender, struct user *target, struct channel *channel)
 {
 	sts(":%s INVITE %s %s", CLIENT_NAME(sender), CLIENT_NAME(target), channel->name);
 }
 
-static void unreal_quit_sts(user_t *u, const char *reason)
+static void
+unreal_quit_sts(struct user *u, const char *reason)
 {
 	sts(":%s QUIT :%s", CLIENT_NAME(u), reason);
 }
 
-/* WALLOPS wrapper */
-static void unreal_wallops_sts(const char *text)
+static void
+unreal_wallops_sts(const char *text)
 {
 	sts(":%s GLOBOPS :%s", ME, text);
 }
 
-/* join a channel */
-static void unreal_join_sts(channel_t *c, user_t *u, bool isnew, char *modes)
+static void
+unreal_join_sts(struct channel *c, struct user *u, bool isnew, char *modes)
 {
 	if (isnew)
 		sts(":%s SJOIN %lu %s %s :@%s", ME, (unsigned long)c->ts,
@@ -375,8 +381,8 @@ static void unreal_join_sts(channel_t *c, user_t *u, bool isnew, char *modes)
 				c->name, CLIENT_NAME(u));
 }
 
-/* lower TS */
-static void unreal_chan_lowerts(channel_t *c, user_t *u)
+static void
+unreal_chan_lowerts(struct channel *c, struct user *u)
 {
 	slog(LG_DEBUG, "unreal_chan_lowerts(): lowering TS for %s to %lu",
 			c->name, (unsigned long)c->ts);
@@ -384,16 +390,16 @@ static void unreal_chan_lowerts(channel_t *c, user_t *u)
 			channel_modes(c, true), CLIENT_NAME(u));
 }
 
-/* kicks a user from a channel */
-static void unreal_kick(user_t *source, channel_t *c, user_t *u, const char *reason)
+static void
+unreal_kick(struct user *source, struct channel *c, struct user *u, const char *reason)
 {
 	sts(":%s KICK %s %s :%s", source->nick, c->name, u->nick, reason);
 
 	chanuser_delete(c, u);
 }
 
-/* PRIVMSG wrapper */
-static void unreal_msg(const char *from, const char *target, const char *fmt, ...)
+static void ATHEME_FATTR_PRINTF(3, 4)
+unreal_msg(const char *from, const char *target, const char *fmt, ...)
 {
 	va_list ap;
 	char buf[BUFSIZE];
@@ -405,10 +411,11 @@ static void unreal_msg(const char *from, const char *target, const char *fmt, ..
 	sts(":%s PRIVMSG %s :%s", from, target, buf);
 }
 
-static void unreal_msg_global_sts(user_t *from, const char *mask, const char *text)
+static void
+unreal_msg_global_sts(struct user *from, const char *mask, const char *text)
 {
 	mowgli_node_t *n;
-	tld_t *tld;
+	struct tld *tld;
 
 	if (!strcmp(mask, "*"))
 	{
@@ -422,16 +429,17 @@ static void unreal_msg_global_sts(user_t *from, const char *mask, const char *te
 		sts(":%s PRIVMSG %s%s :%s", from ? CLIENT_NAME(from) : ME, ircd->tldprefix, mask, text);
 }
 
-/* NOTICE wrapper */
-static void unreal_notice_user_sts(user_t *from, user_t *target, const char *text)
+static void
+unreal_notice_user_sts(struct user *from, struct user *target, const char *text)
 {
 	sts(":%s NOTICE %s :%s", from ? CLIENT_NAME(from) : ME, CLIENT_NAME(target), text);
 }
 
-static void unreal_notice_global_sts(user_t *from, const char *mask, const char *text)
+static void
+unreal_notice_global_sts(struct user *from, const char *mask, const char *text)
 {
 	mowgli_node_t *n;
-	tld_t *tld;
+	struct tld *tld;
 
 	if (!strcmp(mask, "*"))
 	{
@@ -445,12 +453,14 @@ static void unreal_notice_global_sts(user_t *from, const char *mask, const char 
 		sts(":%s NOTICE %s%s :%s", from ? CLIENT_NAME(from) : ME, ircd->tldprefix, mask, text);
 }
 
-static void unreal_notice_channel_sts(user_t *from, channel_t *target, const char *text)
+static void
+unreal_notice_channel_sts(struct user *from, struct channel *target, const char *text)
 {
 	sts(":%s NOTICE %s :%s", from ? CLIENT_NAME(from) : ME, target->name, text);
 }
 
-static void unreal_numeric_sts(server_t *from, int numeric, user_t *target, const char *fmt, ...)
+static void ATHEME_FATTR_PRINTF(4, 5)
+unreal_numeric_sts(struct server *from, int numeric, struct user *target, const char *fmt, ...)
 {
 	va_list ap;
 	char buf[BUFSIZE];
@@ -462,8 +472,8 @@ static void unreal_numeric_sts(server_t *from, int numeric, user_t *target, cons
 	sts(":%s %d %s %s", SERVER_NAME(from), numeric, CLIENT_NAME(target), buf);
 }
 
-/* KILL wrapper */
-static void unreal_kill_id_sts(user_t *killer, const char *id, const char *reason)
+static void
+unreal_kill_id_sts(struct user *killer, const char *id, const char *reason)
 {
 	if (killer != NULL)
 	{
@@ -492,31 +502,32 @@ static void unreal_kill_id_sts(user_t *killer, const char *id, const char *reaso
 		sts(":%s KILL %s :%s (%s)", ME, id, me.name, reason);
 }
 
-/* PART wrapper */
-static void unreal_part_sts(channel_t *c, user_t *u)
+static void
+unreal_part_sts(struct channel *c, struct user *u)
 {
 	sts(":%s PART %s", CLIENT_NAME(u), c->name);
 }
 
-/* server-to-server KLINE wrapper */
-static void unreal_kline_sts(const char *server, const char *user, const char *host, long duration, const char *reason)
+static void
+unreal_kline_sts(const char *server, const char *user, const char *host, long duration, const char *reason)
 {
-	service_t *svs;
+	struct service *svs;
 
 	svs = service_find("operserv");
 	sts(":%s TKL + G %s %s %s %lu %lu :%s", ME, user, host, svs != NULL ? svs->nick : me.name, (unsigned long)(duration > 0 ? CURRTIME + duration : 0), (unsigned long)CURRTIME, reason);
 }
 
-/* server-to-server UNKLINE wrapper */
-static void unreal_unkline_sts(const char *server, const char *user, const char *host)
+static void
+unreal_unkline_sts(const char *server, const char *user, const char *host)
 {
-	service_t *svs;
+	struct service *svs;
 
 	svs = service_find("operserv");
 	sts(":%s TKL - G %s %s %s", ME, user, host, svs != NULL ? svs->nick : me.name);
 }
 
-static void unreal_xline_sts(const char *server, const char *realname, long duration, const char *reason)
+static void
+unreal_xline_sts(const char *server, const char *realname, long duration, const char *reason)
 {
 	char escapedreason[512], *p;
 
@@ -536,14 +547,16 @@ static void unreal_xline_sts(const char *server, const char *realname, long dura
 	sts(":%s SVSNLINE + %s :%s", ME, escapedreason, realname);
 }
 
-static void unreal_unxline_sts(const char *server, const char *realname)
+static void
+unreal_unxline_sts(const char *server, const char *realname)
 {
 	sts(":%s SVSNLINE - :%s", ME, realname);
 }
 
-static void unreal_qline_sts(const char *server, const char *name, long duration, const char *reason)
+static void
+unreal_qline_sts(const char *server, const char *name, long duration, const char *reason)
 {
-	service_t *svs;
+	struct service *svs;
 
 	if (*name == '#' || *name == '&')
 	{
@@ -555,16 +568,17 @@ static void unreal_qline_sts(const char *server, const char *name, long duration
 	sts(":%s TKL + Q * %s %s %lu %lu :%s", ME, name, svs != NULL ? svs->nick : me.name, (unsigned long)(duration > 0 ? CURRTIME + duration : 0), (unsigned long)CURRTIME, reason);
 }
 
-static void unreal_unqline_sts(const char *server, const char *name)
+static void
+unreal_unqline_sts(const char *server, const char *name)
 {
-	service_t *svs;
+	struct service *svs;
 
 	svs = service_find("operserv");
 	sts(":%s TKL - Q * %s %s", ME, name, svs != NULL ? svs->nick : me.name);
 }
 
-/* topic wrapper */
-static void unreal_topic_sts(channel_t *c, user_t *source, const char *setter, time_t ts, time_t prevts, const char *topic)
+static void
+unreal_topic_sts(struct channel *c, struct user *source, const char *setter, time_t ts, time_t prevts, const char *topic)
 {
 	return_if_fail(c != NULL);
 	return_if_fail(source != NULL);
@@ -572,8 +586,8 @@ static void unreal_topic_sts(channel_t *c, user_t *source, const char *setter, t
 	sts(":%s TOPIC %s %s %lu :%s", source->nick, c->name, setter, (unsigned long)ts, topic);
 }
 
-/* mode wrapper */
-static void unreal_mode_sts(char *sender, channel_t *target, char *modes)
+static void
+unreal_mode_sts(char *sender, struct channel *target, char *modes)
 {
 	return_if_fail(sender != NULL);
 	return_if_fail(target != NULL);
@@ -582,14 +596,14 @@ static void unreal_mode_sts(char *sender, channel_t *target, char *modes)
 	sts(":%s MODE %s %s", sender, target->name, modes);
 }
 
-/* ping wrapper */
-static void unreal_ping_sts(void)
+static void
+unreal_ping_sts(void)
 {
 	sts("PING :%s", ME);
 }
 
-/* protocol-specific stuff to do on login */
-static void unreal_on_login(user_t *u, myuser_t *account, const char *wantedhost)
+static void
+unreal_on_login(struct user *u, struct myuser *account, const char *wantedhost)
 {
 	return_if_fail(u != NULL);
 	return_if_fail(account != NULL);
@@ -598,8 +612,8 @@ static void unreal_on_login(user_t *u, myuser_t *account, const char *wantedhost
 	{
 		/* Can only do this for nickserv, and can only record identified
 		 * state if logged in to correct nick, sorry -- jilles
-		 */
-		/* imo, we should be using SVS2MODE to show the modechange here and on logout --w00t */
+		 *
+		 * imo, we should be using SVS2MODE to show the modechange here and on logout --w00t */
 		if (should_reg_umode(u))
 			sts(":%s SVS2MODE %s +rd %lu", nicksvs.nick, u->nick, (unsigned long)u->ts);
 
@@ -612,8 +626,8 @@ static void unreal_on_login(user_t *u, myuser_t *account, const char *wantedhost
 		sts(":%s SVS2MODE %s +d %s", nicksvs.nick, u->nick, entity(account)->name);
 }
 
-/* protocol-specific stuff to do on logout */
-static bool unreal_on_logout(user_t *u, const char *account)
+static bool
+unreal_on_logout(struct user *u, const char *account)
 {
 	return_val_if_fail(u != NULL, false);
 
@@ -623,9 +637,10 @@ static bool unreal_on_logout(user_t *u, const char *account)
 	return false;
 }
 
-static void unreal_jupe(const char *server, const char *reason)
+static void
+unreal_jupe(const char *server, const char *reason)
 {
-	service_t *svs;
+	struct service *svs;
 
 	server_delete(server);
 
@@ -634,7 +649,8 @@ static void unreal_jupe(const char *server, const char *reason)
 	sts(":%s SERVER %s 2 :%s", me.name, server, reason);
 }
 
-static void unreal_sethost_sts(user_t *source, user_t *target, const char *host)
+static void
+unreal_sethost_sts(struct user *source, struct user *target, const char *host)
 {
 	sts(":%s CHGHOST %s :%s", source->nick, target->nick, host);
 
@@ -647,13 +663,15 @@ static void unreal_sethost_sts(user_t *source, user_t *target, const char *host)
 	}
 }
 
-static void unreal_fnc_sts(user_t *source, user_t *u, const char *newnick, int type)
+static void
+unreal_fnc_sts(struct user *source, struct user *u, const char *newnick, int type)
 {
-	sts(":%s SVSNICK %s %s %lu", CLIENT_NAME(source), CLIENT_NAME(u), newnick,
-			(unsigned long)(CURRTIME - 60));
+	sts(":%s SVSNICK %s %s %lu", ME, CLIENT_NAME(u), newnick,
+			(unsigned long)(CURRTIME - SECONDS_PER_MINUTE));
 }
 
-static void unreal_holdnick_sts(user_t *source, int duration, const char *nick, myuser_t *mu)
+static void
+unreal_holdnick_sts(struct user *source, int duration, const char *nick, struct myuser *mu)
 {
 	if (duration > 0)
 		sts(":%s TKL + Q H %s %s %lu %lu :Reserved by %s for nickname owner (%s)",
@@ -666,21 +684,23 @@ static void unreal_holdnick_sts(user_t *source, int duration, const char *nick, 
 		sts(":%s TKL - Q H %s %s", ME, nick, source->nick);
 }
 
-static void unreal_quarantine_sts(user_t *source, user_t *victim, long duration, const char *reason)
+static void
+unreal_quarantine_sts(struct user *source, struct user *victim, long duration, const char *reason)
 {
 	sts(":%s SHUN +*@%s %ld :%s", source->nick, victim->host, duration, reason);
 }
 
-static void unreal_sasl_sts(char *target, char mode, char *data)
+static void
+unreal_sasl_sts(const char *target, char mode, const char *data)
 {
 	char servermask[BUFSIZE], *p;
-	service_t *saslserv;
+	struct service *saslserv;
 
 	saslserv = service_find("saslserv");
 	if (saslserv == NULL)
 		return;
 
-	/* extract the servername from the target. */
+	// extract the servername from the target.
 	mowgli_strlcpy(servermask, target, sizeof servermask);
 	p = strchr(servermask, '!');
 	if (p != NULL)
@@ -689,16 +709,17 @@ static void unreal_sasl_sts(char *target, char mode, char *data)
 	sts(":%s SASL %s %s %c %s", saslserv->me->nick, servermask, target, mode, data);
 }
 
-static void unreal_svslogin_sts(char *target, char *nick, char *user, char *host, myuser_t *account)
+static void
+unreal_svslogin_sts(const char *target, const char *nick, const char *user, const char *host, struct myuser *account)
 {
 	char servermask[BUFSIZE], *p;
-	service_t *saslserv;
+	struct service *saslserv;
 
 	saslserv = service_find("saslserv");
 	if (saslserv == NULL)
 		return;
 
-	/* extract the servername from the target. */
+	// extract the servername from the target.
 	mowgli_strlcpy(servermask, target, sizeof servermask);
 	p = strchr(servermask, '!');
 	if (p != NULL)
@@ -707,9 +728,10 @@ static void unreal_svslogin_sts(char *target, char *nick, char *user, char *host
 	sts(":%s SVSLOGIN %s %s %s", saslserv->me->nick, servermask, target, entity(account)->name);
 }
 
-static void unreal_mlock_sts(channel_t *c)
+static void
+unreal_mlock_sts(struct channel *c)
 {
-	mychan_t *mc = mychan_from(c);
+	struct mychan *mc = mychan_from(c);
 
 	if (use_mlock == false)
 		return;
@@ -721,13 +743,14 @@ static void unreal_mlock_sts(channel_t *c)
 				    mychan_get_sts_mlock(mc));
 }
 
-static void m_mlock(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_mlock(struct sourceinfo *si, int parc, char *parv[])
 {
-	channel_t *c;
-	mychan_t *mc;
+	struct channel *c;
+	struct mychan *mc;
 	const char *mlock;
 
-	/* Ignore MLOCK if the server isn't bursting, to avoid 'war' conditions */
+	// Ignore MLOCK if the server isn't bursting, to avoid 'war' conditions
 	if (si->s->flags & SF_EOB)
 		return;
 
@@ -736,7 +759,7 @@ static void m_mlock(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!(mc = mychan_from(c)))
 	{
-		/* Unregistered channel. Clear the MLOCK. */
+		// Unregistered channel. Clear the MLOCK.
 		sts(":%s MLOCK %lu %s :", ME, (unsigned long)c->ts, c->name);
 		return;
 	}
@@ -748,31 +771,42 @@ static void m_mlock(sourceinfo_t *si, int parc, char *parv[])
 	mlock = mychan_get_sts_mlock(mc);
 	if (0 != strcmp(parv[2], mlock))
 	{
-		/* MLOCK is changing, with the same TS. Bounce back the correct one. */
+		// MLOCK is changing, with the same TS. Bounce back the correct one.
 		sts(":%s MLOCK %lu %s :%s", ME, (unsigned long)c->ts, c->name, mlock);
 	}
 }
 
-static void m_sasl(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_sasl(struct sourceinfo *si, int parc, char *parv[])
 {
-	sasl_message_t smsg;
+	struct sasl_message smsg;
 
-	/* :irc.loldongs.eu SASL * irc.goatse.cx!42 S d29vTklOSkFTAGRhdGEgaW4gZmlyc3QgbGluZQ== */
+	// :irc.loldongs.eu SASL * irc.goatse.cx!42 S d29vTklOSkFTAGRhdGEgaW4gZmlyc3QgbGluZQ==
 	if (parc < 4)
 		return;
 
+	(void) memset(&smsg, 0x00, sizeof smsg);
+
 	smsg.uid = parv[1];
 	smsg.mode = *parv[2];
-	smsg.buf = parv[3];
-	smsg.ext = parc >= 4 ? parv[4] : NULL;
-	smsg.server = si->s ? si->s : NULL;
+	smsg.parc = parc - 3;
+	smsg.server = si->s;
+
+	if (smsg.parc > SASL_MESSAGE_MAXPARA)
+	{
+		(void) slog(LG_ERROR, "%s: received SASL command with %d parameters", MOWGLI_FUNC_NAME, smsg.parc);
+		smsg.parc = SASL_MESSAGE_MAXPARA;
+	}
+
+	(void) memcpy(smsg.parv, &parv[3], smsg.parc * sizeof(char *));
 
 	hook_call_sasl_input(&smsg);
 }
 
-static void m_topic(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_topic(struct sourceinfo *si, int parc, char *parv[])
 {
-	channel_t *c = channel_find(parv[0]);
+	struct channel *c = channel_find(parv[0]);
 
 	if (!c)
 		return;
@@ -787,17 +821,19 @@ static void m_topic(sourceinfo_t *si, int parc, char *parv[])
 	handle_topic_from(si, c, parv[1], atol(parv[2]), parv[3]);
 }
 
-static void m_ping(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_ping(struct sourceinfo *si, int parc, char *parv[])
 {
-	/* reply to PING's */
+	// reply to PINGs
 	sts(":%s PONG %s %s", ME, me.name, parv[0]);
 }
 
-static void m_pong(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_pong(struct sourceinfo *si, int parc, char *parv[])
 {
-	server_t *s;
+	struct server *s;
 
-	/* someone replied to our PING */
+	// someone replied to our PING
 	if (!parv[0])
 		return;
 	s = server_find(parv[0]);
@@ -810,7 +846,7 @@ static void m_pong(sourceinfo_t *si, int parc, char *parv[])
 
 	me.uplinkpong = CURRTIME;
 
-	/* -> :test.projectxero.net PONG test.projectxero.net :shrike.malkier.net */
+	// -> :test.projectxero.net PONG test.projectxero.net :shrike.malkier.net
 	if (me.bursting)
 	{
 #ifdef HAVE_GETTIMEOFDAY
@@ -828,7 +864,8 @@ static void m_pong(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_privmsg(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_privmsg(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (parc != 2)
 		return;
@@ -836,7 +873,8 @@ static void m_privmsg(sourceinfo_t *si, int parc, char *parv[])
 	handle_message(si, parv[0], false, parv[1]);
 }
 
-static void m_notice(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_notice(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (parc != 2)
 		return;
@@ -844,36 +882,37 @@ static void m_notice(sourceinfo_t *si, int parc, char *parv[])
 	handle_message(si, parv[0], true, parv[1]);
 }
 
-static void remove_our_modes(channel_t *c)
+static void
+remove_our_modes(struct channel *c)
 {
 	/* the TS changed.  a TS change requires the following things
 	 * to be done to the channel:  reset all modes to nothing, remove
 	 * all status modes on known users on the channel (including ours),
 	 * and set the new TS.
 	 */
-	chanuser_t *cu;
+	struct chanuser *cu;
 	mowgli_node_t *n;
 
 	clear_simple_modes(c);
 
 	MOWGLI_ITER_FOREACH(n, c->members.head)
 	{
-		cu = (chanuser_t *)n->data;
+		cu = (struct chanuser *)n->data;
 		cu->modes = 0;
 	}
 }
 
-static void m_sjoin(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_sjoin(struct sourceinfo *si, int parc, char *parv[])
 {
-	/*
-	 *  -> :proteus.malkier.net SJOIN 1073516550 #shrike +tn :@sycobuny @+rakaur
+	/*  -> :proteus.malkier.net SJOIN 1073516550 #shrike +tn :@sycobuny @+rakaur
 	 *	also:
 	 *  -> :nenolod_ SJOIN 1117334567 #chat
 	 *	also:
 	 *  -> SJOIN 1117334567 #chat :@nenolod
 	 */
 
-	channel_t *c;
+	struct channel *c;
 	unsigned int userc;
 	char *userv[256];
 	unsigned int i;
@@ -881,7 +920,7 @@ static void m_sjoin(sourceinfo_t *si, int parc, char *parv[])
 
 	if (parc >= 4)
 	{
-		/* :origin SJOIN ts chan modestr [key or limits] :users */
+		// :origin SJOIN ts chan modestr [key or limits] :users
 		c = channel_find(parv[1]);
 		ts = atol(parv[0]);
 
@@ -903,18 +942,18 @@ static void m_sjoin(sourceinfo_t *si, int parc, char *parv[])
 		userc = sjtoken(parv[parc - 1], ' ', userv);
 
 		for (i = 0; i < userc; i++)
-			if (*userv[i] == '&')	/* channel ban */
+			if (*userv[i] == '&')	// channel ban
 				chanban_add(c, userv[i] + 1, 'b');
-			else if (*userv[i] == '"')	/* exception */
+			else if (*userv[i] == '"')	// exception
 				chanban_add(c, userv[i] + 1, 'e');
-			else if (*userv[i] == '\'')	/* invex */
+			else if (*userv[i] == '\'')	// invex
 				chanban_add(c, userv[i] + 1, 'I');
 			else
 				chanuser_add(c, userv[i]);
 	}
 	else if (parc == 3)
 	{
-		/* :origin SJOIN ts chan :users */
+		// :origin SJOIN ts chan :users
 		c = channel_find(parv[1]);
 		ts = atol(parv[0]);
 
@@ -937,11 +976,11 @@ static void m_sjoin(sourceinfo_t *si, int parc, char *parv[])
 		userc = sjtoken(parv[parc - 1], ' ', userv);
 
 		for (i = 0; i < userc; i++)
-			if (*userv[i] == '&')	/* channel ban */
+			if (*userv[i] == '&')	// channel ban
 				chanban_add(c, userv[i] + 1, 'b');
-			else if (*userv[i] == '"')	/* exception */
+			else if (*userv[i] == '"')	// exception
 				chanban_add(c, userv[i] + 1, 'e');
-			else if (*userv[i] == '\'')	/* invex */
+			else if (*userv[i] == '\'')	// invex
 				chanban_add(c, userv[i] + 1, 'I');
 			else
 				chanuser_add(c, userv[i]);
@@ -961,7 +1000,8 @@ static void m_sjoin(sourceinfo_t *si, int parc, char *parv[])
 			remove_our_modes(c);
 			slog(LG_DEBUG, "m_sjoin(): TS changed for %s (%lu -> %lu)", c->name, (unsigned long)c->ts, (unsigned long)ts);
 			c->ts = ts;
-			/* XXX lost modes! -- XXX - pardon? why do we worry about this? TS reset requires modes reset.. */
+
+			// XXX lost modes! -- XXX - pardon? why do we worry about this? TS reset requires modes reset..
 			hook_call_channel_tschange(c);
 		}
 
@@ -976,7 +1016,8 @@ static void m_sjoin(sourceinfo_t *si, int parc, char *parv[])
 		channel_delete(c);
 }
 
-static void m_part(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_part(struct sourceinfo *si, int parc, char *parv[])
 {
 	int chanc;
 	char *chanv[256];
@@ -991,10 +1032,11 @@ static void m_part(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_uid(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_uid(struct sourceinfo *si, int parc, char *parv[])
 {
-	server_t *s;
-	user_t *u;
+	struct server *s;
+	struct user *u;
 	bool realchange;
 	const char *vhost;
 	const char *ipb64;
@@ -1008,7 +1050,7 @@ static void m_uid(sourceinfo_t *si, int parc, char *parv[])
 		s = si->s;
 		if (!s)
 		{
-			slog(LG_DEBUG, "m_uid(): new user on nonexistant server: %s", parv[0]);
+			slog(LG_DEBUG, "m_uid(): new user on nonexistent server: %s", parv[0]);
 			return;
 		}
 
@@ -1027,7 +1069,6 @@ static void m_uid(sourceinfo_t *si, int parc, char *parv[])
 					iplen = 0;
 				af = AF_INET;
 			}
-#ifdef AF_INET6
 			else if (strlen(ipb64) == 24)
 			{
 				iplen = 16;
@@ -1035,7 +1076,6 @@ static void m_uid(sourceinfo_t *si, int parc, char *parv[])
 					iplen = 0;
 				af = AF_INET6;
 			}
-#endif
 			if (iplen != 0)
 				if (!inet_ntop(af, ipdata, ipstring, sizeof ipstring))
 					iplen = 0;
@@ -1046,8 +1086,7 @@ static void m_uid(sourceinfo_t *si, int parc, char *parv[])
 
 		user_mode(u, parv[7]);
 
-		/*
-		 * with ESVID:
+		/* with ESVID:
 		 * If the user's SVID is equal to their accountname,
 		 * they're properly logged in.	Alternatively, the
 		 * 'without ESVID' criteria is used. --nenolod
@@ -1078,10 +1117,11 @@ static void m_uid(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_nick(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_nick(struct sourceinfo *si, int parc, char *parv[])
 {
-	server_t *s;
-	user_t *u;
+	struct server *s;
+	struct user *u;
 	bool realchange;
 	const char *vhost;
 	const char *ipb64;
@@ -1095,7 +1135,7 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 		s = server_find(parv[5]);
 		if (!s)
 		{
-			slog(LG_DEBUG, "m_nick(): new user on nonexistant server: %s", parv[5]);
+			slog(LG_DEBUG, "m_nick(): new user on nonexistent server: %s", parv[5]);
 			return;
 		}
 
@@ -1114,7 +1154,6 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 					iplen = 0;
 				af = AF_INET;
 			}
-#ifdef AF_INET6
 			else if (strlen(ipb64) == 24)
 			{
 				iplen = 16;
@@ -1122,7 +1161,6 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 					iplen = 0;
 				af = AF_INET6;
 			}
-#endif
 			if (iplen != 0)
 				if (!inet_ntop(af, ipdata, ipstring, sizeof ipstring))
 					iplen = 0;
@@ -1133,8 +1171,7 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 
 		user_mode(u, parv[7]);
 
-		/*
-		 * with ESVID:
+		/* with ESVID:
 		 * If the user's SVID is equal to their accountname,
 		 * they're properly logged in.	Alternatively, the
 		 * 'without ESVID' criteria is used. --nenolod
@@ -1155,8 +1192,7 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 
 		handle_nickchange(u);
 	}
-
-	/* if it's only 2 then it's a nickname change */
+	// if it's only 2 then it's a nickname change
 	else if (parc == 2)
 	{
 		if (!si->su)
@@ -1172,14 +1208,14 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 		if (user_changenick(si->su, parv[0], atoi(parv[1])))
 			return;
 
-		/* fix up +r if necessary -- jilles */
+		// fix up +r if necessary -- jilles
 		if (realchange && !nicksvs.no_nick_ownership && !use_esvid)
 		{
 			if (should_reg_umode(si->su))
-				/* changed nick to registered one, reset +r */
-				sts(":%s SVS2MODE %s +rd %lu", nicksvs.nick, parv[0], atol(parv[1]));
+				// changed nick to registered one, reset +r
+				sts(":%s SVS2MODE %s +rd %ld", nicksvs.nick, parv[0], atol(parv[1]));
 			else
-				/* changed from registered nick, remove +r */
+				// changed from registered nick, remove +r
 				sts(":%s SVS2MODE %s -r+d 0", nicksvs.nick, parv[0]);
 		}
 		else if (realchange && !nicksvs.no_nick_ownership && use_esvid)
@@ -1202,15 +1238,17 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_quit(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_quit(struct sourceinfo *si, int parc, char *parv[])
 {
 	slog(LG_DEBUG, "m_quit(): user leaving: %s", si->su->nick);
 
-	/* user_delete() takes care of removing channels and so forth */
+	// user_delete() takes care of removing channels and so forth
 	user_delete(si->su, parv[0]);
 }
 
-static void unreal_user_mode(user_t *u, const char *changes)
+static void
+unreal_user_mode(struct user *u, const char *changes)
 {
 	const char *p;
 	int dir;
@@ -1225,7 +1263,7 @@ static void unreal_user_mode(user_t *u, const char *changes)
 			case '-': dir = MTYPE_DEL; break;
 			case '+': dir = MTYPE_ADD; break;
 			case 'x':
-				/* If +x is set then the users vhost is set to their cloaked host - Adam */
+				// If +x is set then the users vhost is set to their cloaked host - Adam
 				if (dir == MTYPE_ADD)
 				{
 					/* It is possible for the users vhost to not be their cloaked host after +x.
@@ -1247,7 +1285,8 @@ static void unreal_user_mode(user_t *u, const char *changes)
 		}
 }
 
-static bool unreal_is_extban(const char *mask)
+static bool
+unreal_is_extban(const char *mask)
 {
 	const char mask_len = strlen(mask);
 	unsigned char offset = 0;
@@ -1261,7 +1300,8 @@ static bool unreal_is_extban(const char *mask)
 	return true;
 }
 
-static void m_mode(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_mode(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (*parv[0] == '#')
 		channel_mode(NULL, channel_find(parv[0]), parc - 1, &parv[1]);
@@ -1269,28 +1309,30 @@ static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 		unreal_user_mode(user_find(parv[0]), parv[1]);
 }
 
-static void m_umode(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_umode(struct sourceinfo *si, int parc, char *parv[])
 {
 	unreal_user_mode(si->su, parv[0]);
 }
 
-static void m_kick(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_kick(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u = user_find(parv[1]);
-	channel_t *c = channel_find(parv[0]);
+	struct user *u = user_find(parv[1]);
+	struct channel *c = channel_find(parv[0]);
 
-	/* -> :rakaur KICK #shrike rintaun :test */
+	// -> :rakaur KICK #shrike rintaun :test
 	slog(LG_DEBUG, "m_kick(): user was kicked: %s -> %s", parv[1], parv[0]);
 
 	if (!u)
 	{
-		slog(LG_DEBUG, "m_kick(): got kick for nonexistant user %s", parv[1]);
+		slog(LG_DEBUG, "m_kick(): got kick for nonexistent user %s", parv[1]);
 		return;
 	}
 
 	if (!c)
 	{
-		slog(LG_DEBUG, "m_kick(): got kick in nonexistant channel: %s", parv[0]);
+		slog(LG_DEBUG, "m_kick(): got kick in nonexistent channel: %s", parv[0]);
 		return;
 	}
 
@@ -1302,7 +1344,7 @@ static void m_kick(sourceinfo_t *si, int parc, char *parv[])
 
 	chanuser_delete(c, u);
 
-	/* if they kicked us, let's rejoin */
+	// if they kicked us, let's rejoin
 	if (is_internal_client(u))
 	{
 		slog(LG_DEBUG, "m_kick(): %s got kicked from %s; rejoining", u->nick, parv[0]);
@@ -1310,20 +1352,23 @@ static void m_kick(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_kill(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_kill(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_kill(si, parv[0], parc > 1 ? parv[1] : "<No reason given>");
 }
 
-static void m_squit(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_squit(struct sourceinfo *si, int parc, char *parv[])
 {
 	slog(LG_DEBUG, "m_squit(): server leaving: %s from %s", parv[0], parv[1]);
 	server_delete(parv[0]);
 }
 
-static void m_server(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_server(struct sourceinfo *si, int parc, char *parv[])
 {
-	server_t *s;
+	struct server *s;
 	const char *inf;
 
 	/* because multiple PROTOCTL messages are allowed without a PROTOCTL END,
@@ -1343,13 +1388,13 @@ static void m_server(sourceinfo_t *si, int parc, char *parv[])
 				 * (the EOB is sent before this, therefore still with
 				 * a SID, but apparently still works) --grawity */
 				slog(LG_DEBUG, "m_server(): erasing our SID");
-				free(me.me->sid);
+				sfree(me.me->sid);
 				me.me->sid = NULL;
 			}
 		}
 
 		services_init();
-		has_protoctl = false;	/* only once after PROTOCTL message. */
+		has_protoctl = false;	// only once after PROTOCTL message.
 	}
 
 	slog(LG_DEBUG, "m_server(): new server: %s", parv[0]);
@@ -1368,9 +1413,10 @@ static void m_server(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_sid(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_sid(struct sourceinfo *si, int parc, char *parv[])
 {
-	server_t *s;
+	struct server *s;
 	const char *inf;
 
 	s = handle_server(si, parv[0], parv[2], atoi(parv[1]), parv[3]);
@@ -1384,80 +1430,93 @@ static void m_sid(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_stats(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_stats(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_stats(si->su, parv[0][0]);
 }
 
-static void m_admin(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_admin(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_admin(si->su);
 }
 
-static void m_version(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_version(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_version(si->su);
 }
 
-static void m_info(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_info(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_info(si->su);
 }
 
-static void m_whois(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_whois(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_whois(si->su, parv[1]);
 }
 
-static void m_trace(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_trace(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_trace(si->su, parv[0], parc >= 2 ? parv[1] : NULL);
 }
 
-static void m_away(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_away(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_away(si->su, parc >= 1 ? parv[0] : NULL);
 }
 
-static void m_join(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_join(struct sourceinfo *si, int parc, char *parv[])
 {
-	chanuser_t *cu;
+	struct chanuser *cu;
 	mowgli_node_t *n, *tn;
 
-	/* JOIN 0 is really a part from all channels */
+	// JOIN 0 is really a part from all channels
 	if (parv[0][0] == '0')
 	{
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, si->su->channels.head)
 		{
-			cu = (chanuser_t *)n->data;
+			cu = (struct chanuser *)n->data;
 			chanuser_delete(cu->chan, si->su);
 		}
 	}
 }
 
-static void m_pass(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_pass(struct sourceinfo *si, int parc, char *parv[])
 {
-	if (strcmp(curr_uplink->receive_pass, parv[0]))
+	if (curr_uplink->receive_pass != NULL &&
+	    strcmp(curr_uplink->receive_pass, parv[0]))
 	{
 		slog(LG_INFO, "m_pass(): password mismatch from uplink; aborting");
 		runflags |= RF_SHUTDOWN;
 	}
 }
 
-static void m_error(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_error(struct sourceinfo *si, int parc, char *parv[])
 {
 	slog(LG_INFO, "m_error(): error from server: %s", parv[0]);
 }
 
-static void m_sethost(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_sethost(struct sourceinfo *si, int parc, char *parv[])
 {
 	strshare_unref(si->su->vhost);
 	si->su->vhost = strshare_get(parv[0]);
 }
 
-static void m_chghost(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_chghost(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u = user_find(parv[0]);
+	struct user *u = user_find(parv[0]);
 
 	if (!u)
 		return;
@@ -1466,14 +1525,16 @@ static void m_chghost(sourceinfo_t *si, int parc, char *parv[])
 	u->vhost = strshare_get(parv[1]);
 }
 
-static void m_motd(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_motd(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_motd(si->su);
 }
 
-static void nick_group(hook_user_req_t *hdata)
+static void
+nick_group(struct hook_user_req *hdata)
 {
-	user_t *u;
+	struct user *u;
 
 	u = hdata->si->su != NULL && !irccasecmp(hdata->si->su->nick, hdata->mn->nick) ? hdata->si->su : user_find_named(hdata->mn->nick);
 	if (!use_esvid && u != NULL && should_reg_umode(u))
@@ -1481,16 +1542,18 @@ static void nick_group(hook_user_req_t *hdata)
 				(unsigned long)u->ts);
 }
 
-static void nick_ungroup(hook_user_req_t *hdata)
+static void
+nick_ungroup(struct hook_user_req *hdata)
 {
-	user_t *u;
+	struct user *u;
 
 	u = hdata->si->su != NULL && !irccasecmp(hdata->si->su->nick, hdata->mn->nick) ? hdata->si->su : user_find_named(hdata->mn->nick);
 	if (u != NULL && (!use_esvid || !nicksvs.no_nick_ownership))
 		sts(":%s SVS2MODE %s -r+d 0", nicksvs.nick, u->nick);
 }
 
-static void m_protoctl(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_protoctl(struct sourceinfo *si, int parc, char *parv[])
 {
 	int i;
 
@@ -1510,12 +1573,12 @@ static void m_protoctl(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-void _modinit(module_t * m)
+static void
+mod_init(struct module *const restrict m)
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "transport/rfc1459");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/base36uid");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "transport/rfc1459")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/base36uid")
 
-	/* Symbol relocation voodoo. */
 	server_login = &unreal_server_login;
 	introduce_nick = &unreal_introduce_nick;
 	quit_sts = &unreal_quit_sts;
@@ -1597,18 +1660,14 @@ void _modinit(module_t * m)
 	pcommand_add("SASL", m_sasl, 4, MSRC_SERVER);
 	pcommand_add("MLOCK", m_mlock, 3, MSRC_SERVER);
 
-	hook_add_event("nick_group");
 	hook_add_nick_group(nick_group);
-	hook_add_event("nick_ungroup");
 	hook_add_nick_ungroup(nick_ungroup);
-
-	m->mflags = MODTYPE_CORE;
-
-	pmodule_loaded = true;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("protocol/unreal", MODULE_UNLOAD_CAPABILITY_NEVER)

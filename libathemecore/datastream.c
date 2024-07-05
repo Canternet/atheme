@@ -1,28 +1,20 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * datastream.c: Efficient handling of streams and packet queues.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2014 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2017-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * datastream.c: Efficient handling of streams and packet queues.
  */
 
-#include "atheme.h"
-#include "datastream.h"
+#include <atheme.h>
+#include "internal.h"
 
 #define SENDQSIZE (4096 - 40)
 
@@ -40,7 +32,8 @@ struct sendq {
 	char buf[SENDQSIZE];
 };
 
-void sendq_add(connection_t * cptr, char *buf, size_t len)
+void
+sendq_add(struct connection * cptr, char *buf, size_t len)
 {
 	mowgli_node_t *n;
 	struct sendq *sq;
@@ -49,7 +42,7 @@ void sendq_add(connection_t * cptr, char *buf, size_t len)
 
 	return_if_fail(cptr != NULL);
 
-	if (cptr->flags & (CF_DEAD | CF_SEND_EOF))
+	if (CF_IS_DEAD(cptr) || CF_IS_SEND_EOF(cptr))
 	{
 		slog(LG_DEBUG, "sendq_add(): attempted to send to fd %d which is already dead", cptr->fd);
 		return;
@@ -85,10 +78,9 @@ void sendq_add(connection_t * cptr, char *buf, size_t len)
 
 	while (len > 0)
 	{
-		sq = smalloc(sizeof(struct sendq));
-		sq->firstused = sq->firstfree = 0;
+		sq = smalloc(sizeof *sq);
 		mowgli_node_add(sq, &sq->node, &cptr->sendq);
-		l = SENDQSIZE - sq->firstfree;
+		l = SENDQSIZE;
 		if (l > len)
 			l = len;
 		memcpy(sq->buf + sq->firstfree, buf + pos, l);
@@ -98,11 +90,12 @@ void sendq_add(connection_t * cptr, char *buf, size_t len)
 	}
 }
 
-void sendq_add_eof(connection_t * cptr)
+void
+sendq_add_eof(struct connection * cptr)
 {
 	return_if_fail(cptr != NULL);
 
-	if (cptr->flags & (CF_DEAD | CF_SEND_EOF))
+	if (CF_IS_DEAD(cptr) || CF_IS_SEND_EOF(cptr))
 	{
 		slog(LG_DEBUG, "sendq_add(): attempted to send to fd %d which is already dead", cptr->fd);
 		return;
@@ -112,7 +105,8 @@ void sendq_add_eof(connection_t * cptr)
 	cptr->flags |= CF_SEND_EOF;
 }
 
-void sendq_flush(connection_t * cptr)
+void
+sendq_flush(struct connection * cptr)
 {
         mowgli_node_t *n, *tn;
         struct sendq *sq;
@@ -148,7 +142,7 @@ void sendq_flush(connection_t * cptr)
 			if (MOWGLI_LIST_LENGTH(&cptr->sendq) > 1)
 			{
                         	mowgli_node_delete(&sq->node, &cptr->sendq);
-                        	free(sq);
+				sfree(sq);
 			}
 			else
 				/* keep one struct sendq */
@@ -157,7 +151,7 @@ void sendq_flush(connection_t * cptr)
                 else
                         return;
         }
-	if (cptr->flags & CF_SEND_EOF)
+	if (CF_IS_SEND_EOF(cptr))
 	{
 		/* shut down write end, kill entire connection
 		 * only when the other side acknowledges -- jilles */
@@ -171,14 +165,15 @@ void sendq_flush(connection_t * cptr)
 	connection_setselect_write(cptr, NULL);
 }
 
-bool sendq_nonempty(connection_t *cptr)
+bool
+sendq_nonempty(struct connection *cptr)
 {
 	mowgli_node_t *n;
 	struct sendq *sq;
 
-	if (cptr->flags & CF_SEND_DEAD)
+	if (CF_IS_SEND_DEAD(cptr))
 		return false;
-	if (cptr->flags & CF_SEND_EOF)
+	if (CF_IS_SEND_EOF(cptr))
 		return true;
 	n = cptr->sendq.head;
 	if (n == NULL)
@@ -187,12 +182,14 @@ bool sendq_nonempty(connection_t *cptr)
 	return sq->firstfree > sq->firstused;
 }
 
-void sendq_set_limit(connection_t *cptr, size_t len)
+void
+sendq_set_limit(struct connection *cptr, size_t len)
 {
 	cptr->sendq_limit = len;
 }
 
-int recvq_length(connection_t *cptr)
+int
+recvq_length(struct connection *cptr)
 {
 	int l = 0;
 	mowgli_node_t *n;
@@ -206,15 +203,16 @@ int recvq_length(connection_t *cptr)
 	return l;
 }
 
-void recvq_put(connection_t *cptr)
+void
+recvq_put(struct connection *cptr)
 {
 	mowgli_node_t *n;
 	struct sendq *sq = NULL;
-	int l, ll;
+	int l = 0, ll = 0;
 
 	return_if_fail(cptr != NULL);
 
-	if (cptr->flags & (CF_DEAD | CF_SEND_DEAD))
+	if (CF_IS_DEAD(cptr) || CF_IS_SEND_DEAD(cptr))
 	{
 		/* If CF_SEND_DEAD:
 		 * The client closed the connection or sent some
@@ -238,8 +236,7 @@ void recvq_put(connection_t *cptr)
 	}
 	if (sq == NULL)
 	{
-		sq = smalloc(sizeof(struct sendq));
-		sq->firstused = sq->firstfree = 0;
+		sq = smalloc(sizeof *sq);
 		mowgli_node_add(sq, &sq->node, &cptr->recvq);
 		l = SENDQSIZE;
 	}
@@ -271,7 +268,8 @@ void recvq_put(connection_t *cptr)
 	return;
 }
 
-int recvq_get(connection_t *cptr, char *buf, size_t len)
+int
+recvq_get(struct connection *cptr, char *buf, size_t len)
 {
 	mowgli_node_t *n, *tn;
 	struct sendq *sq;
@@ -300,7 +298,7 @@ int recvq_get(connection_t *cptr, char *buf, size_t len)
 			if (MOWGLI_LIST_LENGTH(&cptr->recvq) > 1)
 			{
 				mowgli_node_delete(&sq->node, &cptr->recvq);
-				free(sq);
+				sfree(sq);
 			}
 			else
 				/* keep one struct sendq */
@@ -312,7 +310,8 @@ int recvq_get(connection_t *cptr, char *buf, size_t len)
 	return p - buf;
 }
 
-int recvq_getline(connection_t *cptr, char *buf, size_t len)
+int
+recvq_getline(struct connection *cptr, char *buf, size_t len)
 {
 	mowgli_node_t *n, *tn;
 	struct sendq *sq, *sq2 = NULL;
@@ -345,7 +344,10 @@ int recvq_getline(connection_t *cptr, char *buf, size_t len)
 		if (l > len)
 			l = len;
 		if (sq == sq2 && l >= (size_t) (newline - sq->buf - sq->firstused + 1))
-			cptr->flags &= ~CF_NONEWLINE, l = newline - sq->buf - sq->firstused + 1;
+		{
+			cptr->flags &= ~CF_NONEWLINE;
+			l = newline - sq->buf - sq->firstused + 1;
+		}
 		memcpy(p, sq->buf + sq->firstused, l);
 
 		p += l;
@@ -356,7 +358,7 @@ int recvq_getline(connection_t *cptr, char *buf, size_t len)
 			if (MOWGLI_LIST_LENGTH(&cptr->recvq) > 1)
 			{
 				mowgli_node_delete(&sq->node, &cptr->recvq);
-				free(sq);
+				sfree(sq);
 			}
 			else
 				/* keep one struct sendq */
@@ -368,7 +370,8 @@ int recvq_getline(connection_t *cptr, char *buf, size_t len)
 	return p - buf;
 }
 
-void sendqrecvq_free(connection_t *cptr)
+void
+sendqrecvq_free(struct connection *cptr)
 {
 	mowgli_node_t *nptr, *nptr2;
 	struct sendq *sq;
@@ -378,7 +381,7 @@ void sendqrecvq_free(connection_t *cptr)
 		sq = nptr->data;
 
 		mowgli_node_delete(&sq->node, &cptr->recvq);
-		free(sq);
+		sfree(sq);
 	}
 
 	MOWGLI_ITER_FOREACH_SAFE(nptr, nptr2, cptr->sendq.head)
@@ -386,7 +389,7 @@ void sendqrecvq_free(connection_t *cptr)
 		sq = nptr->data;
 
 		mowgli_node_delete(&sq->node, &cptr->sendq);
-		free(sq);
+		sfree(sq);
 	}
 }
 

@@ -1,92 +1,91 @@
 /*
- * Copyright (c) 2006 William Pitcock, et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006 William Pitcock, et al.
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
  * This file contains routines to handle the CService SET command.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_core", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+// Imported by other modules/nickserv/set_*.so
+extern mowgli_patricia_t *ns_set_cmdtree;
+mowgli_patricia_t *ns_set_cmdtree = NULL;
 
-static void ns_help_set(sourceinfo_t *si, const char *subcmd);
-static void ns_cmd_set(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set = { "SET", N_("Sets various control flags."), AC_AUTHENTICATED, 2, ns_cmd_set, { .func = ns_help_set } };
-
-mowgli_patricia_t *ns_set_cmdtree;
-
-/* HELP SET */
-static void ns_help_set(sourceinfo_t *si, const char *subcmd)
+static void
+ns_help_set(struct sourceinfo *const restrict si, const char *const restrict subcmd)
 {
-	if (!subcmd)
+	if (subcmd)
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), nicksvs.nick);
-		command_success_nodata(si, _("Help for \2SET\2:"));
-		command_success_nodata(si, " ");
-		if (nicksvs.no_nick_ownership)
-			command_success_nodata(si, _("SET allows you to set various control flags\n"
-						"for accounts that change the way certain\n"
-						"operations are performed on them."));
-		else
-			command_success_nodata(si, _("SET allows you to set various control flags\n"
-						"for nicknames that change the way certain\n"
-						"operations are performed on them."));
-		command_success_nodata(si, " ");
-		command_help(si, ns_set_cmdtree);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For more information, use \2/msg %s HELP SET \37command\37\2."), nicksvs.nick);
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
-	}
-	else
-		help_display_as_subcmd(si, si->service, "SET", subcmd, ns_set_cmdtree);
-}
-
-/* SET <setting> <parameters> */
-static void ns_cmd_set(sourceinfo_t *si, int parc, char *parv[])
-{
-	char *setting = parv[0];
-	command_t *c;
-
-	if (setting == NULL)
-	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET");
-		command_fail(si, fault_needmoreparams, _("Syntax: SET <setting> <parameters>"));
+		(void) help_display_as_subcmd(si, si->service, "SET", subcmd, ns_set_cmdtree);
 		return;
 	}
 
-	/* take the command through the hash table */
-        if ((c = command_find(ns_set_cmdtree, setting)))
-	{
-		command_exec(si->service, si, c, parc - 1, parv + 1);
-	}
+	(void) help_display_prefix(si, si->service);
+	(void) command_success_nodata(si, _("Help for \2SET\2:"));
+	(void) help_display_newline(si);
+
+	if (nicksvs.no_nick_ownership)
+		(void) command_success_nodata(si, _("SET allows you to set various control flags for\n"
+		                                    "accounts that change the way certain operations\n"
+		                                    "are performed on them."));
 	else
+		(void) command_success_nodata(si, _("SET allows you to set various control flags for\n"
+		                                    "nicknames that change the way certain operations\n"
+		                                    "are performed on them."));
+
+	(void) help_display_newline(si);
+	(void) command_help(si, ns_set_cmdtree);
+	(void) help_display_moreinfo(si, si->service, "SET");
+	(void) help_display_suffix(si);
+}
+
+static void
+ns_cmd_set(struct sourceinfo *const restrict si, const int parc, char **const restrict parv)
+{
+	if (parc < 1)
 	{
-		command_fail(si, fault_badparams, _("Invalid set command. Use \2/%s%s HELP SET\2 for a command listing."), (ircd->uses_rcommand == false) ? "msg " : "", nicksvs.nick);
+		(void) command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET");
+		(void) command_fail(si, fault_needmoreparams, _("Syntax: SET <setting> <parameters>"));
+		return;
 	}
+
+	(void) subcommand_dispatch_simple(nicksvs.me, si, parc, parv, ns_set_cmdtree, "SET");
 }
 
-void _modinit(module_t *m)
+static struct command ns_set = {
+	.name           = "SET",
+	.desc           = N_("Sets various account parameters."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &ns_cmd_set,
+	.help           = { .func = &ns_help_set },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
-	service_named_bind_command("nickserv", &ns_set);
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "nickserv/main")
 
-	ns_set_cmdtree = mowgli_patricia_create(strcasecanon);
+	if (! (ns_set_cmdtree = mowgli_patricia_create(&strcasecanon)))
+	{
+		(void) slog(LG_ERROR, "%s: mowgli_patricia_create() failed", m->name);
+
+		m->mflags |= MODFLAG_FAIL;
+		return;
+	}
+
+	(void) service_named_bind_command("nickserv", &ns_set);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
-	service_named_unbind_command("nickserv", &ns_set);
-	mowgli_patricia_destroy(ns_set_cmdtree, NULL, NULL);
+	(void) service_named_unbind_command("nickserv", &ns_set);
+
+	(void) mowgli_patricia_destroy(ns_set_cmdtree, &command_delete_trie_cb, ns_set_cmdtree);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_core", MODULE_UNLOAD_CAPABILITY_OK)

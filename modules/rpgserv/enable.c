@@ -1,28 +1,20 @@
-/* main.c - rpgserv main() routine.
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+ *
+ * main.c - rpgserv main() routine.
  * based on elly's rpgserv for atheme-6.x --nenolod
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"rpgserv/enable", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void rs_cmd_enable(sourceinfo_t *si, int parc, char *parv[]);
-static void rs_cmd_disable(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t rs_enable = { "ENABLE", N_("Enable RPGServ for a channel."),
-                        AC_NONE, 1, rs_cmd_enable, { .path = "rpgserv/enable" } };
-command_t rs_disable = { "DISABLE", N_("Disable RPGServ for a channel."),
-                         AC_NONE, 1, rs_cmd_disable, { .path = "rpgserv/disable" } };
-
-static void rs_cmd_enable(sourceinfo_t *si, int parc, char *parv[])
+static void
+rs_cmd_enable(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (!chan)
 	{
@@ -34,7 +26,13 @@ static void rs_cmd_enable(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
+		return;
+	}
+
+	if (!chanacs_source_has_flag(mc, si, CA_SET))
+	{
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -49,10 +47,11 @@ static void rs_cmd_enable(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("RPGServ enabled for \2%s\2."), chan);
 }
 
-static void rs_cmd_disable(sourceinfo_t *si, int parc, char *parv[])
+static void
+rs_cmd_disable(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (!chan)
 	{
@@ -64,7 +63,13 @@ static void rs_cmd_disable(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
+		return;
+	}
+
+	if (!chanacs_source_has_flag(mc, si, CA_SET))
+	{
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
@@ -79,14 +84,38 @@ static void rs_cmd_disable(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("RPGServ disabled for \2%s\2."), chan);
 }
 
-void _modinit(module_t *m)
+static struct command rs_enable = {
+	.name           = "ENABLE",
+	.desc           = N_("Enable RPGServ for a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &rs_cmd_enable,
+	.help           = { .path = "rpgserv/enable" },
+};
+
+static struct command rs_disable = {
+	.name           = "DISABLE",
+	.desc           = N_("Disable RPGServ for a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &rs_cmd_disable,
+	.help           = { .path = "rpgserv/disable" },
+};
+
+static void
+mod_init(struct module *const restrict m)
 {
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "rpgserv/main")
+
 	service_named_bind_command("rpgserv", &rs_enable);
 	service_named_bind_command("rpgserv", &rs_disable);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	service_named_unbind_command("rpgserv", &rs_enable);
 	service_named_unbind_command("rpgserv", &rs_disable);
 }
+
+SIMPLE_DECLARE_MODULE_V1("rpgserv/enable", MODULE_UNLOAD_CAPABILITY_OK)

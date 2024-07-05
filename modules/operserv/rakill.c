@@ -1,9 +1,10 @@
 /*
- * Copyright (c) 2006 Robin Burchell <surreal.w00t@gmail.com>
- * Rights to this code are as defined in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006 Robin Burchell <surreal.w00t@gmail.com>
  *
  * Regexp-based AKILL implementation.
- *
  */
 
 /*
@@ -11,43 +12,23 @@
  *  Matches `nick!user@host realname here' for each client against a given regex, and places akills.
  *  CHECK REGEX USING @RMATCH FIRST!
  */
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/rakill", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_rakill(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_rakill = { "RAKILL", N_("Sets a group of AKILLs against users matching a specific regex pattern."), PRIV_MASS_AKILL, 1, os_cmd_rakill, { .path = "oservice/rakill" } };
-
-void _modinit(module_t *m)
+static void
+os_cmd_rakill(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("operserv", &os_rakill);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_rakill);
-}
-
-static void os_cmd_rakill(sourceinfo_t *si, int parc, char *parv[])
-{
-	atheme_regex_t *regex;
+	struct atheme_regex *regex;
 	char usermask[512];
 	unsigned int matches = 0;
 	mowgli_patricia_iteration_state_t state;
-	user_t *u;
+	struct user *u;
 	char *args = parv[0];
 	char *pattern;
 	char *reason;
-	user_t *source;
+	struct user *source;
 	int flags = 0;
 
-	/* make sure they could have done RMATCH */
+	// make sure they could have done RMATCH
 	if (!has_priv(si, PRIV_USER_AUSPEX))
 	{
 		command_fail(si, fault_noprivs, STR_NO_PRIVILEGE, PRIV_USER_AUSPEX);
@@ -87,7 +68,7 @@ static void os_cmd_rakill(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	source = si->su;
-	/* try to find them on IRC, otherwise use operserv */
+	// try to find them on IRC, otherwise use operserv
 	if (source == NULL)
 		source = si->smu != NULL && MOWGLI_LIST_LENGTH(&si->smu->logins) > 0 ?
 			si->smu->logins.head->data : si->service->me;
@@ -108,10 +89,10 @@ static void os_cmd_rakill(sourceinfo_t *si, int parc, char *parv[])
 
 		if (regex_match(regex, usermask))
 		{
-			/* match */
-			command_success_nodata(si, _("\2Match:\2  %s!%s@%s %s - akilling"), u->nick, u->user, u->host, u->gecos);
+			// match
+			command_success_nodata(si, _("\2Match:\2  %s!%s@%s %s - AKILLing"), u->nick, u->user, u->host, u->gecos);
 			if (! (u->flags & UF_KLINESENT)) {
-				kline_sts("*", "*", u->host, 604800, reason);
+				kline_sts("*", "*", u->host, SECONDS_PER_WEEK, reason);
 				u->flags |= UF_KLINESENT;
 			}
 			matches++;
@@ -119,12 +100,34 @@ static void os_cmd_rakill(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	regex_destroy(regex);
-	command_success_nodata(si, _("\2%d\2 matches for %s akilled."), matches, pattern);
-	logcommand(si, CMDLOG_ADMIN, "RAKILL: \2%s\2 (reason: \2%s\2) (\2%d\2 matches)", pattern, reason, matches);
+	command_success_nodata(si, ngettext(N_("\2%u\2 match for \2%s\2 AKILLed."),
+	                                    N_("\2%u\2 matches for \2%s\2 AKILLed."),
+	                                    matches), matches, pattern);
+
+	logcommand(si, CMDLOG_ADMIN, "RAKILL: \2%s\2 (reason: \2%s\2) (\2%u\2 matches)", pattern, reason, matches);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_rakill = {
+	.name           = "RAKILL",
+	.desc           = N_("Sets a group of AKILLs against users matching a specific regex pattern."),
+	.access         = PRIV_MASS_AKILL,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_rakill,
+	.help           = { .path = "oservice/rakill" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	service_named_bind_command("operserv", &os_rakill);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_rakill);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/rakill", MODULE_UNLOAD_CAPABILITY_OK)

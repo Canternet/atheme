@@ -1,24 +1,19 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2005-2008 Atheme Development Group
- * Copyright (c) 2008-2010 ShadowIRCd Development Group
- * Copyright (c) 2013 PonyChat Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005-2008 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2008-2010 ShadowIRCd Development Group
+ * Copyright (C) 2013 PonyChat Development Group
  *
  * This file contains protocol support for ponychat-ircd.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
-#include "protocol/shadowircd.h"
+#include <atheme.h>
+#include <atheme/protocol/elemental-ircd.h>
 
-DECLARE_MODULE_V1("protocol/elemental-ircd", true, _modinit, NULL, PACKAGE_STRING, "PonyChat Development Group <http://www.ponychat.net>");
-
-/* *INDENT-OFF* */
-
-ircd_t elemental_ircd = {
+static struct ircd elemental_ircd = {
 	.ircdname = "elemental-ircd",
 	.tldprefix = "$$",
 	.uses_uid = true,
@@ -35,7 +30,7 @@ ircd_t elemental_ircd = {
 	.owner_mchar = "+y",
 	.protect_mchar = "+a",
 	.halfops_mchar = "+h",
-	.type = PROTOCOL_SHADOWIRCD,
+	.type = PROTOCOL_ELEMENTAL_IRCD,
 	.perm_mode = CMODE_PERM,
 	.oimmune_mode = CMODE_IMMUNE,
 	.ban_like_modes = "beIq",
@@ -44,7 +39,7 @@ ircd_t elemental_ircd = {
 	.flags = IRCD_CIDR_BANS | IRCD_HOLDNICK,
 };
 
-struct cmode_ elemental_mode_list[] = {
+static const struct cmode elemental_mode_list[] = {
   { 'i', CMODE_INVITE },
   { 'm', CMODE_MOD    },
   { 'n', CMODE_NOEXT  },
@@ -74,7 +69,7 @@ struct cmode_ elemental_mode_list[] = {
   { '\0', 0 }
 };
 
-struct cmode_ elemental_status_mode_list[] = {
+static const struct cmode elemental_status_mode_list[] = {
   { 'y', CSTATUS_OWNER },
   { 'a', CSTATUS_PROTECT },
   { 'o', CSTATUS_OP    },
@@ -83,7 +78,7 @@ struct cmode_ elemental_status_mode_list[] = {
   { '\0', 0 }
 };
 
-struct cmode_ elemental_prefix_mode_list[] = {
+static const struct cmode elemental_prefix_mode_list[] = {
   { '~', CSTATUS_OWNER },
   { '!', CSTATUS_PROTECT },
   { '@', CSTATUS_OP    },
@@ -92,7 +87,7 @@ struct cmode_ elemental_prefix_mode_list[] = {
   { '\0', 0 }
 };
 
-struct cmode_ elemental_user_mode_list[] = {
+static const struct cmode elemental_user_mode_list[] = {
   { 'a', UF_ADMIN    },
   { 'i', UF_INVIS    },
   { 'o', UF_IRCOP    },
@@ -101,11 +96,10 @@ struct cmode_ elemental_user_mode_list[] = {
   { '\0', 0 }
 };
 
-/* *INDENT-ON* */
-
-void _modinit(module_t * m)
+static void
+mod_init(struct module *const restrict m)
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/charybdis");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/charybdis")
 
 	mode_list = elemental_mode_list;
 	user_mode_list = elemental_user_mode_list;
@@ -113,14 +107,12 @@ void _modinit(module_t * m)
 	prefix_mode_list = elemental_prefix_mode_list;
 
 	ircd = &elemental_ircd;
-
-	m->mflags = MODTYPE_CORE;
-
-	pmodule_loaded = true;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("protocol/elemental-ircd", MODULE_UNLOAD_CAPABILITY_NEVER)

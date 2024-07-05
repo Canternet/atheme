@@ -1,56 +1,32 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2009 William Pitcock <nenolod -at- nenolod.net>
  *
  * Allows setting a vhost on/off
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "hostserv.h"
 
-DECLARE_MODULE_V1
-(
-	"hostserv/onoff", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void hs_cmd_on(sourceinfo_t *si, int parc, char *parv[]);
-static void hs_cmd_off(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t hs_on = { "ON", N_("Activates your assigned vhost."), AC_AUTHENTICATED, 1, hs_cmd_on, { .path = "hostserv/on" } };
-command_t hs_off = { "OFF", N_("Deactivates your assigned vhost."), AC_AUTHENTICATED, 1, hs_cmd_off, { .path = "hostserv/off" } };
-
-void _modinit(module_t *m)
+static void
+hs_cmd_on(struct sourceinfo *si, int parc, char *parv[])
 {
-	service_named_bind_command("hostserv", &hs_on);
-	service_named_bind_command("hostserv", &hs_off);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("hostserv", &hs_on);
-	service_named_unbind_command("hostserv", &hs_off);
-}
-
-
-static void hs_cmd_on(sourceinfo_t *si, int parc, char *parv[])
-{
-	mynick_t *mn = NULL;
-	metadata_t *md;
+	struct mynick *mn = NULL;
+	struct metadata *md;
 	char buf[BUFSIZE];
 
 	if (si->su == NULL)
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 can only be executed via IRC."), "ON");
+		command_fail(si, fault_noprivs, STR_IRC_COMMAND_ONLY, "ON");
 		return;
 	}
 
 	mn = mynick_find(si->su->nick);
 	if (mn == NULL)
 	{
-		command_fail(si, fault_nosuch_target, _("Nick \2%s\2 is not registered."), si->su->nick);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, si->su->nick);
 		return;
 	}
 	if (mn->owner != si->smu && !myuser_access_verify(si->su, mn->owner))
@@ -71,22 +47,23 @@ static void hs_cmd_on(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("Your vhost of \2%s\2 is now activated."), md->value);
 }
 
-static void hs_cmd_off(sourceinfo_t *si, int parc, char *parv[])
+static void
+hs_cmd_off(struct sourceinfo *si, int parc, char *parv[])
 {
-	mynick_t *mn = NULL;
-	metadata_t *md;
+	struct mynick *mn = NULL;
+	struct metadata *md;
 	char buf[BUFSIZE];
 
 	if (si->su == NULL)
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 can only be executed via IRC."), "OFF");
+		command_fail(si, fault_noprivs, STR_IRC_COMMAND_ONLY, "OFF");
 		return;
 	}
 
 	mn = mynick_find(si->su->nick);
 	if (mn == NULL)
 	{
-		command_fail(si, fault_nosuch_target, _("Nick \2%s\2 is not registered."), si->su->nick);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, si->su->nick);
 		return;
 	}
 	if (mn->owner != si->smu && !myuser_access_verify(si->su, mn->owner))
@@ -107,8 +84,38 @@ static void hs_cmd_off(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("Your vhost of \2%s\2 is now deactivated."), md->value);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command hs_on = {
+	.name           = "ON",
+	.desc           = N_("Activates your assigned vhost."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &hs_cmd_on,
+	.help           = { .path = "hostserv/on" },
+};
+
+static struct command hs_off = {
+	.name           = "OFF",
+	.desc           = N_("Deactivates your assigned vhost."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 1,
+	.cmd            = &hs_cmd_off,
+	.help           = { .path = "hostserv/off" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "hostserv/main")
+
+	service_named_bind_command("hostserv", &hs_on);
+	service_named_bind_command("hostserv", &hs_off);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("hostserv", &hs_on);
+	service_named_unbind_command("hostserv", &hs_off);
+}
+
+SIMPLE_DECLARE_MODULE_V1("hostserv/onoff", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,0 +1,25 @@
+CLEAR BANS:
+
+Belirtilen kanaldaki butun banlari kaldirir.
+Eger ircd'iniz ban eksepsiyonlari gibi diger
+listeleme sekillerini destekliyorsa, bunlari
+da mod harfleri belirterek kaldirabilirsiniz.
+Butun listeleri temizlemek icin * kullanin.
+
+Sentaks: CLEAR <#kanal> BANS [tur]
+
+Örnekler:
+
+Temizler #help ban listesini:
+    /msg &nick& CLEAR #help BANS
+
+Butun banlari ve davet eksepsiyonlarini #help
+kanalindan kaldirir:
+    /msg &nick& CLEAR #help BANS eI
+
+Butun ban listelerini temizler #help kanalindan
+kaldirir:
+    /msg &nick& CLEAR #help BANS *
+
+Olasi harfleri gosterir:
+    /msg &nick& CLEAR #help BANS +

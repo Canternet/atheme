@@ -1,43 +1,24 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2009 William Pitcock <nenolod -at- nenolod.net>
  *
  * Allows setting a vhost on a nick
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "hostserv.h"
 
-DECLARE_MODULE_V1
-(
-	"hostserv/vhostnick", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void hs_cmd_vhostnick(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t hs_vhostnick = { "VHOSTNICK", N_("Manages per-nick virtual hosts."), PRIV_USER_VHOST, 2, hs_cmd_vhostnick, { .path = "hostserv/vhostnick" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("hostserv", &hs_vhostnick);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("hostserv", &hs_vhostnick);
-}
-
-/* VHOSTNICK <nick> [host] */
-static void hs_cmd_vhostnick(sourceinfo_t *si, int parc, char *parv[])
+// VHOSTNICK <nick> [host]
+static void
+hs_cmd_vhostnick(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *host = parv[1];
-	myuser_t *mu;
-	user_t *u;
-	metadata_t *md;
+	struct myuser *mu;
+	struct user *u;
+	struct metadata *md;
 	char buf[BUFSIZE];
 	mowgli_node_t *n;
 	int found = 0;
@@ -49,18 +30,18 @@ static void hs_cmd_vhostnick(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* find the user... */
+	// find the user...
 	if (!(mu = myuser_find_ext(target)))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
 
 	MOWGLI_ITER_FOREACH(n, mu->nicks.head)
 	{
-		if (!irccasecmp(((mynick_t *)(n->data))->nick, target))
+		if (!irccasecmp(((struct mynick *)(n->data))->nick, target))
 		{
-			snprintf(buf, BUFSIZE, "%s:%s", "private:usercloak", ((mynick_t *)(n->data))->nick);
+			snprintf(buf, BUFSIZE, "%s:%s", "private:usercloak", ((struct mynick *)(n->data))->nick);
 			found++;
 		}
 	}
@@ -71,7 +52,7 @@ static void hs_cmd_vhostnick(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* deletion action */
+	// deletion action
 	if (!host)
 	{
 		metadata_delete(mu, buf);
@@ -80,7 +61,7 @@ static void hs_cmd_vhostnick(sourceinfo_t *si, int parc, char *parv[])
 		u = user_find_named(target);
 		if (u != NULL)
 		{
-			/* Revert to account's vhost */
+			// Revert to account's vhost
 			md = metadata_find(mu, "private:usercloak");
 			do_sethost(u, md ? md->value : NULL);
 		}
@@ -101,8 +82,27 @@ static void hs_cmd_vhostnick(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command hs_vhostnick = {
+	.name           = "VHOSTNICK",
+	.desc           = N_("Manages per-nick virtual hosts."),
+	.access         = PRIV_USER_VHOST,
+	.maxparc        = 2,
+	.cmd            = &hs_cmd_vhostnick,
+	.help           = { .path = "hostserv/vhostnick" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "hostserv/main")
+
+	service_named_bind_command("hostserv", &hs_vhostnick);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("hostserv", &hs_vhostnick);
+}
+
+SIMPLE_DECLARE_MODULE_V1("hostserv/vhostnick", MODULE_UNLOAD_CAPABILITY_OK)

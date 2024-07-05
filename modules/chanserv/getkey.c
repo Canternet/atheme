@@ -1,39 +1,19 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 William Pitcock, et al.
  *
  * This file contains code for the CService GETKEY functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/getkey", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_getkey(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_getkey = { "GETKEY", N_("Returns the key (+k) of a channel."),
-                        AC_NONE, 1, cs_cmd_getkey, { .path = "cservice/getkey" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_getkey);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_getkey);
-}
-
-static void cs_cmd_getkey(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_getkey(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (!chan)
 	{
@@ -45,25 +25,25 @@ static void cs_cmd_getkey(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(chan);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
-		return;
-	}
-
-	if (metadata_find(mc, "private:close:closer"))
-	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_INVITE))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+		return;
+	}
+
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
 	if (!mc->chan)
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), mc->name);
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, mc->name);
 		return;
 	}
 
@@ -77,8 +57,27 @@ static void cs_cmd_getkey(sourceinfo_t *si, int parc, char *parv[])
 			mc->name, mc->chan->key);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_getkey = {
+	.name           = "GETKEY",
+	.desc           = N_("Returns the key (+k) of a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &cs_cmd_getkey,
+	.help           = { .path = "cservice/getkey" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_getkey);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_getkey);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/getkey", MODULE_UNLOAD_CAPABILITY_OK)

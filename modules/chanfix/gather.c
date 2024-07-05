@@ -1,27 +1,30 @@
-/* chanfix - channel fixing service
- * Copyright (c) 2010 Atheme Development Group
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2010 Atheme Project (http://atheme.org/)
+ *
+ * chanfix - channel fixing service
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanfix.h"
 
 #define CFDB_VERSION	1
 
+static unsigned int loading_cfdbv = 0;
+
+static mowgli_heap_t *chanfix_channel_heap = NULL;
+static mowgli_heap_t *chanfix_oprecord_heap = NULL;
+static mowgli_eventloop_timer_t *chanfix_gather_timer = NULL;
+static mowgli_eventloop_timer_t *chanfix_expire_timer = NULL;
+
 mowgli_patricia_t *chanfix_channels = NULL;
 
-mowgli_heap_t *chanfix_channel_heap = NULL;
-mowgli_heap_t *chanfix_oprecord_heap = NULL;
-
-mowgli_eventloop_timer_t *chanfix_gather_timer = NULL;
-mowgli_eventloop_timer_t *chanfix_expire_timer = NULL;
-
-static int loading_cfdbv = 0;
-
-/*************************************************************************************/
-
-chanfix_oprecord_t *chanfix_oprecord_create(chanfix_channel_t *chan, user_t *u)
+struct chanfix_oprecord *
+chanfix_oprecord_create(struct chanfix_channel *chan, struct user *u)
 {
-	chanfix_oprecord_t *orec;
+	struct chanfix_oprecord *orec;
 
 	return_val_if_fail(chan != NULL, NULL);
 
@@ -52,7 +55,8 @@ chanfix_oprecord_t *chanfix_oprecord_create(chanfix_channel_t *chan, user_t *u)
 	return orec;
 }
 
-chanfix_oprecord_t *chanfix_oprecord_find(chanfix_channel_t *chan, user_t *u)
+struct chanfix_oprecord *
+chanfix_oprecord_find(struct chanfix_channel *chan, struct user *u)
 {
 	mowgli_node_t *n;
 
@@ -61,7 +65,7 @@ chanfix_oprecord_t *chanfix_oprecord_find(chanfix_channel_t *chan, user_t *u)
 
 	MOWGLI_ITER_FOREACH(n, chan->oprecords.head)
 	{
-		chanfix_oprecord_t *orec = n->data;
+		struct chanfix_oprecord *orec = n->data;
 
 		if (orec->entity != NULL && orec->entity == entity(u->myuser))
 			return orec;
@@ -73,9 +77,10 @@ chanfix_oprecord_t *chanfix_oprecord_find(chanfix_channel_t *chan, user_t *u)
 	return NULL;
 }
 
-void chanfix_oprecord_update(chanfix_channel_t *chan, user_t *u)
+void
+chanfix_oprecord_update(struct chanfix_channel *chan, struct user *u)
 {
-	chanfix_oprecord_t *orec;
+	struct chanfix_oprecord *orec;
 
 	return_if_fail(chan != NULL);
 	return_if_fail(u != NULL);
@@ -96,7 +101,8 @@ void chanfix_oprecord_update(chanfix_channel_t *chan, user_t *u)
 	chan->lastupdate = CURRTIME;
 }
 
-void chanfix_oprecord_delete(chanfix_oprecord_t *orec)
+void
+chanfix_oprecord_delete(struct chanfix_oprecord *orec)
 {
 	return_if_fail(orec != NULL);
 
@@ -104,9 +110,8 @@ void chanfix_oprecord_delete(chanfix_oprecord_t *orec)
 	mowgli_heap_free(chanfix_oprecord_heap, orec);
 }
 
-/*************************************************************************************/
-
-static void chanfix_channel_delete(chanfix_channel_t *c)
+static void
+chanfix_channel_delete(struct chanfix_channel *c)
 {
 	mowgli_node_t *n, *tn;
 
@@ -116,23 +121,24 @@ static void chanfix_channel_delete(chanfix_channel_t *c)
 
 	MOWGLI_ITER_FOREACH_SAFE(n, tn, c->oprecords.head)
 	{
-		chanfix_oprecord_t *orec = n->data;
+		struct chanfix_oprecord *orec = n->data;
 
 		chanfix_oprecord_delete(orec);
 	}
 
-	free(c->name);
+	sfree(c->name);
 	mowgli_heap_free(chanfix_channel_heap, c);
 }
 
-chanfix_channel_t *chanfix_channel_create(const char *name, channel_t *chan)
+struct chanfix_channel *
+chanfix_channel_create(const char *name, struct channel *chan)
 {
-	chanfix_channel_t *c;
+	struct chanfix_channel *c;
 
 	return_val_if_fail(name != NULL, NULL);
 
 	c = mowgli_heap_alloc(chanfix_channel_heap);
-	object_init(object(c), name, (destructor_t) chanfix_channel_delete);
+	atheme_object_init(atheme_object(c), name, (atheme_object_destructor_fn) chanfix_channel_delete);
 
 	c->name = sstrdup(name);
 	c->chan = chan;
@@ -146,23 +152,24 @@ chanfix_channel_t *chanfix_channel_create(const char *name, channel_t *chan)
 	return c;
 }
 
-chanfix_channel_t *chanfix_channel_find(const char *name)
+struct chanfix_channel *
+chanfix_channel_find(const char *name)
 {
 	return mowgli_patricia_retrieve(chanfix_channels, name);
 }
 
-chanfix_channel_t *chanfix_channel_get(channel_t *chan)
+struct chanfix_channel *
+chanfix_channel_get(struct channel *chan)
 {
 	return_val_if_fail(chan != NULL, NULL);
 
 	return mowgli_patricia_retrieve(chanfix_channels, chan->name);
 }
 
-/*************************************************************************************/
-
-static void chanfix_channel_add_ev(channel_t *ch)
+static void
+chanfix_channel_add_ev(struct channel *ch)
 {
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 
 	return_if_fail(ch != NULL);
 
@@ -175,9 +182,10 @@ static void chanfix_channel_add_ev(channel_t *ch)
 	chanfix_channel_create(ch->name, ch);
 }
 
-static void chanfix_channel_delete_ev(channel_t *ch)
+static void
+chanfix_channel_delete_ev(struct channel *ch)
 {
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 
 	return_if_fail(ch != NULL);
 
@@ -190,17 +198,18 @@ static void chanfix_channel_delete_ev(channel_t *ch)
 	chanfix_channel_create(ch->name, NULL);
 }
 
-void chanfix_gather(void *unused)
+void
+chanfix_gather(void *unused)
 {
-	channel_t *ch;
+	struct channel *ch;
 	mowgli_patricia_iteration_state_t state;
-	int chans = 0, oprecords = 0;
+	unsigned int chans = 0, oprecords = 0;
 
 	MOWGLI_PATRICIA_FOREACH(ch, &state, chanlist)
 	{
-		mychan_t *mc;
+		struct mychan *mc;
 		mowgli_node_t *n;
-		chanfix_channel_t *chan;
+		struct chanfix_channel *chan;
 
 		if ((mc = mychan_find(ch->name)) != NULL)
 			continue;
@@ -211,7 +220,7 @@ void chanfix_gather(void *unused)
 
 		MOWGLI_ITER_FOREACH(n, ch->members.head)
 		{
-			chanuser_t *cu = n->data;
+			struct chanuser *cu = n->data;
 
 			if (cu->modes & CSTATUS_OP)
 			{
@@ -223,12 +232,13 @@ void chanfix_gather(void *unused)
 		chans++;
 	}
 
-	slog(LG_DEBUG, "chanfix_gather(): gathered %d channels and %d oprecords.", chans, oprecords);
+	slog(LG_DEBUG, "chanfix_gather(): gathered %u channels and %u oprecords.", chans, oprecords);
 }
 
-void chanfix_expire(void *unused)
+void
+chanfix_expire(void *unused)
 {
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 	mowgli_patricia_iteration_state_t state;
 
 	MOWGLI_PATRICIA_FOREACH(chan, &state, chanfix_channels)
@@ -237,7 +247,7 @@ void chanfix_expire(void *unused)
 
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, chan->oprecords.head)
 		{
-			chanfix_oprecord_t *orec = n->data;
+			struct chanfix_oprecord *orec = n->data;
 
 			/* Simple exponential decay, rounding the decay up
 			 * so that low scores expire sooner.
@@ -255,15 +265,14 @@ void chanfix_expire(void *unused)
 				CURRTIME - chan->lastupdate < CHANFIX_RETENTION_TIME)
 			continue;
 
-		object_unref(chan);
+		atheme_object_unref(chan);
 	}
 }
 
-/*************************************************************************************/
-
-static void write_chanfixdb(database_handle_t *db)
+static void
+write_chanfixdb(struct database_handle *db)
 {
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 	mowgli_patricia_iteration_state_t state;
 
 	return_if_fail(db != NULL);
@@ -284,7 +293,7 @@ static void write_chanfixdb(database_handle_t *db)
 
 		MOWGLI_ITER_FOREACH(n, chan->oprecords.head)
 		{
-			chanfix_oprecord_t *orec = n->data;
+			struct chanfix_oprecord *orec = n->data;
 
 			db_start_row(db, "CFOP");
 			db_write_word(db, chan->name);
@@ -305,12 +314,12 @@ static void write_chanfixdb(database_handle_t *db)
 			db_commit_row(db);
 		}
 
-		if (object(chan)->metadata != NULL)
+		if (atheme_object(chan)->metadata != NULL)
 		{
 			mowgli_patricia_iteration_state_t state2;
-			metadata_t *md;
+			struct metadata *md;
 
-			MOWGLI_PATRICIA_FOREACH(md, &state2, object(chan)->metadata)
+			MOWGLI_PATRICIA_FOREACH(md, &state2, atheme_object(chan)->metadata)
 			{
 				db_start_row(db, "CFMD");
 				db_write_word(db, chan->name);
@@ -322,17 +331,19 @@ static void write_chanfixdb(database_handle_t *db)
 	}
 }
 
-static void db_h_cfdbv(database_handle_t *db, const char *type)
+static void
+db_h_cfdbv(struct database_handle *db, const char *type)
 {
 	loading_cfdbv = db_sread_uint(db);
-	slog(LG_INFO, "chanfix: opensex data schema version is %d.", loading_cfdbv);
+	slog(LG_INFO, "chanfix: opensex data schema version is %u.", loading_cfdbv);
 }
 
-static void db_h_cfchan(database_handle_t *db, const char *type)
+static void
+db_h_cfchan(struct database_handle *db, const char *type)
 {
 	const char *name;
 	time_t ts, lastupdate;
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 
 	name = db_sread_word(db);
 	ts = db_sread_time(db);
@@ -343,13 +354,14 @@ static void db_h_cfchan(database_handle_t *db, const char *type)
 	chan->lastupdate = lastupdate;
 }
 
-static void db_h_cfop(database_handle_t *db, const char *type)
+static void
+db_h_cfop(struct database_handle *db, const char *type)
 {
 	const char *name, *entity, *user, *host;
 	time_t firstseen, lastevent;
 	unsigned int age;
-	chanfix_channel_t *chan;
-	chanfix_oprecord_t *orec;
+	struct chanfix_channel *chan;
+	struct chanfix_oprecord *orec;
 
 	name = db_sread_word(db);
 	entity = db_sread_word(db);
@@ -374,10 +386,11 @@ static void db_h_cfop(database_handle_t *db, const char *type)
 	orec->age = age;
 }
 
-static void db_h_cfmd(database_handle_t *db, const char *type)
+static void
+db_h_cfmd(struct database_handle *db, const char *type)
 {
 	const char *chname, *key, *value;
-	chanfix_channel_t *chan;
+	struct chanfix_channel *chan;
 
 	chname = db_sread_word(db);
 	key = db_sread_word(db);
@@ -387,9 +400,8 @@ static void db_h_cfmd(database_handle_t *db, const char *type)
 	metadata_add(chan, key, value);
 }
 
-/*************************************************************************************/
-
-void chanfix_gather_init(chanfix_persist_record_t *rec)
+void
+chanfix_gather_init(struct chanfix_persist_record *rec)
 {
 	hook_add_db_write(write_chanfixdb);
 	hook_add_channel_add(chanfix_channel_add_ev);
@@ -400,6 +412,9 @@ void chanfix_gather_init(chanfix_persist_record_t *rec)
 	db_register_type_handler("CFOP", db_h_cfop);
 	db_register_type_handler("CFMD", db_h_cfmd);
 
+	chanfix_expire_timer = mowgli_timer_add(base_eventloop, "chanfix_expire", chanfix_expire, NULL, CHANFIX_EXPIRE_INTERVAL);
+	chanfix_gather_timer = mowgli_timer_add(base_eventloop, "chanfix_gather", chanfix_gather, NULL, CHANFIX_GATHER_INTERVAL);
+
 	if (rec != NULL)
 	{
 		chanfix_channel_heap = rec->chanfix_channel_heap;
@@ -409,16 +424,14 @@ void chanfix_gather_init(chanfix_persist_record_t *rec)
 		return;
 	}
 
-	chanfix_channel_heap = mowgli_heap_create(sizeof(chanfix_channel_t), 32, BH_LAZY);
-	chanfix_oprecord_heap = mowgli_heap_create(sizeof(chanfix_oprecord_t), 32, BH_LAZY);
+	chanfix_channel_heap = mowgli_heap_create(sizeof(struct chanfix_channel), 32, BH_LAZY);
+	chanfix_oprecord_heap = mowgli_heap_create(sizeof(struct chanfix_oprecord), 32, BH_LAZY);
 
-	chanfix_channels = mowgli_patricia_create(strcasecanon);
-
-	chanfix_expire_timer = mowgli_timer_add(base_eventloop, "chanfix_expire", chanfix_expire, NULL, CHANFIX_EXPIRE_INTERVAL);
-	chanfix_gather_timer = mowgli_timer_add(base_eventloop, "chanfix_gather", chanfix_gather, NULL, CHANFIX_GATHER_INTERVAL);
+	chanfix_channels = mowgli_patricia_create(irccasecanon);
 }
 
-void chanfix_gather_deinit(module_unload_intent_t intent, chanfix_persist_record_t *rec)
+void
+chanfix_gather_deinit(struct chanfix_persist_record *rec)
 {
 	hook_del_db_write(write_chanfixdb);
 	hook_del_channel_add(chanfix_channel_add_ev);
@@ -427,25 +440,12 @@ void chanfix_gather_deinit(module_unload_intent_t intent, chanfix_persist_record
 	db_unregister_type_handler("CFDBV");
 	db_unregister_type_handler("CFCHAN");
 	db_unregister_type_handler("CFOP");
+	db_unregister_type_handler("CFMD");
 
 	mowgli_timer_destroy(base_eventloop, chanfix_expire_timer);
 	mowgli_timer_destroy(base_eventloop, chanfix_gather_timer);
 
-	switch (intent)
-	{
-		case MODULE_UNLOAD_INTENT_RELOAD:
-			rec->chanfix_channel_heap = chanfix_channel_heap;
-			rec->chanfix_oprecord_heap = chanfix_oprecord_heap;
-
-			rec->chanfix_channels = chanfix_channels;
-			break;
-
-		case MODULE_UNLOAD_INTENT_PERM:
-		default:
-			mowgli_patricia_destroy(chanfix_channels, NULL, NULL);
-
-			mowgli_heap_destroy(chanfix_channel_heap);
-			mowgli_heap_destroy(chanfix_oprecord_heap);
-			break;
-	}
+	rec->chanfix_channel_heap  = chanfix_channel_heap;
+	rec->chanfix_oprecord_heap = chanfix_oprecord_heap;
+	rec->chanfix_channels      = chanfix_channels;
 }

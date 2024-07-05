@@ -1,33 +1,26 @@
 /*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 1996-2002 Hybrid Development Team
+ * Copyright (C) 2002-2005 ircd-ratbox development team
+ * Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2016-2018 Atheme Development Group (https://atheme.github.io/)
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
  * atheme-services: A collection of minimalist IRC services
  * cidr.c: CIDR matching.
  *
  * Most code in this file has been copied from ratbox, src/match.c and
  * src/irc_string.c. It provides CIDR matching for IPv4 and IPv6 without
  * special OS support.
- *
- * Copyright (c) 1996-2002 Hybrid Development Team
- * Copyright (c) 2002-2005 ircd-ratbox development team
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "atheme.h"
+#include <atheme.h>
+#include "internal.h"
 
 #ifndef INADDRSZ
 #define INADDRSZ 4
@@ -42,13 +35,13 @@
 /* compares the first 'mask' bits
  * returns 1 if equal, 0 if not */
 static int
-comp_with_mask(void *addr, void *dest, u_int mask)
+comp_with_mask(void *addr, void *dest, unsigned int mask)
 {
 	if (memcmp(addr, dest, mask / 8) == 0)
 	{
 		int n = mask / 8;
 		int m = ((-1) << (8 - (mask % 8)));
-		if (mask % 8 == 0 || (((u_char *) addr)[n] & m) == (((u_char *) dest)[n] & m))
+		if (mask % 8 == 0 || (((unsigned char *) addr)[n] & m) == (((unsigned char *) dest)[n] & m))
 		{
 			return (1);
 		}
@@ -90,10 +83,10 @@ comp_with_mask(void *addr, void *dest, u_int mask)
  *	Paul Vixie, 1996.
  */
 static int
-inet_pton4(const char *src, u_char *dst)
+inet_pton4(const char *src, unsigned char *dst)
 {
 	int saw_digit, octets, ch;
-	u_char tmp[INADDRSZ], *tp;
+	unsigned char tmp[INADDRSZ], *tp;
 
 	saw_digit = 0;
 	octets = 0;
@@ -103,7 +96,7 @@ inet_pton4(const char *src, u_char *dst)
 
 		if(ch >= '0' && ch <= '9')
 		{
-			u_int new = *tp * 10 + (ch - '0');
+			unsigned int new = *tp * 10 + (ch - '0');
 
 			if(new > 255)
 				return (0);
@@ -145,13 +138,13 @@ inet_pton4(const char *src, u_char *dst)
  *	Paul Vixie, 1996.
  */
 static int
-inet_pton6(const char *src, u_char *dst)
+inet_pton6(const char *src, unsigned char *dst)
 {
 	static const char xdigits[] = "0123456789abcdef";
-	u_char tmp[IN6ADDRSZ], *tp, *endp, *colonp;
+	unsigned char tmp[IN6ADDRSZ], *tp, *endp, *colonp;
 	const char *curtok;
 	int ch, saw_xdigit;
-	u_int val;
+	unsigned int val;
 
 	tp = memset(tmp, '\0', IN6ADDRSZ);
 	endp = tp + IN6ADDRSZ;
@@ -193,8 +186,8 @@ inet_pton6(const char *src, u_char *dst)
 			}
 			if(tp + INT16SZ > endp)
 				return (0);
-			*tp++ = (u_char) (val >> 8) & 0xff;
-			*tp++ = (u_char) val & 0xff;
+			*tp++ = (unsigned char) (val >> 8) & 0xff;
+			*tp++ = (unsigned char) val & 0xff;
 			saw_xdigit = 0;
 			val = 0;
 			continue;
@@ -214,8 +207,8 @@ inet_pton6(const char *src, u_char *dst)
 	{
 		if(tp + INT16SZ > endp)
 			return (0);
-		*tp++ = (u_char) (val >> 8) & 0xff;
-		*tp++ = (u_char) val & 0xff;
+		*tp++ = (unsigned char) (val >> 8) & 0xff;
+		*tp++ = (unsigned char) val & 0xff;
 	}
 	if(colonp != NULL)
 	{
@@ -248,7 +241,8 @@ inet_pton6(const char *src, u_char *dst)
  * Output - 0 = Matched 1 = Did not match
  * switched 0 and 1 to be consistent with atheme's match() -- jilles
  */
-int match_ips(const char *s1, const char *s2)
+int
+match_ips(const char *s1, const char *s2)
 {
 	unsigned char ipaddr[IN6ADDRSZ], maskaddr[IN6ADDRSZ];
 	char ipmask[BUFSIZE];
@@ -307,7 +301,7 @@ match_cidr(const char *s1, const char *s2)
 {
 	unsigned char ipaddr[IN6ADDRSZ], maskaddr[IN6ADDRSZ];
 	char mask[BUFSIZE];
-	char address[NICKLEN + USERLEN + HOSTLEN + 6];
+	char address[NICKLEN + USERLEN + HOSTLEN + 9];
 	char *ipmask;
 	char *ip;
 	char *len;
@@ -366,10 +360,11 @@ match_cidr(const char *s1, const char *s2)
 		return 1;
 }
 
-int valid_ip_or_mask(const char *src)
+int
+valid_ip_or_mask(const char *src)
 {
-	char ipaddr[HOSTLEN + 6];
-	u_char buf[IN6ADDRSZ];
+	char ipaddr[HOSTLEN + 7];
+	unsigned char buf[IN6ADDRSZ];
 	char *mask, *end;
 	unsigned long cidrlen;
 
@@ -378,7 +373,7 @@ int valid_ip_or_mask(const char *src)
 
 	int is_ipv6 = (strchr(ipaddr, ':') != NULL);
 
-	if (mask = strchr(ipaddr, '/'))
+	if ((mask = strchr(ipaddr, '/')))
 	{
 		*mask++ = '\0';
 

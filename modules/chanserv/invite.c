@@ -1,43 +1,24 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock, et al.
+ * Copyright (C) 2014-2017 Austin Ellis (siniStar[at]IRC4Fun.net)
  *
  * This file contains code for the CService INVITE functions.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/invite", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void cs_cmd_invite(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_invite = { "INVITE", N_("Invites you to a channel."),
-                        AC_NONE, 1, cs_cmd_invite, { .path = "cservice/invite" } };
-
-void _modinit(module_t *m)
-{
-        service_named_bind_command("chanserv", &cs_invite);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_invite);
-}
-
-static void cs_cmd_invite(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_invite(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *chan = parv[0];
-	mychan_t *mc;
+	struct mychan *mc;
 
 	if (si->su == NULL)
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 can only be executed via IRC."), "INVITE");
+		command_fail(si, fault_noprivs, STR_IRC_COMMAND_ONLY, "INVITE");
 		return;
 	}
 
@@ -55,28 +36,27 @@ static void cs_cmd_invite(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	mc = mychan_find(chan);
-	if (!mc)
+	if (!(mc = mychan_find(chan)))
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), chan);
-		return;
-	}
-
-	if (metadata_find(mc, "private:close:closer"))
-	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), chan);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, chan);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_INVITE))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
+		return;
+	}
+
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, chan);
 		return;
 	}
 
 	if (!mc->chan)
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), mc->name);
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, mc->name);
 		return;
 	}
 
@@ -91,8 +71,27 @@ static void cs_cmd_invite(sourceinfo_t *si, int parc, char *parv[])
 	command_success_nodata(si, _("You have been invited to \2%s\2."), mc->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_invite = {
+	.name           = "INVITE",
+	.desc           = N_("Invites you to a channel."),
+	.access         = AC_NONE,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_invite,
+	.help           = { .path = "cservice/invite" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_invite);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_invite);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/invite", MODULE_UNLOAD_CAPABILITY_OK)

@@ -1,42 +1,30 @@
 /*
- * Copyright (c) 2005 William Pitcock, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2007 William Pitcock, et al.
  *
  * This file contains code for the CService QUIET/UNQUIET function.
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "chanserv.h"
 
-DECLARE_MODULE_V1
-(
-	"chanserv/quiet", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+// Imported by modules/chanserv/antiflood
+extern struct chanban *place_quietmask(struct channel *, int, const char *);
 
-static void cs_cmd_quiet(sourceinfo_t *si, int parc, char *parv[]);
-static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[]);
+// Notify at most this many users in private notices, otherwise channel
+#define MAX_SINGLE_NOTIFY 3
 
-command_t cs_quiet = { "QUIET", N_("Sets a quiet on a channel."),
-                        AC_AUTHENTICATED, 2, cs_cmd_quiet, { .path = "cservice/quiet" } };
-command_t cs_unquiet = { "UNQUIET", N_("Removes a quiet on a channel."),
-			AC_AUTHENTICATED, 2, cs_cmd_unquiet, { .path = "cservice/unquiet" } };
-
-void _modinit(module_t *m)
+enum devoice_result
 {
-        service_named_bind_command("chanserv", &cs_quiet);
-	service_named_bind_command("chanserv", &cs_unquiet);
-}
+	DEVOICE_FAILED,
+	DEVOICE_NO_ACTION,
+	DEVOICE_DONE
+};
 
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_quiet);
-	service_named_unbind_command("chanserv", &cs_unquiet);
-}
-
-static void make_extbanmask(char *buf, size_t buflen, const char *mask)
+static void
+make_extbanmask(char *buf, size_t buflen, const char *mask)
 {
 	return_if_fail(buf != NULL);
 	return_if_fail(mask != NULL);
@@ -57,13 +45,15 @@ static void make_extbanmask(char *buf, size_t buflen, const char *mask)
 	mowgli_strlcat(buf, mask, buflen);
 }
 
-static char get_quiet_ban_char(void)
+static char
+get_quiet_ban_char(void)
 {
 	return (ircd->type == PROTOCOL_UNREAL ||
 			ircd->type == PROTOCOL_INSPIRCD) ? 'b' : 'q';
 }
 
-static char *strip_extban(char *mask)
+static char *
+strip_extban(char *mask)
 {
 	if (ircd->type == PROTOCOL_INSPIRCD)
 		return sstrdup(&mask[2]);
@@ -72,10 +62,11 @@ static char *strip_extban(char *mask)
 	return sstrdup(mask);
 }
 
-chanban_t *place_quietmask(channel_t *c, int dir, const char *hostbuf)
+struct chanban *
+place_quietmask(struct channel *c, int dir, const char *hostbuf)
 {
 	char rhostbuf[BUFSIZE];
-	chanban_t *cb = NULL;
+	struct chanban *cb = NULL;
 	char banlike_char = get_quiet_ban_char();
 
 	make_extbanmask(rhostbuf, sizeof rhostbuf, hostbuf);
@@ -86,7 +77,8 @@ chanban_t *place_quietmask(channel_t *c, int dir, const char *hostbuf)
 	return cb;
 }
 
-static void make_extban(char *buf, size_t size, user_t *tu)
+static void
+make_extban(char *buf, size_t size, struct user *tu)
 {
 	return_if_fail(buf != NULL);
 	return_if_fail(tu != NULL);
@@ -111,12 +103,10 @@ static void make_extban(char *buf, size_t size, user_t *tu)
 	mowgli_strlcat(buf, tu->vhost, size);
 }
 
-enum devoice_result { DEVOICE_FAILED, DEVOICE_NO_ACTION, DEVOICE_DONE };
-
 static enum devoice_result
-devoice_user(sourceinfo_t *si, mychan_t *mc, channel_t *c, user_t *tu)
+devoice_user(struct sourceinfo *si, struct mychan *mc, struct channel *c, struct user *tu)
 {
-	chanuser_t *cu;
+	struct chanuser *cu;
 	unsigned int flag;
 	char buf[3];
 	enum devoice_result result = DEVOICE_NO_ACTION;
@@ -132,7 +122,7 @@ devoice_user(sourceinfo_t *si, mychan_t *mc, channel_t *c, user_t *tu)
 		flag = 0;
 	if (flag != 0 && !chanacs_source_has_flag(mc, si, flag))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return DEVOICE_FAILED;
 	}
 
@@ -176,17 +166,16 @@ devoice_user(sourceinfo_t *si, mychan_t *mc, channel_t *c, user_t *tu)
 	return result;
 }
 
-/* Notify at most this many users in private notices, otherwise channel */
-#define MAX_SINGLE_NOTIFY 3
-
-static void notify_one_victim(sourceinfo_t *si, channel_t *c, user_t *u, int dir)
+static void
+notify_one_victim(struct sourceinfo *si, struct channel *c, struct user *u, int dir)
 {
 	return_if_fail(dir == MTYPE_ADD || dir == MTYPE_DEL);
 
-	/* fantasy command, they can see it */
+	// fantasy command, they can see it
 	if (si->c != NULL)
 		return;
-	/* self */
+
+	// self
 	if (si->su == u)
 		return;
 
@@ -200,14 +189,15 @@ static void notify_one_victim(sourceinfo_t *si, channel_t *c, user_t *u, int dir
 				c->name, get_source_name(si));
 }
 
-static void notify_victims(sourceinfo_t *si, channel_t *c, chanban_t *cb, int dir)
+static void
+notify_victims(struct sourceinfo *si, struct channel *c, struct chanban *cb, int dir)
 {
 	mowgli_node_t *n;
-	chanuser_t *cu;
-	chanban_t tmpban;
+	struct chanuser *cu;
+	struct chanban tmpban;
 	mowgli_list_t ban_l = { NULL, NULL, 0 };
 	mowgli_node_t ban_n;
-	user_t *to_notify[MAX_SINGLE_NOTIFY];
+	struct user *to_notify[MAX_SINGLE_NOTIFY];
 	unsigned int to_notify_count = 0, i;
 	char banlike_char = get_quiet_ban_char();
 
@@ -216,16 +206,16 @@ static void notify_victims(sourceinfo_t *si, channel_t *c, chanban_t *cb, int di
 	if (cb == NULL)
 		return;
 
-	/* fantasy command, they can see it */
+	// fantasy command, they can see it
 	if (si->c != NULL)
 		return;
 
 	/* some ircds use an action extban for mute
 	 * strip it from those who do so we can reliably match users */
-	memcpy(&tmpban, cb, sizeof(chanban_t));
+	memcpy(&tmpban, cb, sizeof(struct chanban));
 	tmpban.mask = strip_extban(cb->mask);
 
-	/* only check the newly added/removed quiet */
+	// only check the newly added/removed quiet
 	mowgli_node_add(&tmpban, &ban_n, &ban_l);
 
 	MOWGLI_ITER_FOREACH(n, c->members.head)
@@ -260,19 +250,20 @@ static void notify_victims(sourceinfo_t *si, channel_t *c, chanban_t *cb, int di
 		for (i = 0; i < to_notify_count; i++)
 			notify_one_victim(si, c, to_notify[i], dir);
 
-	free(tmpban.mask);
+	sfree(tmpban.mask);
 }
 
-static void cs_cmd_quiet(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_quiet(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *channel = parv[0];
 	char *target = parv[1];
 	char *newtarget;
-	channel_t *c = channel_find(channel);
-	mychan_t *mc = mychan_find(channel);
-	user_t *tu;
-	chanban_t *cb;
-	int n;
+	struct channel *c = channel_find(channel);
+	struct mychan *mc = mychan_find(channel);
+	struct user *tu;
+	struct chanban *cb;
+	unsigned int n;
 	char *targetlist;
 	char *strtokctx = NULL;
 	enum devoice_result devoice_result;
@@ -286,29 +277,29 @@ static void cs_cmd_quiet(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
 	if (!c)
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), channel);
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, channel);
 		return;
 	}
 
 	if (!chanacs_source_has_flag(mc, si, CA_REMOVE))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
 	if (metadata_find(mc, "private:close:closer"))
 	{
-		command_fail(si, fault_noprivs, _("\2%s\2 is closed."), channel);
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, channel);
 		return;
 	}
 
-	targetlist = strdup(target);
+	targetlist = sstrdup(target);
 	target = strtok_r(targetlist, " ", &strtokctx);
 	do
 	{
@@ -328,8 +319,11 @@ static void cs_cmd_quiet(sourceinfo_t *si, int parc, char *parv[])
 			cb = place_quietmask(c, MTYPE_ADD, hostbuf);
 			n = remove_ban_exceptions(si->service->me, c, tu);
 			if (n > 0)
-				command_success_nodata(si, _("To ensure the quiet takes effect, %d ban exception(s) matching \2%s\2 have been removed from \2%s\2."), n, tu->nick, c->name);
-			/* Notify if we did anything. */
+				command_success_nodata(si, ngettext(N_("To ensure the quiet takes effect, %u ban exception matching \2%s\2 has been removed from \2%s\2."),
+				                                    N_("To ensure the quiet takes effect, %u ban exceptions matching \2%s\2 have been removed from \2%s\2."),
+				                                    n), n, tu->nick, c->name);
+
+			// Notify if we did anything.
 			if (cb != NULL)
 				notify_victims(si, c, cb, MTYPE_ADD);
 			else if (devoice_result == DEVOICE_DONE || n > 0)
@@ -355,18 +349,19 @@ static void cs_cmd_quiet(sourceinfo_t *si, int parc, char *parv[])
 			continue;
 		}
 	} while ((target = strtok_r(NULL, " ", &strtokctx)) != NULL);
-	free(targetlist);
+	sfree(targetlist);
 }
 
-static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[])
+static void
+cs_cmd_unquiet(struct sourceinfo *si, int parc, char *parv[])
 {
         const char *channel = parv[0];
         const char *target = parv[1];
 	char banlike_char = get_quiet_ban_char();
-        channel_t *c = channel_find(channel);
-	mychan_t *mc = mychan_find(channel);
-	user_t *tu;
-	chanban_t *cb;
+        struct channel *c = channel_find(channel);
+	struct mychan *mc = mychan_find(channel);
+	struct user *tu;
+	struct chanban *cb;
 	char *targetlist;
 	char *strtokctx;
 	char target_extban[BUFSIZE];
@@ -391,13 +386,13 @@ static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
 	if (!c)
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is currently empty."), channel);
+		command_fail(si, fault_nosuch_target, STR_CHANNEL_IS_EMPTY, channel);
 		return;
 	}
 
@@ -406,11 +401,17 @@ static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[])
 			 !chanacs_source_has_flag(mc, si, CA_EXEMPT) ||
 			 irccasecmp(target, si->su->nick)))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+		command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 		return;
 	}
 
-	targetlist = strdup(target);
+	if (metadata_find(mc, "private:close:closer"))
+	{
+		command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, channel);
+		return;
+	}
+
+	targetlist = sstrdup(target);
 	target = strtok_r(targetlist, " ", &strtokctx);
 	do
 	{
@@ -418,7 +419,7 @@ static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[])
 		{
 			mowgli_node_t *n, *tn;
 			char hostbuf2[BUFSIZE];
-			int count = 0;
+			unsigned int count = 0;
 
 			make_extban(hostbuf2, sizeof hostbuf2, tu);
 			for (n = next_matching_ban(c, tu, banlike_char, c->bans.head); n != NULL; n = next_matching_ban(c, tu, banlike_char, tn))
@@ -433,19 +434,22 @@ static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[])
 			}
 			if (count > 0)
 			{
-				/* one notification only */
+				// one notification only
 				if (chanuser_find(c, tu))
 					notify_one_victim(si, c, tu, MTYPE_DEL);
-				command_success_nodata(si, _("Unquieted \2%s\2 on \2%s\2 (%d quiet%s removed)."),
-					target, channel, count, (count != 1 ? "s" : ""));
+				command_success_nodata(si, ngettext(N_("Unquieted \2%s\2 on \2%s\2 (%u quiet removed)."),
+				                                    N_("Unquieted \2%s\2 on \2%s\2 (%u quiets removed)."),
+				                                    count), target, channel, count);
 			}
 			else
 				command_success_nodata(si, _("No quiets found matching \2%s\2 on \2%s\2."), target, channel);
+
 			continue;
 		}
-		else if (make_extbanmask(target_extban, sizeof target_extban, target),
-				(cb = chanban_find(c, target_extban, banlike_char)) != NULL ||
-				validhostmask(target))
+
+		(void) make_extbanmask(target_extban, sizeof target_extban, target);
+
+		if ((cb = chanban_find(c, target_extban, banlike_char)) != NULL || validhostmask(target))
 		{
 			if (cb != NULL)
 			{
@@ -467,12 +471,44 @@ static void cs_cmd_unquiet(sourceinfo_t *si, int parc, char *parv[])
 			command_fail(si, fault_badparams, _("Syntax: UNQUIET <#channel> [nickname|hostmask] [...]"));
 			continue;
 		}
+
 	} while ((target = strtok_r(NULL, " ", &strtokctx)) != NULL);
-	free(targetlist);
+
+	sfree(targetlist);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_quiet = {
+	.name           = "QUIET",
+	.desc           = N_("Sets a quiet on a channel."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_quiet,
+	.help           = { .path = "cservice/quiet" },
+};
+
+static struct command cs_unquiet = {
+	.name           = "UNQUIET",
+	.desc           = N_("Removes a quiet on a channel."),
+	.access         = AC_AUTHENTICATED,
+	.maxparc        = 2,
+	.cmd            = &cs_cmd_unquiet,
+	.help           = { .path = "cservice/unquiet" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_quiet);
+	service_named_bind_command("chanserv", &cs_unquiet);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_quiet);
+	service_named_unbind_command("chanserv", &cs_unquiet);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/quiet", MODULE_UNLOAD_CAPABILITY_OK)

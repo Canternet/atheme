@@ -1,25 +1,24 @@
-# Copyright (c) 2003-2004 E. Will et al.
-# Rights to this code are documented in doc/LICENSE.
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
 #
-# This file contains build instructions.
-#
-# $Id: Makefile.in 8375 2007-06-03 20:03:26Z pippijn $
-#
-
-MODULE = rpgserv
-
-SRCS =  main.c \
-	enable.c \
-	help.c \
-	info.c \
-	list.c \
-	search.c \
-	set.c
+# Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../extra.mk
+
+MODULE = rpgserv
+SRCS   =            \
+    enable.c        \
+    help.c          \
+    info.c          \
+    list.c          \
+    main.c          \
+    search.c        \
+    set.c
+
 include ../../buildsys.mk
 include ../../buildsys.module.mk
 
-CPPFLAGS	+= -I../../include
-LIBS +=	-L../../libathemecore -lathemecore ${LDFLAGS_RPATH} -lm
-
+CPPFLAGS += -I../../include
+LDFLAGS  += -L../../libathemecore
+LIBS     += -lathemecore

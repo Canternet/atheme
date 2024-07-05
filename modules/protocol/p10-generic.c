@@ -1,23 +1,20 @@
 /*
- * Copyright (c) 2005-2006 William Pitcock, et al.
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2008 William Pitcock, et al.
  *
  * This file contains protocol support for P10 ircd's.
  * Some sources used: Run's documentation, beware's description,
  * raw data sent by asuka.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1("protocol/p10-generic", true, _modinit, NULL, PACKAGE_STRING, "Atheme Development Group <http://www.atheme.org>");
+static void check_hidehost(struct user *u);
 
-static void check_hidehost(user_t *u);
-
-/* login to our uplink */
-static unsigned int p10_server_login(void)
+static unsigned int
+p10_server_login(void)
 {
 	int ret;
 
@@ -27,7 +24,7 @@ static unsigned int p10_server_login(void)
 
 	me.bursting = true;
 
-	/* SERVER irc.p10.org 1 933022556 947908144 J10 AA]]] :[127.0.0.1] A Undernet Server */
+	// SERVER irc.p10.org 1 933022556 947908144 J10 AA]]] :[127.0.0.1] A Undernet Server
 	sts("SERVER %s 1 %lu %lu J10 %s]]] +s6 :%s", me.name, (unsigned long)me.start, (unsigned long)CURRTIME, me.numeric, me.desc);
 
 	services_init();
@@ -37,36 +34,37 @@ static unsigned int p10_server_login(void)
 	return 0;
 }
 
-/* introduce a client */
-static void p10_introduce_nick(user_t *u)
+static void
+p10_introduce_nick(struct user *u)
 {
 	const char *umode = user_get_umodestr(u);
 
 	sts("%s N %s 1 %lu %s %s %sk ]]]]]] %s :%s", me.numeric, u->nick, (unsigned long)u->ts, u->user, u->host, umode, u->uid, u->gecos);
 }
 
-/* invite a user to a channel */
-static void p10_invite_sts(user_t *sender, user_t *target, channel_t *channel)
+static void
+p10_invite_sts(struct user *sender, struct user *target, struct channel *channel)
 {
-	/* target is a nick, weird eh? -- jilles */
+	// target is a nick, weird eh? -- jilles
 	sts("%s I %s %s", sender->uid, target->nick, channel->name);
 }
 
-static void p10_quit_sts(user_t *u, const char *reason)
+static void
+p10_quit_sts(struct user *u, const char *reason)
 {
 	sts("%s Q :%s", u->uid, reason);
 }
 
-/* WALLOPS wrapper */
-static void p10_wallops_sts(const char *text)
+static void
+p10_wallops_sts(const char *text)
 {
 	sts("%s WA :%s", me.numeric, text);
 }
 
-/* join a channel */
-static void p10_join_sts(channel_t *c, user_t *u, bool isnew, char *modes)
+static void
+p10_join_sts(struct channel *c, struct user *u, bool isnew, char *modes)
 {
-	/* If the channel doesn't exist, we need to create it. */
+	// If the channel doesn't exist, we need to create it.
 	if (isnew)
 	{
 		sts("%s C %s %lu", u->uid, c->name, (unsigned long)c->ts);
@@ -80,7 +78,8 @@ static void p10_join_sts(channel_t *c, user_t *u, bool isnew, char *modes)
 	}
 }
 
-static void p10_chan_lowerts(channel_t *c, user_t *u)
+static void
+p10_chan_lowerts(struct channel *c, struct user *u)
 {
 	slog(LG_DEBUG, "p10_chan_lowerts(): lowering TS for %s to %lu",
 			c->name, (unsigned long)c->ts);
@@ -89,8 +88,8 @@ static void p10_chan_lowerts(channel_t *c, user_t *u)
 	chanban_clear(c);
 }
 
-/* kicks a user from a channel */
-static void p10_kick(user_t *source, channel_t *c, user_t *u, const char *reason)
+static void
+p10_kick(struct user *source, struct channel *c, struct user *u, const char *reason)
 {
 	if (chanuser_find(c, source))
 		sts("%s K %s %s :%s", source->uid, c->name, u->uid, reason);
@@ -100,11 +99,11 @@ static void p10_kick(user_t *source, channel_t *c, user_t *u, const char *reason
 	chanuser_delete(c, u);
 }
 
-/* PRIVMSG wrapper */
-static void p10_msg(const char *from, const char *target, const char *fmt, ...)
+static void ATHEME_FATTR_PRINTF(3, 4)
+p10_msg(const char *from, const char *target, const char *fmt, ...)
 {
 	va_list ap;
-	user_t *u = user_find_named(from);
+	struct user *u = user_find_named(from);
 	char buf[BUFSIZE];
 
 	if (!u)
@@ -117,10 +116,11 @@ static void p10_msg(const char *from, const char *target, const char *fmt, ...)
 	sts("%s P %s :%s", u->uid, target, buf);
 }
 
-static void p10_msg_global_sts(user_t *from, const char *mask, const char *text)
+static void
+p10_msg_global_sts(struct user *from, const char *mask, const char *text)
 {
 	mowgli_node_t *n;
-	tld_t *tld;
+	struct tld *tld;
 
 	if (!strcmp(mask, "*"))
 	{
@@ -134,16 +134,17 @@ static void p10_msg_global_sts(user_t *from, const char *mask, const char *text)
 		sts("%s P %s%s :%s", from ? from->uid : me.numeric, ircd->tldprefix, mask, text);
 }
 
-/* NOTICE wrapper */
-static void p10_notice_user_sts(user_t *from, user_t *target, const char *text)
+static void
+p10_notice_user_sts(struct user *from, struct user *target, const char *text)
 {
 	sts("%s O %s :%s", from ? from->uid : me.numeric, target->uid, text);
 }
 
-static void p10_notice_global_sts(user_t *from, const char *mask, const char *text)
+static void
+p10_notice_global_sts(struct user *from, const char *mask, const char *text)
 {
 	mowgli_node_t *n;
-	tld_t *tld;
+	struct tld *tld;
 
 	if (!strcmp(mask, "*"))
 	{
@@ -157,7 +158,8 @@ static void p10_notice_global_sts(user_t *from, const char *mask, const char *te
 		sts("%s O %s%s :%s", from ? from->uid : me.numeric, ircd->tldprefix, mask, text);
 }
 
-static void p10_notice_channel_sts(user_t *from, channel_t *target, const char *text)
+static void
+p10_notice_channel_sts(struct user *from, struct channel *target, const char *text)
 {
 	if (from == NULL || chanuser_find(target, from))
 		sts("%s O %s :%s", from ? from->uid : me.numeric, target->name, text);
@@ -165,13 +167,14 @@ static void p10_notice_channel_sts(user_t *from, channel_t *target, const char *
 		sts("%s O %s :[%s:%s] %s", me.numeric, target->name, from->nick, target->name, text);
 }
 
-static void p10_wallchops(user_t *sender, channel_t *channel, const char *message)
+static void
+p10_wallchops(struct user *sender, struct channel *channel, const char *message)
 {
 	sts("%s WC %s :%s", sender->uid, channel->name, message);
 }
 
-/* numeric wrapper */
-static void p10_numeric_sts(server_t *from, int numeric, user_t *target, const char *fmt, ...)
+static void ATHEME_FATTR_PRINTF(4, 5)
+p10_numeric_sts(struct server *from, int numeric, struct user *target, const char *fmt, ...)
 {
 	va_list ap;
 	char buf[BUFSIZE];
@@ -183,8 +186,8 @@ static void p10_numeric_sts(server_t *from, int numeric, user_t *target, const c
 	sts("%s %d %s %s", from->sid, numeric, target->uid, buf);
 }
 
-/* KILL wrapper */
-static void p10_kill_id_sts(user_t *killer, const char *id, const char *reason)
+static void
+p10_kill_id_sts(struct user *killer, const char *id, const char *reason)
 {
 	if (killer != NULL)
 		sts("%s D %s :%s!%s (%s)", killer->uid, id, killer->host, killer->nick, reason);
@@ -192,37 +195,40 @@ static void p10_kill_id_sts(user_t *killer, const char *id, const char *reason)
 		sts("%s D %s :%s (%s)", me.numeric, id, me.name, reason);
 }
 
-/* PART wrapper */
-static void p10_part_sts(channel_t *c, user_t *u)
+static void
+p10_part_sts(struct channel *c, struct user *u)
 {
 	sts("%s L %s", u->uid, c->name);
 }
 
-/* server-to-server KLINE wrapper */
-static void p10_kline_sts(const char *server, const char *user, const char *host, long duration, const char *reason)
+static void
+p10_kline_sts(const char *server, const char *user, const char *host, long duration, const char *reason)
 {
-	/* hold permanent akills for four weeks -- jilles */
-	sts("%s GL * +%s@%s %ld :%s", me.numeric, user, host, duration > 0 ? duration : 2419200, reason);
+	// hold permanent akills for four weeks -- jilles
+	sts("%s GL * +%s@%s %ld :%s", me.numeric, user, host, duration > 0 ? duration : (4 * SECONDS_PER_WEEK), reason);
 }
 
-/* server-to-server UNKLINE wrapper */
-static void p10_unkline_sts(const char *server, const char *user, const char *host)
+static void
+p10_unkline_sts(const char *server, const char *user, const char *host)
 {
 	sts("%s GL * -%s@%s", me.numeric, user, host);
 }
 
-static void p10_xline_sts(const char *server, const char *realname, long duration, const char *reason)
+static void
+p10_xline_sts(const char *server, const char *realname, long duration, const char *reason)
 {
-	/* hold permanent sglines for four weeks -- jilles */
-	sts("%s GL * +$R%s %ld :%s", me.numeric, realname, duration > 0 ? duration : 2419200, reason);
+	// hold permanent sglines for four weeks -- jilles
+	sts("%s GL * +$R%s %ld :%s", me.numeric, realname, duration > 0 ? duration : (4 * SECONDS_PER_WEEK), reason);
 }
 
-static void p10_unxline_sts(const char *server, const char *realname)
+static void
+p10_unxline_sts(const char *server, const char *realname)
 {
 	sts("%s GL * -$R%s", me.numeric, realname);
 }
 
-static void p10_qline_sts(const char *server, const char *name, long duration, const char *reason)
+static void
+p10_qline_sts(const char *server, const char *name, long duration, const char *reason)
 {
 	if (!VALID_CHANNEL_PFX(name))
 	{
@@ -230,11 +236,12 @@ static void p10_qline_sts(const char *server, const char *name, long duration, c
 		return;
 	}
 
-	/* hold permanent sqlines for four weeks -- jilles */
-	sts("%s GL * +%s %ld :%s", me.numeric, name, duration > 0 ? duration : 2419200, reason);
+	// hold permanent sqlines for four weeks -- jilles
+	sts("%s GL * +%s %ld :%s", me.numeric, name, duration > 0 ? duration : (4 * SECONDS_PER_WEEK), reason);
 }
 
-static void p10_unqline_sts(const char *server, const char *name)
+static void
+p10_unqline_sts(const char *server, const char *name)
 {
 	if (!VALID_CHANNEL_PFX(name))
 	{
@@ -245,8 +252,8 @@ static void p10_unqline_sts(const char *server, const char *name)
 	sts("%s GL * -%s", me.numeric, name);
 }
 
-/* topic wrapper */
-static void p10_topic_sts(channel_t *c, user_t *source, const char *setter, time_t ts, time_t prevts, const char *topic)
+static void
+p10_topic_sts(struct channel *c, struct user *source, const char *setter, time_t ts, time_t prevts, const char *topic)
 {
 	if (ts > prevts || prevts == 0)
 		sts("%s T %s %lu %lu :%s", source->uid, c->name, (unsigned long)c->ts, (unsigned long)ts, topic);
@@ -260,10 +267,10 @@ static void p10_topic_sts(channel_t *c, user_t *source, const char *setter, time
 	}
 }
 
-/* mode wrapper */
-static void p10_mode_sts(char *sender, channel_t *target, char *modes)
+static void
+p10_mode_sts(char *sender, struct channel *target, char *modes)
 {
-	user_t *fptr;
+	struct user *fptr;
 
 	return_if_fail(sender != NULL);
 	return_if_fail(target != NULL);
@@ -279,14 +286,14 @@ static void p10_mode_sts(char *sender, channel_t *target, char *modes)
 		sts("%s M %s %s", me.numeric, target->name, modes);
 }
 
-/* ping wrapper */
-static void p10_ping_sts(void)
+static void
+p10_ping_sts(void)
 {
 	sts("%s G !%lu %s %lu", me.numeric, (unsigned long)CURRTIME, me.name, (unsigned long)CURRTIME);
 }
 
-/* protocol-specific stuff to do on login */
-static void p10_on_login(user_t *u, myuser_t *mu, const char *wantedhost)
+static void
+p10_on_login(struct user *u, struct myuser *mu, const char *wantedhost)
 {
 	return_if_fail(u != NULL);
 
@@ -297,39 +304,45 @@ static void p10_on_login(user_t *u, myuser_t *mu, const char *wantedhost)
 
 /* P10 does not support logout, so kill the user
  * we can't keep track of which logins are stale and which aren't -- jilles */
-static bool p10_on_logout(user_t *u, const char *account)
+static bool
+p10_on_logout(struct user *u, const char *account)
 {
 	return_val_if_fail(u != NULL, false);
 
-	kill_user(NULL, u, "Forcing logout %s -> %s", u->nick, account);
+	kill_user(nicksvs.me ? nicksvs.me->me : NULL, u, "Forcing logout %s -> %s", u->nick, account);
 	return true;
 }
 
-static void p10_jupe(const char *server, const char *reason)
+static void
+p10_jupe(const char *server, const char *reason)
 {
-	server_t *s;
+	struct server *s;
 
 	/* hold it for a day (arbitrary) -- jilles */
 	/* get rid of local deactivation too */
 	s = server_find(server);
 	if (s != NULL && s->uplink != NULL)
-		sts("%s JU %s +%s %d %lu :%s", me.numeric, s->uplink->sid, server, 86400, (unsigned long)CURRTIME, reason);
-	sts("%s JU * +%s %d %lu :%s", me.numeric, server, 86400, (unsigned long)CURRTIME, reason);
+		sts("%s JU %s +%s %d %lu :%s", me.numeric, s->uplink->sid, server, SECONDS_PER_DAY, (unsigned long)CURRTIME, reason);
+
+	sts("%s JU * +%s %d %lu :%s", me.numeric, server, SECONDS_PER_DAY, (unsigned long)CURRTIME, reason);
 }
 
-static void p10_sasl_sts(char *target, char mode, char *data)
+static void
+p10_sasl_sts(const char *target, char mode, const char *data)
 {
 	sts("%s XR %c%c %s :SASL:%c:%s", me.numeric, target[0], target[1], target, mode, data);
 }
 
-static void p10_svslogin_sts(char *target, char *nick, char *user, char *host, myuser_t *account)
+static void
+p10_svslogin_sts(const char *target, const char *nick, const char *user, const char *host, struct myuser *account)
 {
 	sts("%s XR %c%c %s :SASL:L:%s", me.numeric, target[0], target[1], target, entity(account)->name);
 }
 
-static void m_topic(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_topic(struct sourceinfo *si, int parc, char *parv[])
 {
-	channel_t *c = channel_find(parv[0]);
+	struct channel *c = channel_find(parv[0]);
 	const char *source;
 	time_t ts = 0;
 
@@ -350,10 +363,11 @@ static void m_topic(sourceinfo_t *si, int parc, char *parv[])
 	handle_topic_from(si, c, source, ts, parv[parc - 1]);
 }
 
-/* AB G !1119920789.573932 services.atheme.org 1119920789.573932 */
-static void m_ping(sourceinfo_t *si, int parc, char *parv[])
+// AB G !1119920789.573932 services.atheme.org 1119920789.573932
+static void
+m_ping(struct sourceinfo *si, int parc, char *parv[])
 {
-	/* reply to PING's */
+	// reply to PINGs
 	if (si->su != NULL)
 		sts("%s Z %s %s", me.numeric, me.numeric, si->su->nick);
 	else if (parv[0][0] != '!')
@@ -362,11 +376,12 @@ static void m_ping(sourceinfo_t *si, int parc, char *parv[])
 		sts("%s Z %s %s", me.numeric, me.numeric, parv[0]);
 }
 
-static void m_pong(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_pong(struct sourceinfo *si, int parc, char *parv[])
 {
 	me.uplinkpong = CURRTIME;
 
-	/* -> :test.projectxero.net PONG test.projectxero.net :shrike.malkier.net */
+	// -> :test.projectxero.net PONG test.projectxero.net :shrike.malkier.net
 	if (me.bursting)
 	{
 #ifdef HAVE_GETTIMEOFDAY
@@ -384,7 +399,8 @@ static void m_pong(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_privmsg(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_privmsg(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (parc != 2)
 		return;
@@ -392,7 +408,8 @@ static void m_privmsg(sourceinfo_t *si, int parc, char *parv[])
 	handle_message(si, parv[0], false, parv[1]);
 }
 
-static void m_notice(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_notice(struct sourceinfo *si, int parc, char *parv[])
 {
 	if (parc != 2)
 		return;
@@ -400,7 +417,8 @@ static void m_notice(sourceinfo_t *si, int parc, char *parv[])
 	handle_message(si, parv[0], true, parv[1]);
 }
 
-static void m_create(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_create(struct sourceinfo *si, int parc, char *parv[])
 {
 	char buf[BUFSIZE];
 	int chanc;
@@ -412,7 +430,7 @@ static void m_create(sourceinfo_t *si, int parc, char *parv[])
 
 	for (i = 0; i < chanc; i++)
 	{
-		channel_t *c = channel_add(chanv[i], ts = atoi(parv[1]), si->su->server);
+		struct channel *c = channel_add(chanv[i], ts = atoi(parv[1]), si->su->server);
 
 		/* Tell the core to check mode locks now,
 		 * otherwise it may only happen after the next
@@ -435,20 +453,21 @@ static void m_create(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_join(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_join(struct sourceinfo *si, int parc, char *parv[])
 {
 	int chanc;
 	char *chanv[256];
 	int i;
 	mowgli_node_t *n, *tn;
-	chanuser_t *cu;
+	struct chanuser *cu;
 
-	/* JOIN 0 is really a part from all channels */
+	// JOIN 0 is really a part from all channels
 	if (!strcmp(parv[0], "0"))
 	{
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, si->su->channels.head)
 		{
-			cu = (chanuser_t *) n->data;
+			cu = (struct chanuser *) n->data;
 			chanuser_delete(cu->chan, si->su);
 		}
 		return;
@@ -460,7 +479,7 @@ static void m_join(sourceinfo_t *si, int parc, char *parv[])
 
 	for (i = 0; i < chanc; i++)
 	{
-		channel_t *c = channel_find(chanv[i]);
+		struct channel *c = channel_find(chanv[i]);
 
 		if (!c)
 		{
@@ -472,9 +491,10 @@ static void m_join(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_burst(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_burst(struct sourceinfo *si, int parc, char *parv[])
 {
-	channel_t *c;
+	struct channel *c;
 	unsigned int modec;
 	char *modev[16];
 	unsigned int userc;
@@ -482,7 +502,7 @@ static void m_burst(sourceinfo_t *si, int parc, char *parv[])
 	unsigned int i;
 	int j;
 	char prefix[16];
-	char newnick[16+NICKLEN];
+	char newnick[sizeof prefix + NICKLEN + 1];
 	char *p;
 	time_t ts;
 	bool keep_new_modes = true;
@@ -504,7 +524,7 @@ static void m_burst(sourceinfo_t *si, int parc, char *parv[])
 	}
 	if (ts < c->ts)
 	{
-		chanuser_t *cu;
+		struct chanuser *cu;
 		mowgli_node_t *n;
 
 		clear_simple_modes(c);
@@ -512,10 +532,10 @@ static void m_burst(sourceinfo_t *si, int parc, char *parv[])
 		handle_topic_from(si, c, "", 0, "");
 		MOWGLI_ITER_FOREACH(n, c->members.head)
 		{
-			cu = (chanuser_t *)n->data;
+			cu = (struct chanuser *)n->data;
 			if (cu->user->server == me.me)
 			{
-				/* it's a service, reop */
+				// it's a service, reop
 				sts("%s M %s +o %s", me.numeric, c->name, CLIENT_NAME(cu->user));
 				cu->modes = CSTATUS_OP;
 			}
@@ -594,7 +614,8 @@ static void m_burst(sourceinfo_t *si, int parc, char *parv[])
 		channel_delete(c);
 }
 
-static void m_part(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_part(struct sourceinfo *si, int parc, char *parv[])
 {
 	int chanc;
 	char *chanv[256];
@@ -609,17 +630,18 @@ static void m_part(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_nick(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_nick(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u;
-	char ipstring[HOSTIPLEN];
+	struct user *u;
+	char ipstring[HOSTIPLEN + 1];
 	char *p;
 
-	/* got the right number of args for an introduction? */
+	// got the right number of args for an introduction?
 	if (parc >= 8)
 	{
-		/* -> AB N jilles 1 1137687480 jilles jaguar.test +oiwgrx jilles B]AAAB ABAAE :Jilles Tjoelker */
-		/* -> AB N test4 1 1137690148 jilles jaguar.test +iw B]AAAB ABAAG :Jilles Tjoelker */
+		// -> AB N jilles 1 1137687480 jilles jaguar.test +oiwgrx jilles B]AAAB ABAAE :Jilles Tjoelker
+		// -> AB N test4 1 1137690148 jilles jaguar.test +iw B]AAAB ABAAG :Jilles Tjoelker
 		slog(LG_DEBUG, "m_nick(): new user on `%s': %s", si->s->name, parv[0]);
 
 		decode_p10_ip(parv[parc - 3], ipstring);
@@ -636,21 +658,23 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 				if (p != NULL)
 					*p++ = '\0';
 				handle_burstlogin(u, parv[6], p ? atol(p) : 0);
-				/* killed to force logout? */
+
+				// killed to force logout?
 				if (user_find(parv[parc - 2]) == NULL)
 					return;
 			}
 			if (strchr(parv[5], 'x'))
 			{
 				u->flags |= UF_HIDEHOSTREQ;
-				/* this must be after setting the account name */
+
+				// this must be after setting the account name
 				check_hidehost(u);
 			}
 		}
 
 		handle_nickchange(u);
 	}
-	/* if it's only 2 then it's a nickname change */
+	// if it's only 2 then it's a nickname change
 	else if (parc == 2)
 	{
 		if (!si->su)
@@ -676,18 +700,20 @@ static void m_nick(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_quit(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_quit(struct sourceinfo *si, int parc, char *parv[])
 {
 	slog(LG_DEBUG, "m_quit(): user leaving: %s", si->su->nick);
 
-	/* user_delete() takes care of removing channels and so forth */
+	// user_delete() takes care of removing channels and so forth
 	user_delete(si->su, parv[0]);
 }
 
-static void m_mode(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_mode(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u;
-	channel_t *c;
+	struct user *u;
+	struct channel *c;
 	int i;
 	char *p;
 	int dir = MTYPE_ADD;
@@ -703,13 +729,26 @@ static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 		{
 			switch (*p)
 			{
-				case '+': dir = MTYPE_ADD; break;
-				case '-': dir = MTYPE_DEL; break;
+				case '+':
+					dir = MTYPE_ADD;
+					break;
+
+				case '-':
+					dir = MTYPE_DEL;
+					break;
+
 				case 'l':
-					  if (dir == MTYPE_DEL)
-						  break;
-					  /* FALLTHROUGH */
-				case 'b': case 'k': case 'o': case 'v':
+					if (dir == MTYPE_DEL)
+						break;
+
+					ATHEME_FALLTHROUGH;
+				case 'b':
+					ATHEME_FALLTHROUGH;
+				case 'k':
+					ATHEME_FALLTHROUGH;
+				case 'o':
+					ATHEME_FALLTHROUGH;
+				case 'v':
 					  i++;
 			}
 		}
@@ -725,7 +764,7 @@ static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else
 	{
-		/* Yes this is a nick and not a UID -- jilles */
+		// Yes this is a nick and not a UID -- jilles
 		u = user_find_named(parv[0]);
 		if (u == NULL)
 		{
@@ -741,16 +780,17 @@ static void m_mode(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_clearmode(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_clearmode(struct sourceinfo *si, int parc, char *parv[])
 {
-	channel_t *chan;
+	struct channel *chan;
 	char *p, c;
 	mowgli_node_t *n;
-	chanuser_t *cu;
+	struct chanuser *cu;
 	int i;
 
-	/* -> ABAAA CM # b */
-	/* Note: this is an IRCop command, do not enforce mode locks. */
+	/* -> ABAAA CM # b
+	 * Note: this is an IRCop command, do not enforce mode locks. */
 	chan = channel_find(parv[0]);
 	if (chan == NULL)
 	{
@@ -764,8 +804,7 @@ static void m_clearmode(sourceinfo_t *si, int parc, char *parv[])
 			chanban_clear(chan);
 		else if (c == 'k')
 		{
-			if (chan->key)
-				free(chan->key);
+			sfree(chan->key);
 			chan->key = NULL;
 		}
 		else if (c == 'l')
@@ -774,10 +813,10 @@ static void m_clearmode(sourceinfo_t *si, int parc, char *parv[])
 		{
 			MOWGLI_ITER_FOREACH(n, chan->members.head)
 			{
-				cu = (chanuser_t *)n->data;
+				cu = (struct chanuser *)n->data;
 				if (cu->user->server == me.me)
 				{
-					/* it's a service, reop */
+					// it's a service, reop
 					sts("%s M %s +o %s", me.numeric,
 							chan->name,
 							cu->user->uid);
@@ -790,7 +829,7 @@ static void m_clearmode(sourceinfo_t *si, int parc, char *parv[])
 		{
 			MOWGLI_ITER_FOREACH(n, chan->members.head)
 			{
-				cu = (chanuser_t *)n->data;
+				cu = (struct chanuser *)n->data;
 				cu->modes &= ~CSTATUS_VOICE;
 			}
 		}
@@ -803,23 +842,24 @@ static void m_clearmode(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_kick(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_kick(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u = user_find(parv[1]);
-	channel_t *c = channel_find(parv[0]);
+	struct user *u = user_find(parv[1]);
+	struct channel *c = channel_find(parv[0]);
 
-	/* -> :rakaur KICK #shrike rintaun :test */
+	// -> :rakaur KICK #shrike rintaun :test
 	slog(LG_DEBUG, "m_kick(): user was kicked: %s -> %s", parv[1], parv[0]);
 
 	if (!u)
 	{
-		slog(LG_DEBUG, "m_kick(): got kick for nonexistant user %s", parv[1]);
+		slog(LG_DEBUG, "m_kick(): got kick for nonexistent user %s", parv[1]);
 		return;
 	}
 
 	if (!c)
 	{
-		slog(LG_DEBUG, "m_kick(): got kick in nonexistant channel: %s", parv[0]);
+		slog(LG_DEBUG, "m_kick(): got kick in nonexistent channel: %s", parv[0]);
 		return;
 	}
 
@@ -831,7 +871,7 @@ static void m_kick(sourceinfo_t *si, int parc, char *parv[])
 
 	chanuser_delete(c, u);
 
-	/* if they kicked us, let's rejoin */
+	// if they kicked us, let's rejoin
 	if (is_internal_client(u))
 	{
 		slog(LG_DEBUG, "m_kick(): %s got kicked from %s; rejoining", u->nick, parv[0]);
@@ -839,23 +879,26 @@ static void m_kick(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-static void m_kill(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_kill(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_kill(si, parv[0], parc > 1 ? parv[1] : "<No reason given>");
 }
 
-static void m_squit(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_squit(struct sourceinfo *si, int parc, char *parv[])
 {
 	slog(LG_DEBUG, "m_squit(): server leaving: %s from %s", parv[0], parv[1]);
 	server_delete(parv[0]);
 }
 
-/* SERVER ircu.devel.atheme.org 1 1119902586 1119908830 J10 ABAP] + :lets lol */
-static void m_server(sourceinfo_t *si, int parc, char *parv[])
+// SERVER ircu.devel.atheme.org 1 1119902586 1119908830 J10 ABAP] + :lets lol
+static void
+m_server(struct sourceinfo *si, int parc, char *parv[])
 {
-	server_t *s;
+	struct server *s;
 
-	/* We dont care about the max connections. */
+	// We dont care about the max connections.
 	parv[5][2] = '\0';
 
 	slog(LG_DEBUG, "m_server(): new server: %s, id %s, %s",
@@ -871,72 +914,85 @@ static void m_server(sourceinfo_t *si, int parc, char *parv[])
 		s->flags |= SF_EOB2;
 }
 
-static void m_stats(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_stats(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_stats(si->su, parv[0][0]);
 }
 
-static void m_admin(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_admin(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_admin(si->su);
 }
 
-static void m_version(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_version(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_version(si->su);
 }
 
-static void m_info(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_info(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_info(si->su);
 }
 
-static void m_motd(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_motd(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_motd(si->su);
 }
 
-static void m_whois(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_whois(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_whois(si->su, parv[1]);
 }
 
-static void m_trace(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_trace(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_trace(si->su, parv[0], parc >= 2 ? parv[1] : NULL);
 }
 
-static void m_away(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_away(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_away(si->su, parc >= 1 ? parv[0] : NULL);
 }
 
-static void m_pass(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_pass(struct sourceinfo *si, int parc, char *parv[])
 {
-	if (strcmp(curr_uplink->receive_pass, parv[0]))
+	if (curr_uplink->receive_pass != NULL &&
+	    strcmp(curr_uplink->receive_pass, parv[0]))
 	{
 		slog(LG_INFO, "m_pass(): password mismatch from uplink; aborting");
 		runflags |= RF_SHUTDOWN;
 	}
 }
 
-static void m_error(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_error(struct sourceinfo *si, int parc, char *parv[])
 {
 	slog(LG_INFO, "m_error(): error from server: %s", parv[0]);
 }
 
-static void m_eos(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_eos(struct sourceinfo *si, int parc, char *parv[])
 {
 	handle_eob(si->s);
 
-	/* acknowledge a local END_OF_BURST */
+	// acknowledge a local END_OF_BURST
 	if (si->s->uplink == me.me)
 		sts("%s EA", me.numeric);
 }
 
-static void m_account(sourceinfo_t *si, int parc, char *parv[])
+static void
+m_account(struct sourceinfo *si, int parc, char *parv[])
 {
-	user_t *u;
+	struct user *u;
 
 	u = user_find(parv[0]);
 	if (u == NULL)
@@ -944,15 +1000,16 @@ static void m_account(sourceinfo_t *si, int parc, char *parv[])
 	handle_setlogin(si, u, parv[1], parc > 2 ? atol(parv[2]) : 0);
 }
 
-static void check_hidehost(user_t *u)
+static void
+check_hidehost(struct user *u)
 {
 	static bool warned = false;
 	char buf[HOSTLEN + 1];
 
-	/* do they qualify? */
+	// do they qualify?
 	if (!(u->flags & UF_HIDEHOSTREQ) || u->myuser == NULL || (u->myuser->flags & MU_WAITAUTH))
 		return;
-	/* don't use this if they have some other kind of vhost */
+	// don't use this if they have some other kind of vhost
 	if (strcmp(u->host, u->vhost))
 	{
 		slog(LG_DEBUG, "check_hidehost(): +x overruled by other vhost for %s", u->nick);
@@ -976,12 +1033,12 @@ static void check_hidehost(user_t *u)
 	slog(LG_DEBUG, "check_hidehost(): %s -> %s", u->nick, u->vhost);
 }
 
-void _modinit(module_t * m)
+static void
+mod_init(struct module *const restrict m)
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "transport/p10");
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/base36uid");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "transport/p10")
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/base36uid")
 
-	/* Symbol relocation voodoo. */
 	server_login = &p10_server_login;
 	introduce_nick = &p10_introduce_nick;
 	quit_sts = &p10_quit_sts;
@@ -1027,10 +1084,10 @@ void _modinit(module_t * m)
 	pcommand_add("N", m_nick, 2, MSRC_USER | MSRC_SERVER);
 	pcommand_add("Q", m_quit, 1, MSRC_USER);
 	pcommand_add("M", m_mode, 2, MSRC_USER | MSRC_SERVER);
-	pcommand_add("OM", m_mode, 2, MSRC_USER); /* OPMODE, treat as MODE */
+	pcommand_add("OM", m_mode, 2, MSRC_USER);
 	pcommand_add("CM", m_clearmode, 2, MSRC_USER);
 	pcommand_add("K", m_kick, 2, MSRC_USER | MSRC_SERVER);
-	pcommand_add("OK", m_kick, 2, MSRC_USER); /* OPKICK, treat as KICK */
+	pcommand_add("OK", m_kick, 2, MSRC_USER);
 	pcommand_add("D", m_kill, 1, MSRC_USER | MSRC_SERVER);
 	pcommand_add("SQ", m_squit, 1, MSRC_USER | MSRC_SERVER);
 	pcommand_add("S", m_server, 8, MSRC_SERVER);
@@ -1048,12 +1105,12 @@ void _modinit(module_t * m)
 	pcommand_add("T", m_topic, 2, MSRC_USER | MSRC_SERVER);
 	pcommand_add("MO", m_motd, 1, MSRC_USER);
 	pcommand_add("AC", m_account, 2, MSRC_SERVER);
-
-	m->mflags = MODTYPE_CORE;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("protocol/p10-generic", MODULE_UNLOAD_CAPABILITY_NEVER)

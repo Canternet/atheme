@@ -1,44 +1,39 @@
 /*
- * atheme-services: A collection of minimalist IRC services
- * services.c: Routines commonly used by various services.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2005-2007 Atheme Project (http://www.atheme.org)
+ * Copyright (C) 2005-2015 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2016-2018 Atheme Development Group (https://atheme.github.io/)
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * atheme-services: A collection of minimalist IRC services
+ * services.c: Routines commonly used by various services.
  */
 
-#include "atheme.h"
-#include "pmodule.h"
+#include <atheme.h>
+#include "internal.h"
+
+static mowgli_heap_t *sourceinfo_heap = NULL;
 
 int authservice_loaded = 0;
 int use_myuser_access = 0;
 int use_svsignore = 0;
 int use_privmsg = 0;
-int use_account_private = 0;
-int use_channel_private = 0;
+int use_account_private = 1;
+int use_channel_private = 1;
 int use_limitflags = 0;
 
 #define MAX_BUF 256
 
 /* ban wrapper for cmode, returns number of bans added (0 or 1) */
-int ban(user_t *sender, channel_t *c, user_t *user)
+unsigned int
+ban(struct user *sender, struct channel *c, struct user *user)
 {
 	char mask[MAX_BUF];
-	chanban_t *cb;
+	struct chanban *cb;
 
 	if (!c)
 		return 0;
@@ -60,11 +55,12 @@ int ban(user_t *sender, channel_t *c, user_t *user)
 }
 
 /* returns number of modes removed -- jilles */
-int remove_banlike(user_t *source, channel_t *chan, int type, user_t *target)
+unsigned int
+remove_banlike(struct user *source, struct channel *chan, int type, struct user *target)
 {
-	int count = 0;
+	unsigned int count = 0;
 	mowgli_node_t *n, *tn;
-	chanban_t *cb;
+	struct chanban *cb;
 
 	if (type == 0)
 		return 0;
@@ -87,54 +83,58 @@ int remove_banlike(user_t *source, channel_t *chan, int type, user_t *target)
 }
 
 /* returns number of exceptions removed -- jilles */
-int remove_ban_exceptions(user_t *source, channel_t *chan, user_t *target)
+unsigned int
+remove_ban_exceptions(struct user *source, struct channel *chan, struct user *target)
 {
 	return remove_banlike(source, chan, ircd->except_mchar, target);
 }
 
-void try_kick_real(user_t *source, channel_t *chan, user_t *target, const char *reason)
+// returns true if user was actually kicked, false otherwise (or on assertion failure)
+// If the user was kicked, their chanuser is deleted; if the user was *not* kicked,
+// their chanuser remains. This currently only happens due to kick immunity.
+bool
+try_kick_real(struct user *source, struct channel *chan, struct user *target, const char *reason)
 {
-	chanuser_t *cu;
+	return_val_if_fail(source != NULL, false);
+	return_val_if_fail(chan != NULL, false);
+	return_val_if_fail(target != NULL, false);
+	return_val_if_fail(reason != NULL, false);
 
-	return_if_fail(source != NULL);
-	return_if_fail(chan != NULL);
-	return_if_fail(target != NULL);
-	return_if_fail(reason != NULL);
+	struct chanuser *cu = chanuser_find(chan, target);
 
-	cu = chanuser_find(chan, target);
-	if (cu == NULL)
-		return;
+	return_val_if_fail(cu != NULL, false);
 
 	if ((chan->modes & ircd->oimmune_mode || cu->modes & CSTATUS_IMMUNE) && is_ircop(target))
 	{
 		wallops("Not kicking oper %s!%s@%s from protected %s (%s: %s)",
 				target->nick, target->user, target->vhost,
-				chan->name, source ? source->nick : me.name,
-				reason);
+				chan->name, source->nick, reason);
 		notice(source->nick, chan->name,
 				"Not kicking oper %s (%s)",
 				target->nick, reason);
-		return;
+		return false;
 	}
 	if (target->flags & config_options.immune_level)
 	{
 		wallops("Not kicking immune user %s!%s@%s from %s (%s: %s)",
 				target->nick, target->user, target->vhost,
-				chan->name, source ? source->nick : me.name,
-				reason);
+				chan->name, source->nick, reason);
 		notice(source->nick, chan->name,
 				"Not kicking immune user %s (%s)",
 				target->nick, reason);
-		return;
+		return false;
 	}
 	kick(source, chan, target, reason);
+	return true;
 }
-void (*try_kick)(user_t *source, channel_t *chan, user_t *target, const char *reason) = try_kick_real;
+
+bool (*try_kick)(struct user *source, struct channel *chan, struct user *target, const char *reason) = try_kick_real;
 
 /* sends a KILL message for a user and removes the user from the userlist
  * source should be a service user or NULL for a server kill
  */
-void kill_user(user_t *source, user_t *victim, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(3, 4)
+kill_user(struct user *source, struct user *victim, const char *fmt, ...)
 {
 	va_list ap;
 	char buf[BUFSIZE];
@@ -163,9 +163,10 @@ void kill_user(user_t *source, user_t *victim, const char *fmt, ...)
 	user_delete(victim, qreason);
 }
 
-void introduce_enforcer(const char *nick)
+void
+introduce_enforcer(const char *nick)
 {
-	user_t *u;
+	struct user *u;
 
 	/* TS 1 to win nick collisions */
 	u = user_add(nick, "enforcer", me.name, NULL, NULL,
@@ -177,14 +178,15 @@ void introduce_enforcer(const char *nick)
 }
 
 /* join a channel, creating it if necessary */
-void join(const char *chan, const char *nick)
+void
+join(const char *chan, const char *nick)
 {
-	channel_t *c;
-	user_t *u;
-	chanuser_t *cu;
+	struct channel *c;
+	struct user *u;
+	struct chanuser *cu;
 	bool isnew = false;
-	mychan_t *mc;
-	metadata_t *md;
+	struct mychan *mc;
+	struct metadata *md;
 	time_t ts;
 
 	u = user_find_named(nick);
@@ -229,10 +231,11 @@ void join(const char *chan, const char *nick)
 }
 
 /* part a channel */
-void part(const char *chan, const char *nick)
+void
+part(const char *chan, const char *nick)
 {
-	channel_t *c = channel_find(chan);
-	user_t *u = user_find_named(nick);
+	struct channel *c = channel_find(chan);
+	struct user *u = user_find_named(nick);
 
 	if (!u || !c)
 		return;
@@ -243,9 +246,10 @@ void part(const char *chan, const char *nick)
 	chanuser_delete(c, u);
 }
 
-void services_init(void)
+void
+services_init(void)
 {
-	service_t *svs;
+	struct service *svs;
 	mowgli_patricia_iteration_state_t state;
 
 	MOWGLI_PATRICIA_FOREACH(svs, &state, services_name)
@@ -260,9 +264,10 @@ void services_init(void)
 	}
 }
 
-void joinall(const char *name)
+void
+joinall(const char *name)
 {
-	service_t *svs;
+	struct service *svs;
 	mowgli_patricia_iteration_state_t state;
 
 	if (name == NULL)
@@ -277,11 +282,12 @@ void joinall(const char *name)
 	}
 }
 
-void partall(const char *name)
+void
+partall(const char *name)
 {
 	mowgli_patricia_iteration_state_t state;
-	service_t *svs;
-	mychan_t *mc;
+	struct service *svs;
+	struct mychan *mc;
 
 	if (name == NULL)
 		return;
@@ -301,11 +307,12 @@ void partall(const char *name)
 }
 
 /* reintroduce a service e.g. after it's been killed -- jilles */
-void reintroduce_user(user_t *u)
+void
+reintroduce_user(struct user *u)
 {
 	mowgli_node_t *n;
-	channel_t *c;
-	service_t *svs;
+	struct channel *c;
+	struct service *svs;
 
 	svs = service_find_nick(u->nick);
 	if (svs == NULL)
@@ -334,7 +341,7 @@ void reintroduce_user(user_t *u)
 	introduce_nick(u);
 	MOWGLI_ITER_FOREACH(n, u->channels.head)
 	{
-		c = ((chanuser_t *)n->data)->chan;
+		c = ((struct chanuser *)n->data)->chan;
 		if (MOWGLI_LIST_LENGTH(&c->members) > 1 || c->modes & ircd->perm_mode)
 			join_sts(c, u, 0, channel_modes(c, true));
 		else
@@ -349,7 +356,8 @@ void reintroduce_user(user_t *u)
 	}
 }
 
-void verbose(mychan_t *mychan, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(2, 3)
+verbose(const struct mychan *mychan, const char *fmt, ...)
 {
 	va_list ap;
 	char buf[BUFSIZE];
@@ -368,22 +376,47 @@ void verbose(mychan_t *mychan, const char *fmt, ...)
 }
 
 /* protocol wrapper for nickchange/nick burst */
-void handle_nickchange(user_t *u)
+void
+handle_nickchange(struct user *const restrict u)
 {
-	service_t *svs;
-
 	return_if_fail(u != NULL);
 	return_if_fail(!is_internal_client(u));
 
-	svs = service_find("global");
+	const struct service *const svs = service_find("global");
+	const char *const source = (svs != NULL) ? svs->me->nick : me.name;
 
-	if (runflags & RF_LIVE && log_debug_enabled())
-		notice(svs != NULL ? svs->me->nick : me.name, u->nick, "Services are presently running in debug mode, attached to a console. You should take extra caution when utilizing your services passwords.");
+	if (log_debug_enabled())
+	{
+		const char *const logtarget = (runflags & RF_LIVE) ? "console" : "file or channel";
+
+		(void) notice(source, u->nick, "Services are presently running in debug mode, logging network "
+		                               "traffic to a %s. You should take extra caution when utilizing "
+		                               "your services passwords.", logtarget);
+	}
 
 	if (readonly)
-		notice(svs != NULL ? svs->me->nick : me.name, u->nick, "Services are presently running in readonly mode.  Any changes you make will not be saved.");
+		(void) notice(source, u->nick, "Services are presently running in read-only mode. Any changes "
+		                               "you make will not be saved.");
 
-	hook_call_nick_check(u);
+	(void) hook_call_nick_check(u);
+}
+
+bool ircd_logout_or_kill(struct user *u, const char *login)
+{
+	struct hook_user_logout_check req = {
+		.si      = NULL,
+		.u       = u,
+		.allowed = true,
+		.relogin = false,
+	};
+
+	hook_call_user_can_logout(&req);
+
+	if (req.allowed)
+		return ircd_on_logout(u, login);
+
+	kill_user(nicksvs.me ? nicksvs.me->me : NULL, u, "Forcing logout %s -> %s", u->nick, login);
+	return true;
 }
 
 /* User u is bursted as being logged in to login (if not NULL) or as
@@ -400,10 +433,11 @@ void handle_nickchange(user_t *u)
  *    server confirms EOB
  * -- jilles
  */
-void handle_burstlogin(user_t *u, const char *login, time_t ts)
+void
+handle_burstlogin(struct user *u, const char *login, time_t ts)
 {
-	mynick_t *mn;
-	myuser_t *mu;
+	struct mynick *mn;
+	struct myuser *mu;
 	mowgli_node_t *n;
 
 	if (login != NULL)
@@ -424,8 +458,8 @@ void handle_burstlogin(user_t *u, const char *login, time_t ts)
 			slog(LG_DEBUG, "handle_burstlogin(): got nonexistent login %s for user %s", login, u->nick);
 			if (authservice_loaded)
 			{
-				notice(nicksvs.nick ? nicksvs.nick : me.name, u->nick, _("Account %s dropped, forcing logout"), login);
-				ircd_on_logout(u, login);
+				notice(nicksvs.nick ? nicksvs.nick : me.name, u->nick, "Account %s dropped, forcing logout", login);
+				ircd_logout_or_kill(u, login);
 			}
 			return;
 		}
@@ -444,8 +478,8 @@ void handle_burstlogin(user_t *u, const char *login, time_t ts)
 		slog(LG_INFO, "handle_burstlogin(): got stale login %s for user %s", login, u->nick);
 		if (authservice_loaded)
 		{
-			notice(nicksvs.nick ? nicksvs.nick : me.name, u->nick, _("Login to account %s is stale, forcing logout"), login);
-			ircd_on_logout(u, login);
+			notice(nicksvs.nick ? nicksvs.nick : me.name, u->nick, "Login to account %s is stale, forcing logout", login);
+			ircd_logout_or_kill(u, login);
 		}
 		return;
 	}
@@ -455,8 +489,8 @@ void handle_burstlogin(user_t *u, const char *login, time_t ts)
 		 * be legit...
 		 * if we have an authentication service, log them out */
 		slog(LG_INFO, "handle_burstlogin(): got illegit login %s for user %s", login, u->nick);
-		notice(nicksvs.nick ? nicksvs.nick : me.name, u->nick, _("Login to account %s seems invalid, forcing logout"), login);
-		ircd_on_logout(u, login);
+		notice(nicksvs.nick ? nicksvs.nick : me.name, u->nick, "Login to account %s seems invalid, forcing logout", login);
+		ircd_logout_or_kill(u, login);
 		return;
 	}
 	u->myuser = mu;
@@ -474,10 +508,11 @@ void handle_burstlogin(user_t *u, const char *login, time_t ts)
 	}
 }
 
-void handle_setlogin(sourceinfo_t *si, user_t *u, const char *login, time_t ts)
+void
+handle_setlogin(struct sourceinfo *si, struct user *u, const char *login, time_t ts)
 {
-	mynick_t *mn;
-	myuser_t *mu;
+	struct mynick *mn;
+	struct myuser *mu;
 	mowgli_node_t *n;
 
 	if (login != NULL)
@@ -491,11 +526,8 @@ void handle_setlogin(sourceinfo_t *si, user_t *u, const char *login, time_t ts)
 	}
 
 	if (authservice_loaded)
-	{
-		wallops("Ignoring attempt from %s to set login name for %s to %s",
-				get_oper_name(si), u->nick, login);
+		// Non-SASL logins will be ignored; SASL reauth was handled by modules/saslserv/main already
 		return;
-	}
 
 	if (u->myuser != NULL)
 	{
@@ -545,7 +577,8 @@ void handle_setlogin(sourceinfo_t *si, user_t *u, const char *login, time_t ts)
 			get_oper_name(si), u->nick, login);
 }
 
-void handle_clearlogin(sourceinfo_t *si, user_t *u)
+void
+handle_clearlogin(struct sourceinfo *si, struct user *u)
 {
 	mowgli_node_t *n;
 
@@ -570,13 +603,14 @@ void handle_clearlogin(sourceinfo_t *si, user_t *u)
 	u->myuser = NULL;
 }
 
-void handle_certfp(sourceinfo_t *si, user_t *u, const char *certfp)
+void
+handle_certfp(struct sourceinfo *si, struct user *u, const char *certfp)
 {
-	myuser_t *mu;
-	mycertfp_t *mcfp;
-	service_t *svs;
+	struct myuser *mu;
+	struct mycertfp *mcfp;
+	struct service *svs;
 
-	free(u->certfp);
+	sfree(u->certfp);
 	u->certfp = sstrdup(certfp);
 
 	if (u->myuser != NULL)
@@ -597,37 +631,63 @@ void handle_certfp(sourceinfo_t *si, user_t *u, const char *certfp)
 		return;
 	}
 
-	if (MOWGLI_LIST_LENGTH(&mu->logins) >= me.maxlogins)
+	if (user_loginmaxed(mu))
 	{
-		notice(svs->me->nick, u->nick, _("There are already \2%zu\2 sessions logged in to \2%s\2 (maximum allowed: %u)."), MOWGLI_LIST_LENGTH(&mu->logins), entity(mu)->name, me.maxlogins);
+		notice(svs->me->nick, u->nick, "There are already \2%zu\2 sessions logged in to \2%s\2 (maximum allowed: %u).", MOWGLI_LIST_LENGTH(&mu->logins), entity(mu)->name, me.maxlogins);
 		return;
 	}
 
-	notice(svs->me->nick, u->nick, nicksvs.no_nick_ownership ? _("You are now logged in as \2%s\2.") : _("You are now identified for \2%s\2."), entity(mu)->name);
+	struct hook_user_login_check req = {
+		.si         = si,
+		.mu         = mu,
+		.method     = HULM_CERT_FINGERPRINT,
+		.allowed    = true,
+	};
+
+	hook_call_user_can_login(&req);
+
+	if (!req.allowed)
+		return;
+
+	notice(svs->me->nick, u->nick, nicksvs.no_nick_ownership ? "You are now logged in as \2%s\2." : "You are now identified for \2%s\2.", entity(mu)->name);
 
 	myuser_login(svs, u, mu, true);
 	logcommand_user(svs, u, CMDLOG_LOGIN, "LOGIN via CERTFP (%s)", certfp);
 }
 
-void myuser_login(service_t *svs, user_t *u, myuser_t *mu, bool sendaccount)
+void
+myuser_login(struct service *svs, struct user *u, struct myuser *mu, bool sendaccount)
 {
 	char lau[BUFSIZE], lao[BUFSIZE];
 	char strfbuf[BUFSIZE];
-	metadata_t *md_failnum;
-	struct tm tm;
-	mynick_t *mn;
+	struct metadata *md_failnum;
+	struct tm *tm;
+	struct mynick *mn;
 
 	return_if_fail(svs != NULL && svs->me != NULL);
 	return_if_fail(u->myuser == NULL);
 
 	if (is_soper(mu))
-		slog(LG_INFO, "SOPER: \2%s\2 as \2%s\2", u->nick, entity(mu)->name);
+		slog(LG_INFO, "SOPER: \2%s\2 as \2%s\2 (%s)", u->nick, entity(mu)->name, mu->soper->operclass->name);
 
 	myuser_notice(svs->me->nick, mu, "%s!%s@%s has just authenticated as you (%s)", u->nick, u->user, u->vhost, entity(mu)->name);
 
 	u->myuser = mu;
 	mowgli_node_add(u, mowgli_node_create(), &mu->logins);
 	u->flags &= ~UF_SOPER_PASS;
+
+	/* check for previous login and let them know, unless they have opt'd OUT */
+	if (metadata_find(mu, "private:host:actual") != NULL && metadata_find(mu, "private:showlast:optout") == NULL)
+	{
+		struct metadata *md_loginaddr;
+		time_t ts = CURRTIME;
+
+		md_loginaddr = metadata_find(mu, "private:host:actual");
+		tm = localtime(&mu->lastlogin);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
+
+		notice(svs->me->nick, u->nick, "Last login from: \2%s\2 on %s.", md_loginaddr->value, strfbuf);
+	}
 
 	/* keep track of login address for users */
 	mowgli_strlcpy(lau, u->user, BUFSIZE);
@@ -644,7 +704,7 @@ void myuser_login(service_t *svs, user_t *u, myuser_t *mu, bool sendaccount)
 	/* check for failed attempts and let them know */
 	if ((md_failnum = metadata_find(mu, "private:loginfail:failnum")) && (atoi(md_failnum->value) > 0))
 	{
-		metadata_t *md_failtime, *md_failaddr;
+		struct metadata *md_failtime, *md_failaddr;
 		time_t ts = CURRTIME;
 
 		notice(svs->me->nick, u->nick, "\2%d\2 failed %s since last login.",
@@ -657,8 +717,8 @@ void myuser_login(service_t *svs, user_t *u, myuser_t *mu, bool sendaccount)
 		md_failaddr = metadata_find(mu, "private:loginfail:lastfailaddr");
 		if (md_failaddr != NULL)
 		{
-			tm = *localtime(&ts);
-			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+			tm = localtime(&ts);
+			strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 
 			notice(svs->me->nick, u->nick, "Last failed attempt from: \2%s\2 on %s.",
 				md_failaddr->value, strfbuf);
@@ -668,6 +728,28 @@ void myuser_login(service_t *svs, user_t *u, myuser_t *mu, bool sendaccount)
 		metadata_delete(mu, "private:loginfail:lastfailtime");
 		metadata_delete(mu, "private:loginfail:lastfailaddr");
 	}
+
+	if (mu->flags & MU_WAITAUTH)
+	{
+		notice(svs->me->nick, u->nick, "You have \2NOT COMPLETED\2 registration verification.");
+		notice(svs->me->nick, u->nick, "An email containing nickname activation instructions was sent to \2%s\2.", mu->email);
+		notice(svs->me->nick, u->nick, "If you do not complete registration within one day, your nickname will expire.");
+	}
+
+	if (metadata_find(mu, "private:setpass:key"))
+	{
+		slog(LG_INFO, "Invalidating password reset token for %s due to successful login", entity(mu)->name);
+
+		myuser_notice(svs->me->nick, mu, "An outstanding password reset request for your account has now "
+		                                 "been invalidated.");
+
+		metadata_delete(mu, "private:setpass:key");
+		metadata_delete(mu, "private:sendpass:sender");
+		metadata_delete(mu, "private:sendpass:timestamp");
+	}
+
+	if (! (mu->flags & MU_CRYPTPASS))
+		notice(svs->me->nick, u->nick, "Warning: Your password is not encrypted.");
 
 	mu->lastlogin = CURRTIME;
 	mn = mynick_find(u->nick);
@@ -684,12 +766,13 @@ void myuser_login(service_t *svs, user_t *u, myuser_t *mu, bool sendaccount)
 }
 
 /* this could be done with more finesse, but hey! */
-static void generic_notice(const char *from, const char *to, const char *fmt, ...)
+static void ATHEME_FATTR_PRINTF(3, 4)
+generic_notice(const char *from, const char *to, const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
-	user_t *u;
-	channel_t *c;
+	struct user *u;
+	struct channel *c;
 
 	va_start(args, fmt);
 	vsnprintf(buf, BUFSIZE, fmt, args);
@@ -713,6 +796,7 @@ static void generic_notice(const char *from, const char *to, const char *fmt, ..
 		}
 	}
 }
+
 void (*notice) (const char *from, const char *target, const char *fmt, ...) = generic_notice;
 
 /*
@@ -723,7 +807,7 @@ void (*notice) (const char *from, const char *target, const char *fmt, ...) = ge
  *
  * Inputs:
  *       - string representing source (for compatibility with notice())
- *       - user_t object to send the notice to
+ *       - struct user object to send the notice to
  *       - printf-style string containing the data to send and any args
  *
  * Outputs:
@@ -732,7 +816,8 @@ void (*notice) (const char *from, const char *target, const char *fmt, ...) = ge
  * Side Effects:
  *       - a notice is sent to a user if MU_QUIETCHG is not set.
  */
-void change_notify(const char *from, user_t *to, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(3, 4)
+change_notify(const char *from, struct user *to, const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
@@ -755,8 +840,8 @@ void change_notify(const char *from, user_t *to, const char *fmt, ...)
  * Registers an attempt to authenticate with an incorrect password.
  *
  * Inputs:
- *       - sourceinfo_t representing what sent the bad password
- *       - myuser_t object attempt was against
+ *       - struct sourceinfo representing what sent the bad password
+ *       - struct myuser object attempt was against
  *
  * Outputs:
  *       - whether the user was killed off the network
@@ -769,14 +854,15 @@ void change_notify(const char *from, user_t *to, const char *fmt, ...)
  * Note:
  *       - kills are currently not done
  */
-bool bad_password(sourceinfo_t *si, myuser_t *mu)
+bool
+bad_password(struct sourceinfo *si, struct myuser *mu)
 {
 	const char *mask;
-	struct tm tm;
+	struct tm *tm;
 	char numeric[21], strfbuf[BUFSIZE];
 	int count;
-	metadata_t *md_failnum;
-	service_t *svs;
+	struct metadata *md;
+	struct service *svs;
 
 	/* If the user is already logged in, no paranoia is needed,
 	 * as they could /ns set password anyway.
@@ -788,58 +874,67 @@ bool bad_password(sourceinfo_t *si, myuser_t *mu)
 
 	mask = get_source_mask(si);
 
-	md_failnum = metadata_find(mu, "private:loginfail:failnum");
-	count = md_failnum ? atoi(md_failnum->value) : 0;
+	md = metadata_find(mu, "private:loginfail:failnum");
+	count = md ? atoi(md->value) : 0;
 	count++;
 	snprintf(numeric, sizeof numeric, "%d", count);
-	md_failnum = metadata_add(mu, "private:loginfail:failnum", numeric);
+	metadata_add(mu, "private:loginfail:failnum", numeric);
 	metadata_add(mu, "private:loginfail:lastfailaddr", mask);
 	snprintf(numeric, sizeof numeric, "%lu", (unsigned long)CURRTIME);
 	metadata_add(mu, "private:loginfail:lastfailtime", numeric);
 
-	svs = si->service;
-	if (svs == NULL)
-		svs = service_find("nickserv");
-	if (svs != NULL)
+	md = metadata_find(mu, "private:badpasswdmsg");
+	if (md ? strcmp(md->value, "1") == 0 : nicksvs.bad_password_message)
 	{
-		myuser_notice(svs->me->nick, mu, "\2%s\2 failed to login to \2%s\2.  There %s been \2%d\2 failed login %s since your last successful login.", mask, entity(mu)->name, count == 1 ? "has" : "have", count, count == 1 ? "attempt" : "attempts");
+		svs = si->service;
+
+		if (svs == NULL)
+			svs = service_find("nickserv");
+
+		if (svs != NULL)
+			(void) myuser_notice(svs->me->nick, mu, "\2%s\2 failed to login to \2%s\2. There %s been "
+			                                        "\2%d\2 failed login %s since your last successful "
+			                                        "login.", mask, entity(mu)->name,
+			                                        ((count == 1) ? "has" : "have"), count,
+			                                        ((count == 1) ? "attempt" : "attempts"));
 	}
 
 	if (is_soper(mu))
-		slog(LG_INFO, "SOPER:AF: \2%s\2 as \2%s\2", get_source_name(si), entity(mu)->name);
+		slog(LG_INFO, "SOPER:AF: \2%s\2 FAILED Authentication as \2%s\2 (%s)", get_source_name(si), entity(mu)->name, mu->soper->operclass->name);
 
 	if (count % 10 == 0)
 	{
 		time_t ts = CURRTIME;
-		tm = *localtime(&ts);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&ts);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 		wallops("Warning: \2%d\2 failed login attempts to \2%s\2. Last attempt received from \2%s\2 on %s.", count, entity(mu)->name, mask, strfbuf);
 	}
 
 	return false;
 }
 
-mowgli_heap_t *sourceinfo_heap = NULL;
-
-static void sourceinfo_delete(sourceinfo_t *si)
+static void
+sourceinfo_delete(struct sourceinfo *si)
 {
 	mowgli_heap_free(sourceinfo_heap, si);
 }
 
-sourceinfo_t *sourceinfo_create(void)
+struct sourceinfo *
+sourceinfo_create(void)
 {
-	sourceinfo_t *out;
+	struct sourceinfo *out;
 
 	if (sourceinfo_heap == NULL)
-		sourceinfo_heap = sharedheap_get(sizeof(sourceinfo_t));
+		sourceinfo_heap = sharedheap_get(sizeof(struct sourceinfo));
 
 	out = mowgli_heap_alloc(sourceinfo_heap);
-	object_init(object(out), "<sourceinfo>", (destructor_t) sourceinfo_delete);
+	atheme_object_init(atheme_object(out), "<sourceinfo>", (atheme_object_destructor_fn) sourceinfo_delete);
 
 	return out;
 }
 
-void command_fail(sourceinfo_t *si, cmd_faultcode_t code, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(3, 4)
+command_fail(struct sourceinfo *si, enum cmd_faultcode code, const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
@@ -862,7 +957,8 @@ void command_fail(sourceinfo_t *si, cmd_faultcode_t code, const char *fmt, ...)
 		notice_user_sts(si->service->me, si->su, buf);
 }
 
-void command_success_nodata(sourceinfo_t *si, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(2, 3)
+command_success_nodata(struct sourceinfo *si, const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
@@ -911,7 +1007,8 @@ void command_success_nodata(sourceinfo_t *si, const char *fmt, ...)
 	} while (p != NULL);
 }
 
-void command_success_string(sourceinfo_t *si, const char *result, const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(3, 4)
+command_success_string(struct sourceinfo *si, const char *result, const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
@@ -934,12 +1031,14 @@ void command_success_string(sourceinfo_t *si, const char *result, const char *fm
 		notice_user_sts(si->service->me, si->su, buf);
 }
 
-static void command_table_cb(const char *line, void *data)
+static void
+command_table_cb(const char *line, void *data)
 {
 	command_success_nodata(data, "%s", line);
 }
 
-void command_success_table(sourceinfo_t *si, table_t *table)
+void
+command_success_table(struct sourceinfo *si, struct atheme_table *table)
 {
 	if (si->v != NULL && si->v->cmd_success_table)
 	{
@@ -950,9 +1049,10 @@ void command_success_table(sourceinfo_t *si, table_t *table)
 	table_render(table, command_table_cb, si);
 }
 
-const char *get_source_name(sourceinfo_t *si)
+const char *
+get_source_name(struct sourceinfo *si)
 {
-	static char result[NICKLEN+NICKLEN+10];
+	static char result[NICKLEN + 1 + NICKLEN + 1 + 10];
 
 	if (si->v != NULL && si->v->get_source_name != NULL)
 		return si->v->get_source_name(si);
@@ -967,39 +1067,41 @@ const char *get_source_name(sourceinfo_t *si)
 	}
 	else if (si->s != NULL)
 		snprintf(result, sizeof result, "%s", si->s->name);
-	else
-	{
+	else if (si->v != NULL)
 		snprintf(result, sizeof result, "<%s>%s", si->v->description,
 				si->smu ? entity(si->smu)->name : "");
-	}
+	else
+		mowgli_strlcpy(result, "???", sizeof result);
+
 	return result;
 }
 
-const char *get_source_mask(sourceinfo_t *si)
+const char *
+get_source_mask(struct sourceinfo *si)
 {
-	static char result[NICKLEN+USERLEN+HOSTLEN+10];
+	static char result[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1 + 10];
 
 	if (si->v != NULL && si->v->get_source_mask != NULL)
 		return si->v->get_source_mask(si);
 
 	if (si->su != NULL)
-	{
 		snprintf(result, sizeof result, "%s!%s@%s", si->su->nick,
 				si->su->user, si->su->vhost);
-	}
 	else if (si->s != NULL)
 		snprintf(result, sizeof result, "%s", si->s->name);
-	else
-	{
+	else if (si->v != NULL)
 		snprintf(result, sizeof result, "<%s>%s", si->v->description,
 				si->smu ? entity(si->smu)->name : "");
-	}
+	else
+		mowgli_strlcpy(result, "???", sizeof result);
+
 	return result;
 }
 
-const char *get_oper_name(sourceinfo_t *si)
+const char *
+get_oper_name(struct sourceinfo *si)
 {
-	static char result[NICKLEN+USERLEN+HOSTLEN+NICKLEN+10];
+	static char result[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1 + NICKLEN + 10];
 
 	if (si->v != NULL && si->v->get_oper_name != NULL)
 		return si->v->get_oper_name(si);
@@ -1018,17 +1120,19 @@ const char *get_oper_name(sourceinfo_t *si)
 	}
 	else if (si->s != NULL)
 		snprintf(result, sizeof result, "%s", si->s->name);
-	else
-	{
+	else if (si->v != NULL)
 		snprintf(result, sizeof result, "<%s>%s", si->v->description,
 				si->smu ? entity(si->smu)->name : "");
-	}
+	else
+		mowgli_strlcpy(result, "???", sizeof result);
+
 	return result;
 }
 
-const char *get_storage_oper_name(sourceinfo_t *si)
+const char *
+get_storage_oper_name(struct sourceinfo *si)
 {
-	static char result[NICKLEN+USERLEN+HOSTLEN+NICKLEN+10];
+	static char result[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1 + NICKLEN + 10];
 
 	if (si->v != NULL && si->v->get_storage_oper_name != NULL)
 		return si->v->get_storage_oper_name(si);
@@ -1036,23 +1140,25 @@ const char *get_storage_oper_name(sourceinfo_t *si)
 	if (si->smu != NULL)
 		snprintf(result, sizeof result, "%s", entity(si->smu)->name);
 	else if (si->su != NULL)
-	{
 		snprintf(result, sizeof result, "%s!%s@%s{%s}", si->su->nick,
 				si->su->user, si->su->vhost,
 				si->su->server->name);
-	}
 	else if (si->s != NULL)
 		snprintf(result, sizeof result, "%s", si->s->name);
-	else
+	else if (si->v != NULL)
 		snprintf(result, sizeof result, "<%s>", si->v->description);
+	else
+		mowgli_strlcpy(result, "???", sizeof result);
+
 	return result;
 }
 
-const char *get_source_security_label(sourceinfo_t *si)
+const char *
+get_source_security_label(struct sourceinfo *si)
 {
-	static char result[NICKLEN+USERLEN+HOSTLEN+NICKLEN+HOSTLEN+10];
-	const soper_t *soper;
-	const operclass_t *operclass = NULL;
+	static char result[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1 + NICKLEN + 1 + HOSTLEN + 1 + 10];
+	const struct soper *soper;
+	const struct operclass *operclass = NULL;
 
 	mowgli_strlcpy(result, get_storage_oper_name(si), sizeof result);
 
@@ -1078,7 +1184,8 @@ const char *get_source_security_label(sourceinfo_t *si)
 	return result;
 }
 
-void wallops(const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(1, 2)
+wallops(const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
@@ -1096,7 +1203,8 @@ void wallops(const char *fmt, ...)
 		slog(LG_ERROR, "wallops(): unable to send: %s", buf);
 }
 
-void verbose_wallops(const char *fmt, ...)
+void ATHEME_FATTR_PRINTF(1, 2)
+verbose_wallops(const char *fmt, ...)
 {
 	va_list args;
 	char buf[BUFSIZE];
@@ -1118,7 +1226,8 @@ void verbose_wallops(const char *fmt, ...)
  * Returns true if it is ok, false if not; command_fail() will have been called
  * as well.
  */
-bool check_vhost_validity(sourceinfo_t *si, const char *host)
+bool
+check_vhost_validity(struct sourceinfo *si, const char *host)
 {
 	const char *p;
 
@@ -1133,7 +1242,7 @@ bool check_vhost_validity(sourceinfo_t *si, const char *host)
 		command_fail(si, fault_badparams, _("The vhost provided contains invalid characters."));
 		return false;
 	}
-	if (strlen(host) >= HOSTLEN)
+	if (strlen(host) > HOSTLEN)
 	{
 		command_fail(si, fault_badparams, _("The vhost provided is too long."));
 		return false;

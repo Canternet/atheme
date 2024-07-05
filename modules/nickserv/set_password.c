@@ -1,42 +1,20 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Copyright (c) 2007 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005 William Pitcock <nenolod -at- nenolod.net>
+ * Copyright (C) 2007 Jilles Tjoelker
  *
  * Changes the password associated with your account.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"nickserv/set_password", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
+static mowgli_patricia_t **ns_set_cmdtree = NULL;
 
-mowgli_patricia_t **ns_set_cmdtree;
-
-static void ns_cmd_set_password(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t ns_set_password = { "PASSWORD", N_("Changes the password associated with your account."), AC_NONE, 1, ns_cmd_set_password, { .path = "nickserv/set_password" } };
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree");
-
-	command_add(&ns_set_password, *ns_set_cmdtree);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	command_delete(&ns_set_password, *ns_set_cmdtree);
-}
-
-/* SET PASSWORD <password> */
-static void ns_cmd_set_password(sourceinfo_t *si, int parc, char *parv[])
+// SET PASSWORD <password>
+static void
+ns_cmd_set_password(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *password = parv[0];
 
@@ -48,14 +26,14 @@ static void ns_cmd_set_password(sourceinfo_t *si, int parc, char *parv[])
 
 	if (!password)
 	{
-		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "PASSWORD");
+		command_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, "SET PASSWORD");
 		return;
 	}
 
-	if (strlen(password) >= PASSLEN)
+	if (strlen(password) > PASSLEN)
 	{
-		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "PASSWORD");
-		command_fail(si, fault_badparams, _("Registration passwords may not be longer than \2%d\2 characters."), PASSLEN - 1);
+		command_fail(si, fault_badparams, STR_INVALID_PARAMS, "SET PASSWORD");
+		command_fail(si, fault_badparams, _("Registration passwords may not be longer than \2%u\2 characters."), PASSLEN);
 		return;
 	}
 
@@ -66,17 +44,46 @@ static void ns_cmd_set_password(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
+	struct hook_user_change_password_check hdata = {
+		.si         = si,
+		.mu         = si->smu,
+		.password   = password,
+		.allowed    = true,
+	};
+
+	(void) hook_call_user_can_change_password(&hdata);
+
+	if (! hdata.allowed)
+		return;
+
 	logcommand(si, CMDLOG_SET, "SET:PASSWORD");
 
 	set_password(si->smu, password);
 
-	command_success_nodata(si, _("The password for \2%s\2 has been changed to \2%s\2."), entity(si->smu)->name, password);
-
-	return;
+	command_success_nodata(si, _("The password for \2%s\2 has been successfully changed."), entity(si->smu)->name);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command ns_set_password = {
+	.name           = "PASSWORD",
+	.desc           = N_("Changes the password associated with your account."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &ns_cmd_set_password,
+	.help           = { .path = "nickserv/set_password" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, ns_set_cmdtree, "nickserv/set_core", "ns_set_cmdtree")
+
+	command_add(&ns_set_password, *ns_set_cmdtree);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	command_delete(&ns_set_password, *ns_set_cmdtree);
+}
+
+SIMPLE_DECLARE_MODULE_V1("nickserv/set_password", MODULE_UNLOAD_CAPABILITY_OK)

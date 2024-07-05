@@ -1,28 +1,26 @@
 /*
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 Atheme Project (http://atheme.org/)
  *
  * Stuff for internal use in Atheme.
- *
  */
 
-#ifndef INTERNAL_H
-#define INTERNAL_H
+#ifndef ATHEME_LAC_INTERNAL_H
+#define ATHEME_LAC_INTERNAL_H 1
+
+#include <atheme/libathemecore.h>
+#include <atheme/stdheaders.h>
 
 /* internal functions */
-E void event_init(void);
-E void hooks_init(void);
-E void init_dlink_nodes(void);
-E void init_netio(void);
-E void init_socket_queues(void);
-E void init_signal_handlers(void);
+void event_init(void);
+void hooks_init(void);
+void init_dlink_nodes(void);
+void init_netio(void);
+void init_socket_queues(void);
+void init_signal_handlers(void);
 
-E void language_init(void);
+void language_init(void);
 
-#endif
-
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+#endif /* !ATHEME_LAC_INTERNAL_H */

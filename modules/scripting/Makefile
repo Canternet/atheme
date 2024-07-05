@@ -1,13 +1,13 @@
-# Copyright (c) 2003-2004 E. Will et al.
-# Rights to this code are documented in doc/LICENSE.
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
 #
-# This file contains build instructions.
-#
-# $Id: Makefile.in 8375 2007-06-03 20:03:26Z pippijn $
-#
-
-SUBDIRS = $(PERL_ENABLE)
-MODULE = scripting
+# Copyright (C) 2010 Stephen Bennett <spb@exherbo.org>
+# Copyright (C) 2012 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../extra.mk
+
+MODULE  = scripting
+SUBDIRS = ${PERL_COND_D}
+
 include ../../buildsys.mk

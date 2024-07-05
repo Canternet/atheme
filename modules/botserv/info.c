@@ -1,56 +1,30 @@
 /*
- * Copyright (c) 2009 Celestin, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2009 Celestin, et al.
  *
  * This file contains a BService INFO which can show
  * botserv settings on channel or bot.
- *
  */
 
-#include "atheme.h"
-#include "botserv.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"botserv/info", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://atheme.org/>"
-);
+static struct botserv_main_symbols *bs_main_syms = NULL;
 
-static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t bs_info = { "INFO", N_("Allows you to see BotServ information about a channel or a bot."), AC_NONE, 1, bs_cmd_info, { .path = "botserv/info" } };
-
-fn_botserv_bot_find *botserv_bot_find;
-mowgli_list_t *bs_bots;
-
-void _modinit(module_t *m)
-{
-	MODULE_TRY_REQUEST_SYMBOL(m, bs_bots, "botserv/main", "bs_bots");
-	MODULE_TRY_REQUEST_SYMBOL(m, botserv_bot_find, "botserv/main", "botserv_bot_find");
-
-	service_named_bind_command("botserv", &bs_info);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("botserv", &bs_info);
-}
-
-/* ******************************************************************** */
-
-static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
+static void
+bs_cmd_info(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *dest = parv[0];
-	mychan_t *mc = NULL;
-	botserv_bot_t* bot = NULL;
-	metadata_t *md;
-	int comma = 0, i;
+	struct mychan *mc = NULL;
+	struct botserv_bot* bot = NULL;
+	struct metadata *md;
+	unsigned int comma = 0, i;
 	char buf[BUFSIZE], strfbuf[BUFSIZE], *end;
 	time_t registered;
-	struct tm tm;
+	struct tm *tm;
 	mowgli_node_t *n;
-	chanuser_t *cu;
+	struct chanuser *cu;
 
 	if (parc < 1 || parv[0] == NULL)
 	{
@@ -66,7 +40,7 @@ static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	}
 	else
 	{
-		bot = botserv_bot_find(dest);
+		bot = bs_main_syms->bot_find(dest);
 	}
 
 	if (bot != NULL)
@@ -75,8 +49,8 @@ static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 		command_success_nodata(si, _("     Mask : %s@%s"), bot->user, bot->host);
 		command_success_nodata(si, _("Real name : %s"), bot->real);
 		registered = bot->registered;
-		tm = *localtime(&registered);
-		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+		tm = localtime(&registered);
+		strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 		command_success_nodata(si, _("  Created : %s (%s ago)"), strfbuf, time_ago(registered));
 		if (bot->private)
 			command_success_nodata(si, _("  Options : Private"));
@@ -88,8 +62,8 @@ static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			i = 0;
 			MOWGLI_ITER_FOREACH(n, bot->me->me->channels.head)
 			{
-				cu = (chanuser_t *)n->data;
-				command_success_nodata(si, _("%d: %s"), ++i, cu->chan->name);
+				cu = (struct chanuser *)n->data;
+				command_success_nodata(si, _("%u: %s"), ++i, cu->chan->name);
 			}
 		}
 	}
@@ -97,7 +71,7 @@ static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	{
 		if (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW) && !has_priv(si, PRIV_CHAN_AUSPEX))
 		{
-			command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+			command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 			return;
 		}
 
@@ -118,6 +92,11 @@ static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 			end += snprintf(end, sizeof(buf) - (end - buf), "%s%s", (comma) ? ", " : "", "No bot");
 			comma = 1;
 		}
+		if (metadata_find(mc, "private:botserv:saycaller"))
+		{
+			end += snprintf(end, sizeof(buf) - (end - buf), "%s%s", (comma) ? ", " : "", "Say Caller");
+			comma = 1;
+		}
 		command_success_nodata(si, _("          Options : %s"), (*buf) ? buf : "None");
 	}
 	else
@@ -128,10 +107,27 @@ static void bs_cmd_info(sourceinfo_t *si, int parc, char *parv[])
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command bs_info = {
+	.name           = "INFO",
+	.desc           = N_("Allows you to see BotServ information about a channel or a bot."),
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &bs_cmd_info,
+	.help           = { .path = "botserv/info" },
+};
 
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_SYMBOL(m, bs_main_syms, "botserv/main", "botserv_main_symbols")
 
+	service_named_bind_command("botserv", &bs_info);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("botserv", &bs_info);
+}
+
+SIMPLE_DECLARE_MODULE_V1("botserv/info", MODULE_UNLOAD_CAPABILITY_OK)

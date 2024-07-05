@@ -1,39 +1,20 @@
 /*
- * Copyright (c) 2007-2008 Jilles Tjoelker
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2007-2009 Jilles Tjoelker
  *
  * Searches through the logs.
- *
  */
 
-#include "atheme.h"
-
-DECLARE_MODULE_V1
-(
-	"operserv/greplog", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_greplog(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_greplog = { "GREPLOG", N_("Searches through the logs."), PRIV_CHAN_AUSPEX, 3, os_cmd_greplog, { .path = "oservice/greplog" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("operserv", &os_greplog);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_greplog);
-}
+#include <atheme.h>
 
 #define MAXMATCHES 100
 
-static const char *get_logfile(const unsigned int *masks)
+static const char *
+get_logfile(const unsigned int *masks)
 {
-	logfile_t *lf;
+	struct logfile *lf;
 	int i;
 
 	for (i = 0; masks[i] != 0; i++)
@@ -45,7 +26,8 @@ static const char *get_logfile(const unsigned int *masks)
 	return NULL;
 }
 
-static const char *get_commands_log(void)
+static const char *
+get_commands_log(void)
 {
 	const unsigned int masks[] = {
 		LG_CMD_ALL,
@@ -59,7 +41,8 @@ static const char *get_commands_log(void)
 	return get_logfile(masks);
 }
 
-static const char *get_account_log(void)
+static const char *
+get_account_log(void)
 {
 	const unsigned int masks[] = {
 		LG_CMD_REGISTER | LG_CMD_SET | LG_REGISTER,
@@ -69,23 +52,23 @@ static const char *get_account_log(void)
 	return get_logfile(masks);
 }
 
-/* GREPLOG <service> <mask> */
-static void os_cmd_greplog(sourceinfo_t *si, int parc, char *parv[])
+// GREPLOG <service> <mask>
+static void
+os_cmd_greplog(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *service, *pattern, *baselog;
-	int maxdays, matches = -1, matches1, day, days, lines, linesv;
+	unsigned int matches = 0, matches_sv = 0;
+	unsigned int day, days, maxdays, lines, linesv;
 	FILE *in;
 	char str[1024];
 	char *p, *q;
 	char logfile[256];
 	time_t t;
-	struct tm tm;
+	struct tm *tm;
 	mowgli_list_t loglines = { NULL, NULL, 0 };
 	mowgli_node_t *n, *tn;
 
-	/* require user, channel and server auspex
-	 * (channel auspex checked via in command_t)
-	 */
+	// require user, channel and server auspex (channel auspex checked via in struct command)
 	if (!has_priv(si, PRIV_USER_AUSPEX))
 	{
 		command_fail(si, fault_noprivs, STR_NO_PRIVILEGE, PRIV_USER_AUSPEX);
@@ -109,11 +92,10 @@ static void os_cmd_greplog(sourceinfo_t *si, int parc, char *parv[])
 
 	if (parc >= 3)
 	{
-		days = atoi(parv[2]);
 		maxdays = !strcmp(service, "*") ? 120 : 30;
-		if (days < 0 || days > maxdays)
+		if (! string_to_uint(parv[2], &days) || days > maxdays)
 		{
-			command_fail(si, fault_badparams, _("Too many days, maximum is %d."), maxdays);
+			command_fail(si, fault_badparams, _("Too many days, maximum is %u."), maxdays);
 			return;
 		}
 	}
@@ -133,21 +115,19 @@ static void os_cmd_greplog(sourceinfo_t *si, int parc, char *parv[])
 			mowgli_strlcpy(logfile, baselog, sizeof logfile);
 		else
 		{
-			t = CURRTIME - day * 86400;
-			tm = *localtime(&t);
+			t = CURRTIME - (day * SECONDS_PER_DAY);
+			tm = localtime(&t);
 			snprintf(logfile, sizeof logfile, "%s.%04u%02u%02u",
-					baselog, tm.tm_year + 1900,
-					tm.tm_mon + 1, tm.tm_mday);
+					baselog, (unsigned int) (tm->tm_year + 1900),
+					(unsigned int) (tm->tm_mon + 1), (unsigned int) tm->tm_mday);
 		}
 		in = fopen(logfile, "r");
 		if (in == NULL)
 		{
-			command_success_nodata(si, "Failed to open log file %s", logfile);
+			command_success_nodata(si, _("Failed to open log file %s"), logfile);
 			continue;
 		}
-		if (matches == -1)
-			matches = 0;
-		matches1 = matches;
+		matches_sv = matches;
 		lines = linesv = 0;
 		while (fgets(str, sizeof str, in) != NULL)
 		{
@@ -177,40 +157,59 @@ static void os_cmd_greplog(sourceinfo_t *si, int parc, char *parv[])
 			{
 				n = loglines.tail;
 				mowgli_node_delete(n, &loglines);
-				free(n->data);
+				sfree(n->data);
 				mowgli_node_free(n);
 			}
 		}
 		fclose(in);
-		matches = matches1;
+		matches = matches_sv;
 		MOWGLI_ITER_FOREACH_SAFE(n, tn, loglines.head)
 		{
 			p = n->data;
 			matches++;
-			command_success_nodata(si, "[%d] %s", matches, p);
+			command_success_nodata(si, "[%u] %s", matches, p);
 			mowgli_node_delete(n, &loglines);
-			free(n->data);
+			sfree(n->data);
 			mowgli_node_free(n);
 		}
 		if (matches == 0 && lines > linesv && lines > 0)
-			command_success_nodata(si, "Log file may be corrupted, %d/%d unexpected lines", lines - linesv, lines);
+			command_success_nodata(si, _("Log file may be corrupted, %u/%u unexpected lines"), lines - linesv, lines);
 		if (matches >= MAXMATCHES)
 		{
-			command_success_nodata(si, "Too many matches, halting search");
+			command_success_nodata(si, _("Too many matches, halting search"));
 			break;
 		}
 	}
 
-	logcommand(si, CMDLOG_ADMIN, "GREPLOG: \2%s\2 \2%s\2 (\2%d\2 matches)", service, pattern, matches);
+	logcommand(si, CMDLOG_ADMIN, "GREPLOG: \2%s\2 \2%s\2 (\2%u\2 matches)", service, pattern, matches);
 	if (matches == 0)
 		command_success_nodata(si, _("No lines matched pattern \2%s\2"), pattern);
 	else if (matches > 0)
-		command_success_nodata(si, ngettext(N_("\2%d\2 match for pattern \2%s\2"),
-						    N_("\2%d\2 matches for pattern \2%s\2"), matches), matches, pattern);
+		command_success_nodata(si, ngettext(N_("\2%u\2 match for pattern \2%s\2"),
+						    N_("\2%u\2 matches for pattern \2%s\2"), matches), matches, pattern);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_greplog = {
+	.name           = "GREPLOG",
+	.desc           = N_("Searches through the logs."),
+	.access         = PRIV_CHAN_AUSPEX,
+	.maxparc        = 3,
+	.cmd            = &os_cmd_greplog,
+	.help           = { .path = "oservice/greplog" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	service_named_bind_command("operserv", &os_greplog);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_greplog);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/greplog", MODULE_UNLOAD_CAPABILITY_OK)

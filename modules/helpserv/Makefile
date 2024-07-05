@@ -1,18 +1,23 @@
-# Copyright (c) 2003-2004 E. Will et al.
-# Rights to this code are documented in doc/LICENSE.
+# SPDX-License-Identifier: ISC
+# SPDX-URL: https://spdx.org/licenses/ISC.html
 #
-# This file contains build instructions.
-#
-#
-
-MODULE = helpserv
-
-SRCS = main.c helpme.c services.c ticket.c
+# Copyright (C) 2010 JD Horelick <jdhore1@gmail.com>
+# Copyright (C) 2010 William Pitcock <nenolod@dereferenced.org>
+# Copyright (C) 2011 Stephen Bennett <spb@exherbo.org>
+# Copyright (C) 2018-2020 Aaron M. D. Jones <me@aaronmdjones.net>
 
 include ../../extra.mk
+
+MODULE = helpserv
+SRCS   =            \
+    helpme.c        \
+    main.c          \
+    services.c      \
+    ticket.c
+
 include ../../buildsys.mk
 include ../../buildsys.module.mk
 
-CPPFLAGS	+= -I../../include
-LIBS +=	-L../../libathemecore -lathemecore ${LDFLAGS_RPATH}
-
+CPPFLAGS += -I../../include
+LDFLAGS  += -L../../libathemecore
+LIBS     += -lathemecore

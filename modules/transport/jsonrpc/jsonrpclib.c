@@ -1,15 +1,17 @@
-/* JSONRPC Library
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Copyright (c) 2014 Atheme Development Group
- * Please read COPYING and README for further details.
+ * Copyright (C) 2014 Atheme Project (http://atheme.org/)
  *
+ * JSONRPC Library
  */
 
-#include <mowgli.h>
-#include "atheme.h"
+#include <atheme.h>
 #include "jsonrpclib.h"
 
-void jsonrpc_process(char *buffer, void *userdata)
+void
+jsonrpc_process(char *buffer, void *userdata)
 {
 	if (!buffer)
 	{
@@ -64,7 +66,7 @@ void jsonrpc_process(char *buffer, void *userdata)
 	mowgli_json_t *param;
 	mowgli_node_t *n;
 
-	jsonrpc_method_t call_method = get_json_method(method_str);
+	jsonrpc_method_fn call_method = get_json_method(method_str);
 
 	MOWGLI_LIST_FOREACH(n, params_list->head)
 	{
@@ -95,7 +97,8 @@ void jsonrpc_process(char *buffer, void *userdata)
 
 }
 
-void jsonrpc_success_string(void *conn, const char *result, const char *id)
+void
+jsonrpc_success_string(void *conn, const char *result, const char *id)
 {
 	mowgli_json_t *obj = mowgli_json_create_object();
 
@@ -115,7 +118,8 @@ void jsonrpc_success_string(void *conn, const char *result, const char *id)
 	jsonrpc_send_data(conn, str->str);
 }
 
-void jsonrpc_failure_string(void *conn, int code, const char *error, const char *id)
+void
+jsonrpc_failure_string(void *conn, int code, const char *error, const char *id)
 {
 	mowgli_json_t *obj = mowgli_json_create_object();
 	mowgli_json_t *errorobj = mowgli_json_create_object();
@@ -140,27 +144,28 @@ void jsonrpc_failure_string(void *conn, int code, const char *error, const char 
 	jsonrpc_send_data(conn, str->str);
 }
 
-char *jsonrpc_normalizeBuffer(const char *buf)
+char * ATHEME_FATTR_MALLOC
+jsonrpc_normalizeBuffer(const char *buf)
 {
 	char *newbuf;
 	int i, len, j = 0;
 
 	len = strlen(buf);
-	newbuf = (char *)smalloc(sizeof(char) * len + 1);
+	newbuf = smalloc(sizeof(char) * len + 1);
 
 	for (i = 0; i < len; i++)
 	{
 		switch (buf[i])
 		{
-			/* ctrl char */
+			// ctrl char
 			case 1:
 				break;
-				/* Bold ctrl char */
+				// Bold ctrl char
 			case 2:
 				break;
-				/* Color ctrl char */
+				// Color ctrl char
 			case 3:
-				/* If the next character is a digit, its also removed */
+				// If the next character is a digit, its also removed
 				if (isdigit((unsigned char)buf[i + 1]))
 				{
 					i++;
@@ -197,24 +202,24 @@ char *jsonrpc_normalizeBuffer(const char *buf)
 				}
 
 				break;
-				/* tabs char */
+				// tabs char
 			case 9:
 				break;
-				/* line feed char */
+				// line feed char
 			case 10:
 				break;
-				/* carrage returns char */
+				// carrage returns char
 			case 13:
 				break;
-				/* Reverse ctrl char */
+				// Reverse ctrl char
 			case 22:
 				break;
-				/* Underline ctrl char */
+				// Underline ctrl char
 			case 31:
 				break;
-				/* A valid char gets copied into the new buffer */
+				// A valid char gets copied into the new buffer
 			default:
-				/* All valid <32 characters are handled above. */
+				// All valid <32 characters are handled above.
 				if (buf[i] > 31)
 				{
 					newbuf[j] = buf[i];
@@ -223,9 +228,8 @@ char *jsonrpc_normalizeBuffer(const char *buf)
 		}
 	}
 
-	/* Terminate the string */
+	// Terminate the string
 	newbuf[j] = 0;
 
 	return (newbuf);
 }
-

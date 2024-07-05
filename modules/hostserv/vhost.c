@@ -1,45 +1,22 @@
 /*
- * Copyright (c) 2005 William Pitcock <nenolod -at- nenolod.net>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2009 William Pitcock <nenolod -at- nenolod.net>
  *
  * Allows setting a vhost on an account
- *
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "hostserv.h"
 
-DECLARE_MODULE_V1
-(
-	"hostserv/vhost", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void hs_cmd_vhost(sourceinfo_t *si, int parc, char *parv[]);
-static void hs_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t hs_vhost = { "VHOST", N_("Manages per-account virtual hosts."), PRIV_USER_VHOST, 2, hs_cmd_vhost, { .path = "hostserv/vhost" } };
-command_t hs_listvhost = { "LISTVHOST", N_("Lists user virtual hosts."), PRIV_USER_AUSPEX, 1, hs_cmd_listvhost, { .path = "hostserv/listvhost" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("hostserv", &hs_vhost);
-	service_named_bind_command("hostserv", &hs_listvhost);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("hostserv", &hs_vhost);
-	service_named_unbind_command("hostserv", &hs_listvhost);
-}
-
-/* VHOST <nick> [host] */
-static void hs_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
+// VHOST <nick> [host]
+static void
+hs_cmd_vhost(struct sourceinfo *si, int parc, char *parv[])
 {
 	char *target = parv[0];
 	char *host = parv[1];
-	myuser_t *mu;
+	struct myuser *mu;
 
 	if (!target)
 	{
@@ -48,14 +25,14 @@ static void hs_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 		return;
 	}
 
-	/* find the user... */
+	// find the user...
 	if (!(mu = myuser_find_ext(target)))
 	{
-		command_fail(si, fault_nosuch_target, _("\2%s\2 is not registered."), target);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, target);
 		return;
 	}
 
-	/* deletion action */
+	// deletion action
 	if (!host)
 	{
 		hs_sethost_all(mu, NULL, get_source_name(si));
@@ -78,19 +55,20 @@ static void hs_cmd_vhost(sourceinfo_t *si, int parc, char *parv[])
 	return;
 }
 
-static void hs_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[])
+static void
+hs_cmd_listvhost(struct sourceinfo *si, int parc, char *parv[])
 {
 	const char *pattern;
-	myentity_iteration_state_t state;
-	myentity_t *mt;
-	myuser_t *mu;
-	metadata_t *md, *md_timestamp, *md_assigner;
+	struct myentity_iteration_state state;
+	struct myentity *mt;
+	struct myuser *mu;
+	struct metadata *md, *md_timestamp, *md_assigner;
 	mowgli_node_t *n;
 	char buf[BUFSIZE], strfbuf[BUFSIZE];
-	struct tm tm;
+	struct tm *tm;
 	size_t len;
 	time_t vhost_time;
-	int matches = 0;
+	unsigned int matches = 0;
 
 	pattern = parc >= 1 ? parv[0] : "*";
 
@@ -112,8 +90,8 @@ static void hs_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[])
 			if (md_timestamp)
 			{
 				vhost_time = atoi(md_timestamp->value);
-				tm = *localtime(&vhost_time);
-				strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, &tm);
+				tm = localtime(&vhost_time);
+				strftime(strfbuf, sizeof strfbuf, TIME_FORMAT, tm);
 				len += snprintf(buf + len, BUFSIZE - len, _(" on %s (%s ago)"), strfbuf, time_ago(vhost_time));
 			}
 
@@ -125,28 +103,58 @@ static void hs_cmd_listvhost(sourceinfo_t *si, int parc, char *parv[])
 		}
 		MOWGLI_ITER_FOREACH(n, mu->nicks.head)
 		{
-			snprintf(buf, BUFSIZE, "%s:%s", "private:usercloak", ((mynick_t *)(n->data))->nick);
+			snprintf(buf, BUFSIZE, "%s:%s", "private:usercloak", ((struct mynick *)(n->data))->nick);
 			md = metadata_find(mu, buf);
 			if (md == NULL)
 				continue;
 			if (!match(pattern, md->value))
 			{
-				command_success_nodata(si, "- %-30s %s", ((mynick_t *)(n->data))->nick, md->value);
+				command_success_nodata(si, "- %-30s %s", ((struct mynick *)(n->data))->nick, md->value);
 				matches++;
 			}
 		}
 	}
 
-	logcommand(si, CMDLOG_ADMIN, "LISTVHOST: \2%s\2 (\2%d\2 matches)", pattern, matches);
+	logcommand(si, CMDLOG_ADMIN, "LISTVHOST: \2%s\2 (\2%u\2 matches)", pattern, matches);
 	if (matches == 0)
 		command_success_nodata(si, _("No vhosts matched pattern \2%s\2"), pattern);
 	else
-		command_success_nodata(si, ngettext(N_("\2%d\2 match for pattern \2%s\2"),
-						    N_("\2%d\2 matches for pattern \2%s\2"), matches), matches, pattern);
+		command_success_nodata(si, ngettext(N_("\2%u\2 match for pattern \2%s\2"),
+						    N_("\2%u\2 matches for pattern \2%s\2"), matches), matches, pattern);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command hs_vhost = {
+	.name           = "VHOST",
+	.desc           = N_("Manages per-account virtual hosts."),
+	.access         = PRIV_USER_VHOST,
+	.maxparc        = 2,
+	.cmd            = &hs_cmd_vhost,
+	.help           = { .path = "hostserv/vhost" },
+};
+
+static struct command hs_listvhost = {
+	.name           = "LISTVHOST",
+	.desc           = N_("Lists user virtual hosts."),
+	.access         = PRIV_USER_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &hs_cmd_listvhost,
+	.help           = { .path = "hostserv/listvhost" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "hostserv/main")
+
+	service_named_bind_command("hostserv", &hs_vhost);
+	service_named_bind_command("hostserv", &hs_listvhost);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("hostserv", &hs_vhost);
+	service_named_unbind_command("hostserv", &hs_listvhost);
+}
+
+SIMPLE_DECLARE_MODULE_V1("hostserv/vhost", MODULE_UNLOAD_CAPABILITY_OK)

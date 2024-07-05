@@ -1,22 +1,19 @@
 /*
- * Copyright (c) 2011 William Pitcock <nenolod@dereferenced.org>
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * Rights to this code are as documented in doc/LICENSE.
+ * Copyright (C) 2011 William Pitcock <nenolod@dereferenced.org>
  */
 
-#include "atheme.h"
+#include <atheme.h>
 #include "exttarget.h"
 
-DECLARE_MODULE_V1
-(
-	"exttarget/main", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
+// Imported by other modules/exttarget/*.so */
+extern mowgli_patricia_t *exttarget_tree;
 mowgli_patricia_t *exttarget_tree = NULL;
 
-static void exttarget_find(hook_myentity_req_t *req)
+static void
+exttarget_find(struct hook_myentity_req *req)
 {
 	char buf[BUFSIZE];
 	char *i, *j;
@@ -33,23 +30,26 @@ static void exttarget_find(hook_myentity_req_t *req)
 	if ((j = strchr(buf, ':')) != NULL)
 		*j++ = '\0';
 
-	/* i is now the name of the exttarget.  j is the parameter. */
+	// i is now the name of the exttarget.  j is the parameter.
 	val = mowgli_patricia_retrieve(exttarget_tree, i);
 	if (val != NULL)
 		req->entity = val(j);
 }
 
-void _modinit(module_t *m)
+static void
+mod_init(struct module ATHEME_VATTR_UNUSED *const restrict m)
 {
 	exttarget_tree = mowgli_patricia_create(strcasecanon);
 
-	hook_add_event("myentity_find");
 	hook_add_myentity_find(exttarget_find);
 }
 
-void _moddeinit(module_unload_intent_t intent)
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
 {
 	hook_del_myentity_find(exttarget_find);
 
 	mowgli_patricia_destroy(exttarget_tree, NULL, NULL);
 }
+
+SIMPLE_DECLARE_MODULE_V1("exttarget/main", MODULE_UNLOAD_CAPABILITY_OK)

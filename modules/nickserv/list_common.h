@@ -1,23 +1,30 @@
-/* list_common.h - /ns list common definitions
- * Copyright (C) 2010 Atheme Development Group
+/*
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2010-2014 Atheme Project (http://atheme.org/)
+ *
+ * list_common.h - /ns list common definitions
  */
 
-#ifndef NSLIST_COMMON_H
-#define NSLIST_COMMON_H
+#ifndef ATHEME_MOD_NICKSERV_LIST_COMMON_H
+#define ATHEME_MOD_NICKSERV_LIST_COMMON_H 1
 
-#include "atheme.h"
+#include <atheme.h>
 
-typedef enum {
+enum list_opttype
+{
 	OPT_BOOL,
 	OPT_INT,
 	OPT_STRING,
 	OPT_FLAG,
 	OPT_AGE,
-} list_opttype_t;
+};
 
-typedef struct {
-	list_opttype_t opttype;
-	bool (*is_match)(const mynick_t *mn, const void *arg);
-} list_param_t;
+struct list_param
+{
+	enum list_opttype opttype;
+	bool (*is_match)(const struct mynick *mn, const void *arg);
+};
 
-#endif /* !NSLIST_COMMON_H */
+#endif /* !ATHEME_MOD_NICKSERV_LIST_COMMON_H */

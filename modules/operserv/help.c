@@ -1,70 +1,64 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2005-2006 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
  *
- * This file contains routines to handle the OService HELP command.
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005 Atheme Project (http://atheme.org/)
+ * Copyright (C) 2018 Atheme Development Group (https://atheme.github.io/)
  *
+ * This file contains routines to handle the OperServ HELP command.
  */
 
-#include "atheme.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"operserv/help", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_help(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_help = { "HELP", N_("Displays contextual help information."), AC_NONE, 1, os_cmd_help, { .path = "help" } };
-
-void _modinit(module_t *m)
+static void
+os_cmd_help(struct sourceinfo *const restrict si, const int ATHEME_VATTR_UNUSED parc, char **const restrict parv)
 {
-	service_named_bind_command("operserv", &os_help);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_help);
-}
-
-/* HELP <command> [params] */
-static void os_cmd_help(sourceinfo_t *si, int parc, char *parv[])
-{
-	char *command = parv[0];
-
-	if (!has_any_privs(si))
+	if (! has_any_privs(si))
 	{
-		command_fail(si, fault_noprivs, _("You are not authorized to use %s."), si->service->nick);
+		(void) command_fail(si, fault_noprivs, _("You are not authorized to use %s."), si->service->nick);
 		return;
 	}
 
-	if (!command)
+	if (parv[0])
 	{
-		command_success_nodata(si, _("***** \2%s Help\2 *****"), si->service->nick);
-		command_success_nodata(si, _("\2%s\2 provides essential network management services, such as\n"
-					"routing manipulation and access restriction. Please do not abuse\n"
-					"your access to \2%s\2!"),
-				si->service->nick, si->service->nick);
-		command_success_nodata(si, " ");
-		command_success_nodata(si, _("For information on a command, type:"));
-		command_success_nodata(si, "\2/%s%s help <command>\2", (ircd->uses_rcommand == false) ? "msg " : "", si->service->disp);
-		command_success_nodata(si, " ");
-
-		command_help(si, si->service->commands);
-
-		command_success_nodata(si, _("***** \2End of Help\2 *****"));
+		(void) help_display(si, si->service, parv[0], si->service->commands);
 		return;
 	}
 
-	/* take the command through the hash table */
-	help_display(si, si->service, command, si->service->commands);
+	(void) help_display_prefix(si, si->service);
+
+	(void) command_success_nodata(si, _("\2%s\2 provides essential network management services, such as\n"
+	                                    "routing manipulation and access restriction. Please do not abuse\n"
+	                                    "your access to \2%s\2!"), si->service->nick, si->service->nick);
+
+	(void) help_display_newline(si);
+	(void) command_help(si, si->service->commands);
+	(void) help_display_moreinfo(si, si->service, NULL);
+	(void) help_display_suffix(si);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_help = {
+	.name           = "HELP",
+	.desc           = STR_HELP_DESCRIPTION,
+	.access         = AC_NONE,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_help,
+	.help           = { .path = "help" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	(void) service_named_bind_command("operserv", &os_help);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	(void) service_named_unbind_command("operserv", &os_help);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/help", MODULE_UNLOAD_CAPABILITY_OK)

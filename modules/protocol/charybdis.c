@@ -1,22 +1,17 @@
 /*
- * Copyright (c) 2003-2004 E. Will et al.
- * Copyright (c) 2005-2007 Atheme Development Group
- * Rights to this code are documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2003-2004 E. Will, et al.
+ * Copyright (C) 2005-2007 Atheme Project (http://atheme.org/)
  *
  * This file contains protocol support for charybdis-based ircd.
- *
  */
 
-#include "atheme.h"
-#include "uplink.h"
-#include "pmodule.h"
-#include "protocol/charybdis.h"
+#include <atheme.h>
+#include <atheme/protocol/charybdis.h>
 
-DECLARE_MODULE_V1("protocol/charybdis", true, _modinit, NULL, PACKAGE_STRING, "Atheme Development Group <http://www.atheme.org>");
-
-/* *INDENT-OFF* */
-
-ircd_t Charybdis = {
+static struct ircd Charybdis = {
 	.ircdname = "Charybdis",
 	.tldprefix = "$$",
 	.uses_uid = true,
@@ -26,7 +21,7 @@ ircd_t Charybdis = {
 	.uses_halfops = false,
 	.uses_p10 = false,
 	.uses_vhost = false,
-	.oper_only_modes = CMODE_EXLIMIT | CMODE_PERM,
+	.oper_only_modes = CMODE_EXLIMIT | CMODE_PERM | CMODE_IMMUNE,
 	.owner_mode = 0,
 	.protect_mode = 0,
 	.halfops_mode = 0,
@@ -35,14 +30,14 @@ ircd_t Charybdis = {
 	.halfops_mchar = "+",
 	.type = PROTOCOL_CHARYBDIS,
 	.perm_mode = CMODE_PERM,
-	.oimmune_mode = 0,
+	.oimmune_mode = CMODE_IMMUNE,
 	.ban_like_modes = "beIq",
 	.except_mchar = 'e',
 	.invex_mchar = 'I',
 	.flags = IRCD_CIDR_BANS | IRCD_HOLDNICK,
 };
 
-struct cmode_ charybdis_mode_list[] = {
+static const struct cmode charybdis_mode_list[] = {
   { 'i', CMODE_INVITE },
   { 'm', CMODE_MOD    },
   { 'n', CMODE_NOEXT  },
@@ -57,39 +52,33 @@ struct cmode_ charybdis_mode_list[] = {
   { 'F', CMODE_FTARGET},
   { 'Q', CMODE_DISFWD },
 
-  /* following modes are added as extensions */
+  // following modes are added as extensions
   { 'N', CMODE_NPC	 },
   { 'S', CMODE_SSLONLY	 },
   { 'O', CMODE_OPERONLY  },
   { 'A', CMODE_ADMINONLY },
   { 'c', CMODE_NOCOLOR	 },
   { 'C', CMODE_NOCTCP	 },
+  { 'T', CMODE_NONOTICE  },
+  { 'M', CMODE_IMMUNE	 },
+  { 'u', CMODE_NOFILTER	 },
 
   { '\0', 0 }
 };
 
-static bool check_forward(const char *, channel_t *, mychan_t *, user_t *, myuser_t *);
-static bool check_jointhrottle(const char *, channel_t *, mychan_t *, user_t *, myuser_t *);
-
-struct extmode charybdis_ignore_mode_list[] = {
-  { 'f', check_forward },
-  { 'j', check_jointhrottle },
-  { '\0', 0 }
-};
-
-struct cmode_ charybdis_status_mode_list[] = {
+static const struct cmode charybdis_status_mode_list[] = {
   { 'o', CSTATUS_OP    },
   { 'v', CSTATUS_VOICE },
   { '\0', 0 }
 };
 
-struct cmode_ charybdis_prefix_mode_list[] = {
+static const struct cmode charybdis_prefix_mode_list[] = {
   { '@', CSTATUS_OP    },
   { '+', CSTATUS_VOICE },
   { '\0', 0 }
 };
 
-struct cmode_ charybdis_user_mode_list[] = {
+static const struct cmode charybdis_user_mode_list[] = {
   { 'p', UF_IMMUNE   },
   { 'a', UF_ADMIN    },
   { 'i', UF_INVIS    },
@@ -99,15 +88,28 @@ struct cmode_ charybdis_user_mode_list[] = {
   { '\0', 0 }
 };
 
-/* *INDENT-ON* */
-
-/* ircd allows forwards to existing channels; the target channel must be
- * +F or the setter must have ops in it */
-static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu)
+/* IRCd allows forwards to existing channels; and only allows such forwards
+ * to be set under 2 circumstances:
+ *
+ * 1) If the setter is opped on the target channel, allow the operation.
+ * 2) If the target channel is +F, allow the operation.
+ *
+ * Map this to services checks like so:
+ *
+ * 1) If the setter is opped on the target channel, or has the CA_OP or
+ *    CA_AUTOOP flags on the target channel (so they could be opped if they
+ *    so choose), allow the operation.
+ *
+ * 2) If the target channel is +F, or the setter has the CA_SET flag on the
+ *    target channel (so they could add +F to its MLOCK if they so choose),
+ *    allow the operation.
+ */
+static bool
+check_forward(const char *value, struct channel *c, struct mychan *mc, struct user *u, struct myuser *mu)
 {
-	channel_t *target_c;
-	mychan_t *target_mc;
-	chanuser_t *target_cu;
+	struct channel *target_c;
+	struct mychan *target_mc;
+	struct chanuser *target_cu;
 
 	if (!VALID_GLOBAL_CHANNEL_PFX(value) || strlen(value) > 50)
 		return false;
@@ -126,20 +128,23 @@ static bool check_forward(const char *value, channel_t *c, mychan_t *mc, user_t 
 		target_cu = chanuser_find(target_c, u);
 		if (target_cu != NULL && target_cu->modes & CSTATUS_OP)
 			return true;
-		if (chanacs_user_flags(target_mc, u) & CA_SET)
+		if (chanacs_user_has_flag(target_mc, u, (CA_OP | CA_AUTOOP | CA_SET)))
 			return true;
 	}
-	else if (mu != NULL)
-		if (chanacs_entity_has_flag(target_mc, entity(mu), CA_SET))
+	if (mu != NULL)
+		if (chanacs_entity_has_flag(target_mc, entity(mu), (CA_OP | CA_AUTOOP | CA_SET)))
 			return true;
 	return false;
 }
 
-static bool check_jointhrottle(const char *value, channel_t *c, mychan_t *mc, user_t *u, myuser_t *mu)
+static bool
+check_jointhrottle(const char *value, struct channel *c, struct mychan *mc, struct user *u, struct myuser *mu)
 {
 	const char *p, *arg2;
 
-	p = value, arg2 = NULL;
+	p = value;
+	arg2 = NULL;
+
 	while (*p != '\0')
 	{
 		if (*p == ':')
@@ -159,36 +164,49 @@ static bool check_jointhrottle(const char *value, channel_t *c, mychan_t *mc, us
 	return true;
 }
 
-/* this may be slow, but it is not used much */
-/* returns true if it matches, false if not */
-/* note that the host part matches differently from a regular ban */
-static bool extgecos_match(const char *mask, user_t *u)
+static struct extmode charybdis_ignore_mode_list[] = {
+  { 'f', check_forward },
+  { 'j', check_jointhrottle },
+  { '\0', 0 }
+};
+
+/* this may be slow, but it is not used much
+ * returns true if it matches, false if not
+ * note that the host part matches differently from a regular ban */
+static bool
+extgecos_match(const char *mask, struct user *u)
 {
-	char hostgbuf[NICKLEN+USERLEN+HOSTLEN+GECOSLEN];
-	char realgbuf[NICKLEN+USERLEN+HOSTLEN+GECOSLEN];
+	char hostgbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1 + GECOSLEN + 1];
+	char realgbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1 + GECOSLEN + 1];
+
+	bool check_realhost = (config_options.masks_through_vhost || u->host == u->vhost);
 
 	snprintf(hostgbuf, sizeof hostgbuf, "%s!%s@%s#%s", u->nick, u->user, u->vhost, u->gecos);
 	snprintf(realgbuf, sizeof realgbuf, "%s!%s@%s#%s", u->nick, u->user, u->host, u->gecos);
-	return !match(mask, hostgbuf) || !match(mask, realgbuf);
+	return !match(mask, hostgbuf) || (check_realhost && !match(mask, realgbuf));
 }
 
-static mowgli_node_t *charybdis_next_matching_ban(channel_t *c, user_t *u, int type, mowgli_node_t *first)
+static mowgli_node_t *
+charybdis_next_matching_ban(struct channel *c, struct user *u, int type, mowgli_node_t *first)
 {
-	chanban_t *cb;
+	struct chanban *cb;
 	mowgli_node_t *n;
-	char hostbuf[NICKLEN+USERLEN+HOSTLEN];
-	char realbuf[NICKLEN+USERLEN+HOSTLEN];
-	char ipbuf[NICKLEN+USERLEN+HOSTLEN];
-	char strippedmask[NICKLEN+USERLEN+HOSTLEN+CHANNELLEN+2];
+	char hostbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1];
+	char realbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1];
+	char ipbuf[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1];
+	char strippedmask[NICKLEN + 1 + USERLEN + 1 + HOSTLEN + 1 + CHANNELLEN + 3];
 	char *p;
 	bool negate, matched;
 	int exttype;
-	channel_t *target_c;
+	struct channel *target_c;
 
 	snprintf(hostbuf, sizeof hostbuf, "%s!%s@%s", u->nick, u->user, u->vhost);
 	snprintf(realbuf, sizeof realbuf, "%s!%s@%s", u->nick, u->user, u->host);
-	/* will be nick!user@ if ip unknown, doesn't matter */
+
+	// will be nick!user@ if ip unknown, doesn't matter
 	snprintf(ipbuf, sizeof ipbuf, "%s!%s@%s", u->nick, u->user, u->ip);
+
+	bool check_realhost = (config_options.masks_through_vhost || u->host == u->vhost);
 
 	MOWGLI_ITER_FOREACH(n, first)
 	{
@@ -209,8 +227,11 @@ static mowgli_node_t *charybdis_next_matching_ban(channel_t *c, user_t *u, int t
 		if (p != NULL && p != strippedmask)
 			*p = 0;
 
-		if ((!match(strippedmask, hostbuf) || !match(strippedmask, realbuf) || !match(strippedmask, ipbuf) || !match_cidr(strippedmask, ipbuf)))
+		if (!match(strippedmask, hostbuf))
 			return n;
+		if (check_realhost && (!match(strippedmask, realbuf) || !match(strippedmask, ipbuf) || !match_cidr(strippedmask, ipbuf)))
+			return n;
+
 		if (strippedmask[0] == '$')
 		{
 			p = strippedmask + 1;
@@ -220,9 +241,11 @@ static mowgli_node_t *charybdis_next_matching_ban(channel_t *c, user_t *u, int t
 			exttype = *p++;
 			if (exttype == '\0')
 				continue;
-			/* check parameter */
+
+			// check parameter
 			if (*p++ != ':')
 				p = NULL;
+
 			switch (exttype)
 			{
 				case 'a':
@@ -264,7 +287,8 @@ static mowgli_node_t *charybdis_next_matching_ban(channel_t *c, user_t *u, int t
 	return NULL;
 }
 
-static bool charybdis_is_valid_host(const char *host)
+static bool
+charybdis_is_valid_host(const char *host)
 {
 	const char *p;
 
@@ -276,12 +300,14 @@ static bool charybdis_is_valid_host(const char *host)
 	return true;
 }
 
-static void charybdis_notice_channel_sts(user_t *from, channel_t *target, const char *text)
+static void
+charybdis_notice_channel_sts(struct user *from, struct channel *target, const char *text)
 {
 	sts(":%s NOTICE %s :%s", from ? CLIENT_NAME(from) : ME, target->name, text);
 }
 
-static bool charybdis_is_extban(const char *mask)
+static bool
+charybdis_is_extban(const char *mask)
 {
 	const char without_param[] = "oza";
 	const char with_param[] = "ajcxr";
@@ -297,18 +323,21 @@ static bool charybdis_is_extban(const char *mask)
 	if (mask_len > 2 && mask[1] == '~')
 		offset = 1;
 
-	/* e.g. $a and $~a */
+	// e.g. $a and $~a
 	if ((mask_len == 2 + offset) && strchr(without_param, mask[1 + offset]))
 		return true;
-	/* e.g. $~a:Shutter and $~a:Shutter */
+
+	// e.g. $~a:Shutter and $~a:Shutter
 	else if ((mask_len >= 3 + offset) && mask[2 + offset] == ':' && strchr(with_param, mask[1 + offset]))
 		return true;
+
 	return false;
 }
 
-void _modinit(module_t * m)
+static void
+mod_init(struct module *const restrict m)
 {
-	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/ts6-generic");
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "protocol/ts6-generic")
 
 	notice_channel_sts = &charybdis_notice_channel_sts;
 
@@ -324,14 +353,12 @@ void _modinit(module_t * m)
 	ignore_mode_list_size = ARRAY_SIZE(charybdis_ignore_mode_list);
 
 	ircd = &Charybdis;
-
-	m->mflags = MODTYPE_CORE;
-
-	pmodule_loaded = true;
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+
+}
+
+SIMPLE_DECLARE_MODULE_V1("protocol/charybdis", MODULE_UNLOAD_CAPABILITY_NEVER)

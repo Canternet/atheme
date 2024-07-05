@@ -1,77 +1,63 @@
 /*
- * Copyright (c) 2005-2006 Jilles Tjoelker, et al.
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2005-2006 Jilles Tjoelker, et al.
  *
  * This file contains code for the CService TEMPLATE functions.
- *
  */
 
-#include "atheme.h"
-#include "template.h"
+#include <atheme.h>
 
-DECLARE_MODULE_V1
-(
-	"chanserv/template", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void list_generic_flags(sourceinfo_t *si);
-
-static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t cs_flags = { "TEMPLATE", N_("Manipulates predefined sets of flags."),
-                        AC_NONE, 3, cs_cmd_template, { .path = "cservice/template" } };
-
-void _modinit(module_t *m)
+static int
+display_template(const char *key, void *data, void *privdata)
 {
-        service_named_bind_command("chanserv", &cs_flags);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("chanserv", &cs_flags);
-}
-
-static int display_template(const char *key, void *data, void *privdata)
-{
-	sourceinfo_t *si = privdata;
-	default_template_t *def_t = data;
+	struct sourceinfo *si = privdata;
+	struct default_template *def_t = data;
 	unsigned int vopflags;
 
 	vopflags = get_global_template_flags("VOP");
 	if (def_t->flags == vopflags && !strcasecmp(key, "HOP"))
 		return 0;
 
-	command_success_nodata(si, "%-20s %s", key, bitmask_to_flags(def_t->flags));
+	command_success_nodata(si, _("%-20s %s"), key, bitmask_to_flags(def_t->flags));
 
 	return 0;
 }
 
-static void list_generic_flags(sourceinfo_t *si)
+static void
+list_generic_flags(struct sourceinfo *si)
 {
-	command_success_nodata(si, "%-20s %s", _("Name"), _("Flags"));
-	command_success_nodata(si, "%-20s %s", "--------------------", "-----");
+	/* TRANSLATORS: Adjust these numbers only if the translated column
+	 * headers would exceed that length. Pay particular attention to
+	 * also changing the numbers in the format string inside the function
+	 * above to match them!
+	 */
+	command_success_nodata(si, _("%-20s %s"), _("Name"), _("Flags"));
+	command_success_nodata(si, "--------------------------------");
 
 	mowgli_patricia_foreach(global_template_dict, display_template, si);
 
-	command_success_nodata(si, "%-20s %s", "--------------------", "-----");
+	command_success_nodata(si, "--------------------------------");
 	command_success_nodata(si, _("End of network wide template list."));
 }
 
-/* TEMPLATE [channel] [template] [flags] */
-static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
+// TEMPLATE [channel] [template] [flags]
+static void
+cs_cmd_template(struct sourceinfo *si, int parc, char *parv[])
 {
-	metadata_t *md;
+	struct metadata *md;
 	bool operoverride = false, changechanacs = false;
 	size_t l;
 	char *channel = parv[0];
 	char *target = parv[1];
-	mychan_t *mc;
+	struct mychan *mc;
 	unsigned int oldflags, newflags = 0, addflags, removeflags, restrictflags;
 	char *p, *q, *r;
 	char ss[40], newstr[400];
 	bool found, denied;
+
+	(void) memset(newstr, 0x00, sizeof newstr);
 
 	if (!channel)
 	{
@@ -83,7 +69,7 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 	mc = mychan_find(channel);
 	if (!mc)
 	{
-		command_fail(si, fault_nosuch_target, _("Channel \2%s\2 is not registered."), channel);
+		command_fail(si, fault_nosuch_target, STR_IS_NOT_REGISTERED, channel);
 		return;
 	}
 
@@ -95,14 +81,14 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 				operoverride = true;
 			else
 			{
-				command_fail(si, fault_noprivs, _("You are not authorized to perform this operation."));
+				command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 				return;
 			}
 		}
 
 		if (metadata_find(mc, "private:close:closer") && !has_priv(si, PRIV_CHAN_AUSPEX))
 		{
-			command_fail(si, fault_noprivs, _("\2%s\2 is closed."), channel);
+			command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, channel);
 			return;
 		}
 
@@ -110,8 +96,14 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 
 		if (md != NULL)
 		{
-			command_success_nodata(si, "%-20s %s", _("Name"), _("Flags"));
-			command_success_nodata(si, "%-20s %s", "--------------------", "-----");
+			/* TRANSLATORS: Adjust these numbers only if the translated column
+			 * headers would exceed that length. Pay particular attention to
+			 * also changing the numbers in the format string inside the loop
+			 * below to match them, and beware that these format strings are
+			 * shared across multiple files!
+			 */
+			command_success_nodata(si, _("%-20s %s"), _("Name"), _("Flags"));
+			command_success_nodata(si, "--------------------------------");
 
 			p = md->value;
 			while (p != NULL)
@@ -122,11 +114,11 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 				if (q == NULL)
 					break;
 				r = strchr(q, ' ');
-				command_success_nodata(si, "%-20.*s %.*s", (int)(q - p), p, r != NULL ? (int)(r - q - 1) : (int)strlen(q + 1), q + 1);
+				command_success_nodata(si, _("%-20.*s %.*s"), (int)(q - p), p, r != NULL ? (int)(r - q - 1) : (int)strlen(q + 1), q + 1);
 				p = r;
 			}
 
-			command_success_nodata(si, "%-20s %s", "--------------------", "-----");
+			command_success_nodata(si, "--------------------------------");
 			command_success_nodata(si, _("End of \2%s\2 TEMPLATE listing."), mc->name);
 		}
 		else
@@ -143,11 +135,11 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 
 		if (!si->smu)
 		{
-			command_fail(si, fault_noprivs, _("You are not logged in."));
+			command_fail(si, fault_noprivs, STR_NOT_LOGGED_IN);
 			return;
 		}
 
-		/* founder may always set flags -- jilles */
+		// founder may always set flags -- jilles
 		restrictflags = chanacs_source_flags(mc, si);
 		if (restrictflags & CA_FOUNDER)
 			restrictflags = ca_all;
@@ -155,7 +147,7 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 		{
 			if (!(restrictflags & CA_FLAGS))
 			{
-				command_fail(si, fault_noprivs, _("You are not authorized to execute this command."));
+				command_fail(si, fault_noprivs, STR_NOT_AUTHORIZED);
 				return;
 			}
 			restrictflags = allow_flags(mc, restrictflags);
@@ -163,7 +155,7 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 
 		if (metadata_find(mc, "private:close:closer"))
 		{
-			command_fail(si, fault_noprivs, _("\2%s\2 is closed."), channel);
+			command_fail(si, fault_noprivs, STR_CHANNEL_IS_CLOSED, channel);
 			return;
 		}
 
@@ -191,28 +183,37 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 			flags_make_bitmasks(flagstr, &addflags, &removeflags);
 			if (addflags == 0 && removeflags == 0)
 			{
-				command_fail(si, fault_badparams, _("No valid flags given, use /%s%s HELP FLAGS for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp);
+				command_fail(si, fault_badparams, _("No valid flags given; use \2/msg %s HELP FLAGS\2 "
+				                                    "for a list"), chansvs.me->disp);
 				return;
 			}
 		}
 		else
 		{
-			/* allow copying templates as well */
+			// allow copying templates as well
 			addflags = get_template_flags(mc, flagstr);
 			if (addflags == 0)
 			{
-				command_fail(si, fault_nosuch_key, _("Invalid template name given, use /%s%s TEMPLATE %s for a list"), ircd->uses_rcommand ? "" : "msg ", chansvs.me->disp, mc->name);
+				command_fail(si, fault_nosuch_key, _("Invalid template name given; use \2/msg %s "
+				                                     "TEMPLATE %s\2 for a list"), chansvs.me->disp,
+				                                     mc->name);
 				return;
 			}
 			removeflags = ca_all & ~addflags;
 		}
 
-		/* if adding +F, also add +f */
+		// if adding +F, also add +f
 		if (addflags & CA_FOUNDER)
-			addflags |= CA_FLAGS, removeflags &= ~CA_FLAGS;
-		/* if removing +f, also remove +F */
+		{
+			addflags |= CA_FLAGS;
+			removeflags &= ~CA_FLAGS;
+		}
+		// if removing +f, also remove +F
 		else if (removeflags & CA_FLAGS)
-			removeflags |= CA_FOUNDER, addflags &= ~CA_FOUNDER;
+		{
+			removeflags |= CA_FOUNDER;
+			addflags &= ~CA_FOUNDER;
+		}
 
 		found = denied = false;
 		oldflags = 0;
@@ -244,9 +245,11 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 					oldflags &= ca_all;
 					addflags &= ~oldflags;
 					removeflags &= oldflags & ~addflags;
-					/* no change? */
+
+					// no change?
 					if ((addflags | removeflags) == 0)
 						break;
+
 					/* attempting to add bad flag? */
 					/* attempting to remove bad flag? */
 					/* attempting to manipulate something with more privs? */
@@ -266,7 +269,7 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 							mowgli_strlcpy(newstr, r != NULL ? r + 1 : "", sizeof newstr);
 						else
 						{
-							/* otherwise, zap the space before it */
+							// otherwise, zap the space before it
 							p--;
 							mowgli_strlcpy(newstr + (p - md->value), r != NULL ? r : "", sizeof newstr - (p - md->value));
 						}
@@ -367,8 +370,8 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 		if (changechanacs)
 		{
 			mowgli_node_t *n, *tn;
-			chanacs_t *ca;
-			int changes = 0, founderskipped = 0;
+			struct chanacs *ca;
+			unsigned int changes = 0, founderskipped = 0;
 			char flagstr2[128];
 
 			MOWGLI_ITER_FOREACH_SAFE(n, tn, mc->chanacs.head)
@@ -382,25 +385,45 @@ static void cs_cmd_template(sourceinfo_t *si, int parc, char *parv[])
 					continue;
 				}
 				changes++;
-				chanacs_modify_simple(ca, newflags, ~newflags);
+				chanacs_modify_simple(ca, newflags, ~newflags, si->smu);
 				chanacs_close(ca);
 			}
-			logcommand(si, CMDLOG_SET, "TEMPLATE: \2%s\2 \2%s\2 !\2%s\2 (\2%d\2 changes)", mc->name, target, flagstr, changes);
+			logcommand(si, CMDLOG_SET, "TEMPLATE: \2%s\2 \2%s\2 !\2%s\2 (\2%u\2 changes)", mc->name, target, flagstr, changes);
 			mowgli_strlcpy(flagstr2, flagstr, sizeof flagstr2);
 			if (changes > 0)
-				verbose(mc, "\2%s\2 set \2%s\2 on %d access entries with flags \2%s\2.", get_source_name(si), flagstr2, changes, bitmask_to_flags(oldflags));
-			command_success_nodata(si, _("%d access entries updated accordingly."), changes);
+				verbose(mc, "\2%s\2 set \2%s\2 on %u access entries with flags \2%s\2.", get_source_name(si), flagstr2, changes, bitmask_to_flags(oldflags));
+			command_success_nodata(si, ngettext(N_("%u access entry updated accordingly."),
+			                                    N_("%u access entries updated accordingly."),
+			                                    changes), changes);
 			if (founderskipped)
-				command_success_nodata(si, _("Not updating %d access entries involving founder status. Please do it manually."), founderskipped);
+				command_success_nodata(si, _("Not updating \2%u\2 access entries involving founder status. Please do it manually."), founderskipped);
 		}
 		else
 			logcommand(si, CMDLOG_SET, "TEMPLATE: \2%s\2 \2%s\2 \2%s\2", mc->name, target, flagstr);
-		/*verbose(mc, "Flags \2%s\2 were set on template \2%s\2 in \2%s\2.", flagstr, target, channel);*/
 	}
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command cs_flags = {
+	.name           = "TEMPLATE",
+	.desc           = N_("Manipulates predefined sets of flags."),
+	.access         = AC_NONE,
+	.maxparc        = 3,
+	.cmd            = &cs_cmd_template,
+	.help           = { .path = "cservice/template" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "chanserv/main")
+
+        service_named_bind_command("chanserv", &cs_flags);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("chanserv", &cs_flags);
+}
+
+SIMPLE_DECLARE_MODULE_V1("chanserv/template", MODULE_UNLOAD_CAPABILITY_OK)

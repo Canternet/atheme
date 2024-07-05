@@ -1,48 +1,28 @@
 /*
- * Copyright (c) 2006 Robin Burchell <surreal.w00t@gmail.com>
- * Rights to this code are as documented in doc/LICENSE.
+ * SPDX-License-Identifier: ISC
+ * SPDX-URL: https://spdx.org/licenses/ISC.html
+ *
+ * Copyright (C) 2006 Robin Burchell <surreal.w00t@gmail.com>
  *
  * Regex usersearch feature.
- *
  */
 
 /*
  * @match regex!here.+
  *  Matches `nick!user@host realname here' for each client against a given regex, and dumps matches.
  */
-#include "atheme.h"
-#include <limits.h>
-
-DECLARE_MODULE_V1
-(
-	"operserv/rmatch", false, _modinit, _moddeinit,
-	PACKAGE_STRING,
-	"Atheme Development Group <http://www.atheme.org>"
-);
-
-static void os_cmd_rmatch(sourceinfo_t *si, int parc, char *parv[]);
-
-command_t os_rmatch = { "RMATCH", N_("Scans the network for users based on a specific regex pattern."), PRIV_USER_AUSPEX, 1, os_cmd_rmatch, { .path = "oservice/rmatch" } };
-
-void _modinit(module_t *m)
-{
-	service_named_bind_command("operserv", &os_rmatch);
-}
-
-void _moddeinit(module_unload_intent_t intent)
-{
-	service_named_unbind_command("operserv", &os_rmatch);
-}
+#include <atheme.h>
 
 #define MAXMATCHES_DEF 1000
 
-static void os_cmd_rmatch(sourceinfo_t *si, int parc, char *parv[])
+static void
+os_cmd_rmatch(struct sourceinfo *si, int parc, char *parv[])
 {
-	atheme_regex_t *regex;
+	struct atheme_regex *regex;
 	char usermask[512];
 	unsigned int matches = 0, maxmatches;
 	mowgli_patricia_iteration_state_t state;
-	user_t *u;
+	struct user *u;
 	char *args = parv[0];
 	char *pattern;
 	int flags = 0;
@@ -102,12 +82,34 @@ static void os_cmd_rmatch(sourceinfo_t *si, int parc, char *parv[])
 	}
 
 	regex_destroy(regex);
-	command_success_nodata(si, _("\2%d\2 matches for %s"), matches, pattern);
-	logcommand(si, CMDLOG_ADMIN, "RMATCH: \2%s\2 (\2%d\2 matches)", pattern, matches);
+	command_success_nodata(si, ngettext(N_("\2%u\2 match for pattern \2%s\2"),
+	                                    N_("\2%u\2 matches for pattern \2%s\2"),
+	                                    matches), matches, pattern);
+
+	logcommand(si, CMDLOG_ADMIN, "RMATCH: \2%s\2 (\2%u\2 matches)", pattern, matches);
 }
 
-/* vim:cinoptions=>s,e0,n0,f0,{0,}0,^0,=s,ps,t0,c3,+s,(2s,us,)20,*30,gs,hs
- * vim:ts=8
- * vim:sw=8
- * vim:noexpandtab
- */
+static struct command os_rmatch = {
+	.name           = "RMATCH",
+	.desc           = N_("Scans the network for users based on a specific regex pattern."),
+	.access         = PRIV_USER_AUSPEX,
+	.maxparc        = 1,
+	.cmd            = &os_cmd_rmatch,
+	.help           = { .path = "oservice/rmatch" },
+};
+
+static void
+mod_init(struct module *const restrict m)
+{
+	MODULE_TRY_REQUEST_DEPENDENCY(m, "operserv/main")
+
+	service_named_bind_command("operserv", &os_rmatch);
+}
+
+static void
+mod_deinit(const enum module_unload_intent ATHEME_VATTR_UNUSED intent)
+{
+	service_named_unbind_command("operserv", &os_rmatch);
+}
+
+SIMPLE_DECLARE_MODULE_V1("operserv/rmatch", MODULE_UNLOAD_CAPABILITY_OK)
